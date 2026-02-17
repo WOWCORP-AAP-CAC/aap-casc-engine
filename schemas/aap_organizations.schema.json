@@ -1,0 +1,37 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AAP Organizations Configuration",
+    "type": "object",
+    "properties": {
+        "aap_organizations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "pattern": "^org-[a-z0-9_]+$",
+                        "description": "Organization name following naming convention: org-<identifier>"
+                    },
+                    "description": { "type": "string" },
+                    "max_hosts": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "default_environment": {
+                        "type": "string",
+                        "description": "Default Execution Environment for the organization"
+                    },
+                    "galaxy_credentials": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                },
+                "additionalProperties": false
+            }
+        }
+    },
+    "required": ["aap_organizations"],
+    "additionalProperties": false
+}

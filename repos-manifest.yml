@@ -1,0 +1,55 @@
+---
+# Repos Manifest — Central registry of all CasC repositories
+#
+# The dispatcher uses this to know which repos to clone and how to scope-suffix them.
+# The bootstrap playbook updates this file automatically when onboarding new tenants.
+#
+# scope: Determines the suffix added during processing.
+#   - platform repos → scope: platform → suffixed keys like aap_organizations_platform
+#   - tenant repos   → scope: myorg01  → suffixed keys like controller_projects_myorg01
+# The dispatch role's dispatch_include_wildcard_vars: true merges all suffixed keys
+# back into their base variables automatically.
+
+# Environment-to-branch mapping
+# The dispatcher uses this to clone repos at the correct branch for each target_env
+env_branch_map:
+  dev: develop
+  tst: develop
+  npr: release/npr
+  prd: main
+
+# Platform-level CasC repos (always included in every apply)
+platform_repos:
+  - name: aap-organizations-global
+    scope: platform
+  - name: gateway-role_definitions-global
+    scope: platform
+  - name: gateway-role_user_assignments-global
+    scope: platform
+  - name: gateway-role_team_assignments-global
+    scope: platform
+  - name: controller-credential_types-global
+    scope: platform
+  - name: controller-execution_environments-global
+    scope: platform
+  - name: controller-notifications-global
+    scope: platform
+  - name: controller-settings-global
+    scope: platform
+  - name: controller-schedules-platform
+    scope: platform
+
+# Tenant CasC repos (included on targeted or full apply)
+# Bootstrap playbook appends to this list when onboarding new tenants
+tenant_repos:
+  # -- TENANT myorg01 --
+  - name: controller-projects-myorg01
+    scope: myorg01
+  - name: controller-credentials-myorg01
+    scope: myorg01
+  - name: controller-inventories-myorg01
+    scope: myorg01
+  - name: controller-job_templates-myorg01
+    scope: myorg01
+  - name: controller-schedules-myorg01
+    scope: myorg01

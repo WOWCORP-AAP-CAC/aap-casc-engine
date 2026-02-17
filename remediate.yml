@@ -1,0 +1,29 @@
+---
+# remediate.yml — Re-apply desired state via the dispatch role
+# Leverages the same dispatch role as the main dispatcher playbook,
+# triggered specifically when drift is detected.
+# The dispatch role handles full dependency ordering automatically.
+
+- name: "REMEDIATION — Re-applying desired state to {{ target_env }}"
+  ansible.builtin.debug:
+    msg: "Drift detected. Re-applying desired state from Git to enforce convergence."
+
+- name: "Re-apply full desired state via dispatch role"
+  ansible.builtin.include_role:
+    name: infra.aap_configuration.dispatch
+  vars:
+    dispatch_include_wildcard_vars: true
+    aap_configuration_collect_logs: true
+
+- name: "Report remediation errors"
+  ansible.builtin.fail:
+    msg: >-
+      Remediation encountered errors:
+      {{ aap_configuration_role_errors | to_nice_yaml }}
+  when:
+    - aap_configuration_role_errors is defined
+    - aap_configuration_role_errors | length > 0
+
+- name: "REMEDIATION COMPLETE"
+  ansible.builtin.debug:
+    msg: "Desired state re-applied successfully. Drift remediated for {{ target_env }}."

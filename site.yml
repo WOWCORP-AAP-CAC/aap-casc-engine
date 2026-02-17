@@ -1,0 +1,136 @@
+---
+# Hybrid CasC Dispatcher — Apply Configuration to AAP
+#
+# Main entry point for the aap-casc-engine. Clones CasC repos from Git,
+# processes JSON (env filter, merge, scope suffix), and applies via the
+# infra.aap_configuration.dispatch role.
+#
+# Supports dual-mode operation:
+#   - Targeted apply: CI/CD trigger passes triggered_repo (single tenant + platform repos)
+#   - Full apply: Scheduled reconciliation processes all repos from the manifest
+#
+# Usage:
+#   ansible-playbook site.yml -e target_env=dev
+#   ansible-playbook site.yml -e target_env=dev -e triggered_repo=controller-projects-myorg01
+
+- name: "Hybrid CasC Dispatcher — Apply Configuration to AAP"
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    # AAP Platform connection (resolved from inventory per target_env)
+    aap_hostname: "{{ lookup('env', 'AAP_HOSTNAME') }}"
+    aap_username: "{{ lookup('env', 'AAP_USERNAME') }}"
+    aap_password: "{{ lookup('env', 'AAP_PASSWORD') }}"
+    aap_validate_certs: true
+    target_env: "{{ lookup('env', 'TARGET_ENV') | default('dev') }}"
+
+    # Trigger metadata (passed by CI/CD pipeline or empty for scheduled runs)
+    trigger_commit: "{{ lookup('env', 'TRIGGER_COMMIT') | default(omit) }}"
+    triggered_repo: "{{ lookup('env', 'TRIGGERED_REPO') | default(omit) }}"
+    trigger_source: "{{ lookup('env', 'TRIGGER_SOURCE') | default('scheduled') }}"
+
+    # Enable production best practices
+    aap_configuration_collect_logs: true
+
+    # Repos manifest (lives in this repo)
+    repos_manifest: "{{ lookup('file', 'repos-manifest.yml') | from_yaml }}"
+
+    # Git SCM base URL
+    scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
+    scm_token: "{{ lookup('env', 'SCM_TOKEN') }}"
+
+    # Working directories
+    clone_dir: "/tmp/casc-repos"
+    staging_dir: "/tmp/casc-staging"
+
+  pre_tasks:
+    # Phase 1: Resolve branch from env_branch_map
+    - name: "Resolve target branch for {{ target_env }}"
+      ansible.builtin.set_fact:
+        target_branch: "{{ repos_manifest.env_branch_map[target_env] | default('develop') }}"
+
+    # Phase 2: Select repos (targeted or full apply)
+    - name: "Select repos to process"
+      ansible.builtin.set_fact:
+        selected_repos: >-
+          {{ repos_manifest.platform_repos +
+             (repos_manifest.tenant_repos | selectattr('name', 'equalto', triggered_repo) | list
+              if triggered_repo is defined and triggered_repo
+              else repos_manifest.tenant_repos) }}
+
+    - name: "Log apply mode"
+      ansible.builtin.debug:
+        msg: >-
+          Mode: {{ 'TARGETED (' + triggered_repo + ' + platform repos)'
+                   if triggered_repo is defined and triggered_repo
+                   else 'FULL (all repos from manifest)' }}
+          | Env: {{ target_env }} | Branch: {{ target_branch }}
+          | Repos: {{ selected_repos | length }}
+
+    # Phase 3: Clone repos from Git
+    - name: "Clone CasC repos at target branch"
+      ansible.builtin.include_role:
+        name: git_clone_repos
+      vars:
+        repos_to_clone: "{{ selected_repos }}"
+        clone_base_dir: "{{ clone_dir }}"
+        clone_branch: "{{ target_branch }}"
+        git_base_url: "{{ scm_base_url }}"
+        git_token: "{{ scm_token }}"
+
+    # Phase 4: Process JSON (env filter + merge + suffix)
+    - name: "Process JSON for each repo"
+      ansible.builtin.include_role:
+        name: process_casc_json
+      vars:
+        repo_clone_dir: "{{ clone_dir }}/{{ item.name }}"
+        repo_scope: "{{ item.scope }}"
+        output_dir: "{{ staging_dir }}"
+        env_filter: "{{ target_env }}"
+      loop: "{{ selected_repos }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # Phase 5: Load processed variables
+    - name: "Load processed config (scope-suffixed)"
+      ansible.builtin.include_vars:
+        dir: "{{ staging_dir }}"
+        extensions: [json]
+        depth: 1
+
+  roles:
+    # Phase 6: Apply ALL configuration via the built-in dispatch role
+    # dispatch_include_wildcard_vars merges scope-suffixed vars automatically:
+    #   controller_projects_platform + controller_projects_myorg01 → controller_projects
+    - role: infra.aap_configuration.dispatch
+      vars:
+        dispatch_include_wildcard_vars: true
+
+  post_tasks:
+    # Phase 7: Post-apply reporting and error handling
+    - name: "Report any collected errors"
+      ansible.builtin.fail:
+        msg: >-
+          Configuration apply encountered errors:
+          {{ aap_configuration_role_errors | to_nice_yaml }}
+      when:
+        - aap_configuration_role_errors is defined
+        - aap_configuration_role_errors | length > 0
+
+    - name: "Configuration apply complete"
+      ansible.builtin.debug:
+        msg: >-
+          Hybrid CasC dispatcher completed successfully.
+          Mode: {{ trigger_source }} | Env: {{ target_env }} |
+          Repos processed: {{ selected_repos | length }}
+
+    # Cleanup
+    - name: "Remove temporary directories"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ clone_dir }}"
+        - "{{ staging_dir }}"

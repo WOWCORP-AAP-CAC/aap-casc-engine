@@ -1,0 +1,13 @@
+---
+# Inventory for Production AAP environment
+
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+  vars:
+    target_env: prd
+    aap_hostname: "{{ lookup('env', 'AAP_PRD_HOST') }}"
+    aap_username: "{{ lookup('env', 'AAP_USERNAME') }}"
+    aap_password: "{{ lookup('env', 'AAP_PASSWORD') }}"
+    aap_validate_certs: true

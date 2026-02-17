@@ -1,0 +1,141 @@
+# Platform-managed shared pipeline template for tenant CasC repositories
+# Lives in: aap-casc-engine/pipeline-templates/gitlab/.gitlab-ci-template.yml
+# Tenant repos include this template — they do NOT define their own pipelines
+
+stages:
+  - validate
+  - trigger
+
+variables:
+  SCHEMA_DIR: "${CI_PROJECT_DIR}/.schemas"
+
+# ── Stage 1: Validate ────────────────────────────────────────────────────────
+# Schemas are fetched from aap-casc-engine during pipeline init.
+# The CI/CD platform include mechanism pulls the engine repo, making
+# schemas available at .schemas/ via the fetch-schemas job below.
+fetch:schemas:
+  stage: .pre
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache git
+  script:
+    - |
+      git clone --depth 1 --branch main \
+        "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/platform-team/aap-casc-engine.git" /tmp/engine
+      mkdir -p .schemas
+      cp /tmp/engine/schemas/*.schema.json .schemas/
+      # Copy naming validation scripts and OPA policies (if present)
+      [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/
+      [ -f /tmp/engine/schemas/naming-rules.yml ] && cp /tmp/engine/schemas/naming-rules.yml .schemas/
+      [ -d /tmp/engine/schemas/policies ] && cp -r /tmp/engine/schemas/policies .schemas/
+  artifacts:
+    paths:
+      - .schemas/
+
+validate:json-schema:
+  stage: validate
+  image: python:3.11-slim
+  before_script:
+    - pip install check-jsonschema jq
+  script:
+    - |
+      echo "Validating JSON files against schema contracts..."
+      for json_file in $(find . -name "*.json" -not -path "./.schemas/*"); do
+        # Derive the resource type from the JSON top-level key
+        # Each CasC JSON file has exactly one top-level key (e.g., "controller_projects")
+        resource_type=$(python3 -c "import json,sys; print(list(json.load(open(sys.argv[1])).keys())[0])" "$json_file" 2>/dev/null)
+        if [ -z "$resource_type" ]; then
+          echo "WARNING: Could not extract resource type from $json_file — skipping"
+          continue
+        fi
+        schema_file="${SCHEMA_DIR}/${resource_type}.schema.json"
+        if [ -f "$schema_file" ]; then
+          echo "Validating: $json_file against $schema_file (resource: ${resource_type})"
+          check-jsonschema --schemafile "$schema_file" "$json_file"
+        else
+          echo "WARNING: No schema found for resource type '${resource_type}' (expected: $schema_file)"
+        fi
+      done
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+validate:naming-convention:
+  stage: validate
+  image: python:3.11-slim
+  script:
+    - |
+      # Naming validation scripts are sourced from the engine repo during .pre stage
+      if [ -f ".schemas/validate_naming.py" ] && [ -f ".schemas/naming-rules.yml" ]; then
+        echo "Checking naming conventions..."
+        python3 .schemas/validate_naming.py --config-dir . --rules .schemas/naming-rules.yml
+      else
+        echo "No naming validation scripts found — skipping."
+      fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+validate:policy-compliance:
+  stage: validate
+  image: openpolicyagent/opa:latest
+  script:
+    - |
+      # OPA policies are optional — run only if policies directory exists in engine schemas
+      if [ -d ".schemas/policies" ]; then
+        echo "Checking policy compliance..."
+        for json_file in $(find . -name "*.json" -not -path "./.schemas/*"); do
+          opa eval --data .schemas/policies/ --input "$json_file" "data.casc.deny" --format pretty
+        done
+      else
+        echo "No OPA policies found — skipping."
+      fi
+  allow_failure: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# ── Stage 2: Trigger (lightweight — single curl to correct AAP environment) ──
+# This stage maps the Git branch to the target environment and AAP host,
+# then launches the dispatcher Job Template via a single API call.
+# The dispatcher handles everything else: cloning repos, processing JSON,
+# and applying config via infra.aap_configuration.dispatch.
+trigger:dispatcher:
+  stage: trigger
+  image: python:3.11-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl > /dev/null
+  script:
+    - |
+      # Map branch to target environment, AAP host, and per-env token
+      case "$CI_COMMIT_BRANCH" in
+        feature/*)   TARGET_ENV="dev";  AAP_HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
+        develop)     TARGET_ENV="tst";  AAP_HOST="$AAP_TST_HOST";  TOKEN="$AAP_TST_TOKEN" ;;
+        release/*)   TARGET_ENV="npr";  AAP_HOST="$AAP_NPR_HOST";  TOKEN="$AAP_NPR_TOKEN" ;;
+        master|main) TARGET_ENV="prd";  AAP_HOST="$AAP_PRD_HOST";  TOKEN="$AAP_PRD_TOKEN" ;;
+        *)           TARGET_ENV="dev";  AAP_HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
+      esac
+
+      echo "Triggering dispatcher on ${AAP_HOST} for environment: ${TARGET_ENV}"
+
+      # Resolve dispatcher JT ID by name (consistent name across all AAP environments)
+      JT_ID=$(curl -sf \
+        -H "Authorization: Bearer ${TOKEN}" \
+        "https://${AAP_HOST}/api/v2/job_templates/?name=${DISPATCHER_JT_NAME}" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['results'][0]['id'])")
+
+      curl -sf -X POST \
+        -H "Authorization: Bearer ${TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"extra_vars\": {
+            \"target_env\": \"${TARGET_ENV}\",
+            \"trigger_commit\": \"${CI_COMMIT_SHA}\",
+            \"triggered_repo\": \"${CI_PROJECT_NAME}\",
+            \"trigger_source\": \"ci-cd-pipeline\"
+          }
+        }" \
+        "https://${AAP_HOST}/api/v2/job_templates/${JT_ID}/launch/"
+  retry: 2
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^(feature\/|develop|release\/|master|main)/'
+      when: on_success

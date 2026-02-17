@@ -1,0 +1,150 @@
+# GitHub Actions equivalent of the GitLab CI shared pipeline template
+# Tenant repos reference this workflow from aap-casc-engine via workflow_call
+#
+# Tenant repo usage (.github/workflows/casc.yml):
+#   name: CasC Pipeline
+#   on: [push, pull_request]
+#   jobs:
+#     casc:
+#       uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
+#       secrets: inherit
+
+name: CasC Validate and Trigger
+
+on:
+  workflow_call:
+    secrets:
+      AAP_DEV_HOST:
+        required: false
+      AAP_TST_HOST:
+        required: false
+      AAP_NPR_HOST:
+        required: false
+      AAP_PRD_HOST:
+        required: false
+      AAP_DEV_TOKEN:
+        required: false
+      AAP_TST_TOKEN:
+        required: false
+      AAP_NPR_TOKEN:
+        required: false
+      AAP_PRD_TOKEN:
+        required: false
+      DISPATCHER_JT_NAME:
+        required: true
+
+jobs:
+  validate:
+    name: Validate JSON Configs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tenant repo
+        uses: actions/checkout@v4
+
+      - name: Checkout engine repo (schemas)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/aap-casc-engine
+          path: .engine
+          sparse-checkout: schemas
+
+      - name: Setup schemas directory
+        run: |
+          mkdir -p .schemas
+          cp .engine/schemas/*.schema.json .schemas/
+          [ -f .engine/schemas/validate_naming.py ] && cp .engine/schemas/validate_naming.py .schemas/
+          [ -f .engine/schemas/naming-rules.yml ] && cp .engine/schemas/naming-rules.yml .schemas/
+          [ -d .engine/schemas/policies ] && cp -r .engine/schemas/policies .schemas/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install validation tools
+        run: pip install check-jsonschema pyyaml
+
+      - name: Validate JSON schemas
+        run: |
+          echo "Validating JSON files against schema contracts..."
+          for json_file in $(find . -name "*.json" -not -path "./.schemas/*" -not -path "./.engine/*"); do
+            resource_type=$(python3 -c "import json,sys; print(list(json.load(open(sys.argv[1])).keys())[0])" "$json_file" 2>/dev/null)
+            if [ -z "$resource_type" ]; then
+              echo "WARNING: Could not extract resource type from $json_file — skipping"
+              continue
+            fi
+            schema_file=".schemas/${resource_type}.schema.json"
+            if [ -f "$schema_file" ]; then
+              echo "Validating: $json_file against $schema_file (resource: ${resource_type})"
+              check-jsonschema --schemafile "$schema_file" "$json_file"
+            else
+              echo "WARNING: No schema found for resource type '${resource_type}' (expected: $schema_file)"
+            fi
+          done
+
+      - name: Validate naming conventions
+        run: |
+          if [ -f ".schemas/validate_naming.py" ] && [ -f ".schemas/naming-rules.yml" ]; then
+            echo "Checking naming conventions..."
+            python3 .schemas/validate_naming.py --config-dir . --rules .schemas/naming-rules.yml
+          else
+            echo "No naming validation scripts found — skipping."
+          fi
+
+      - name: Check policy compliance (OPA)
+        if: always()
+        continue-on-error: true
+        run: |
+          if [ -d ".schemas/policies" ]; then
+            echo "Installing OPA..."
+            curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
+            chmod +x opa
+            echo "Checking policy compliance..."
+            for json_file in $(find . -name "*.json" -not -path "./.schemas/*" -not -path "./.engine/*"); do
+              ./opa eval --data .schemas/policies/ --input "$json_file" "data.casc.deny" --format pretty
+            done
+          else
+            echo "No OPA policies found — skipping."
+          fi
+
+  trigger:
+    name: Trigger Dispatcher
+    needs: validate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine target environment
+        id: env-map
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          case "$BRANCH" in
+            feature/*)   echo "target_env=dev"  >> $GITHUB_OUTPUT; echo "aap_host=${{ secrets.AAP_DEV_HOST }}" >> $GITHUB_OUTPUT; echo "token=${{ secrets.AAP_DEV_TOKEN }}" >> $GITHUB_OUTPUT ;;
+            develop)     echo "target_env=tst"  >> $GITHUB_OUTPUT; echo "aap_host=${{ secrets.AAP_TST_HOST }}" >> $GITHUB_OUTPUT; echo "token=${{ secrets.AAP_TST_TOKEN }}" >> $GITHUB_OUTPUT ;;
+            release/*)   echo "target_env=npr"  >> $GITHUB_OUTPUT; echo "aap_host=${{ secrets.AAP_NPR_HOST }}" >> $GITHUB_OUTPUT; echo "token=${{ secrets.AAP_NPR_TOKEN }}" >> $GITHUB_OUTPUT ;;
+            main|master) echo "target_env=prd"  >> $GITHUB_OUTPUT; echo "aap_host=${{ secrets.AAP_PRD_HOST }}" >> $GITHUB_OUTPUT; echo "token=${{ secrets.AAP_PRD_TOKEN }}" >> $GITHUB_OUTPUT ;;
+            *)           echo "target_env=dev"  >> $GITHUB_OUTPUT; echo "aap_host=${{ secrets.AAP_DEV_HOST }}" >> $GITHUB_OUTPUT; echo "token=${{ secrets.AAP_DEV_TOKEN }}" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: Trigger AAP dispatcher
+        if: steps.env-map.outputs.aap_host != ''
+        run: |
+          echo "Triggering dispatcher on ${{ steps.env-map.outputs.aap_host }} for environment: ${{ steps.env-map.outputs.target_env }}"
+
+          # Resolve dispatcher JT ID by name
+          JT_ID=$(curl -sf \
+            -H "Authorization: Bearer ${{ steps.env-map.outputs.token }}" \
+            "https://${{ steps.env-map.outputs.aap_host }}/api/v2/job_templates/?name=${{ secrets.DISPATCHER_JT_NAME }}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['results'][0]['id'])")
+
+          curl -sf -X POST \
+            -H "Authorization: Bearer ${{ steps.env-map.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"extra_vars\": {
+                \"target_env\": \"${{ steps.env-map.outputs.target_env }}\",
+                \"trigger_commit\": \"${GITHUB_SHA}\",
+                \"triggered_repo\": \"${GITHUB_REPOSITORY##*/}\",
+                \"trigger_source\": \"ci-cd-pipeline\"
+              }
+            }" \
+            "https://${{ steps.env-map.outputs.aap_host }}/api/v2/job_templates/${JT_ID}/launch/"

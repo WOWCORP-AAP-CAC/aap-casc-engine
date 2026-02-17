@@ -1,0 +1,86 @@
+---
+# process_casc_json — Process CasC JSON files from a cloned repository
+#
+# This role implements the core JSON processing pipeline:
+#   1. Find all JSON files in the cloned repo directory
+#   2. Filter by environment (files with -<env> suffix or no env suffix)
+#   3. Read and merge JSON arrays per resource type
+#   4. Add scope suffix to the variable name (e.g., controller_projects → controller_projects_myorg01)
+#   5. Write processed JSON to the output directory for include_vars
+#
+# Required variables:
+#   repo_clone_dir: path to the cloned repo (e.g., /tmp/casc-repos/controller-projects-myorg01)
+#   repo_scope:     scope suffix to add (e.g., platform, myorg01)
+#   output_dir:     directory to write processed JSON files
+#   env_filter:     target environment (e.g., dev, tst, npr, prd)
+
+- name: "Ensure output directory exists"
+  ansible.builtin.file:
+    path: "{{ output_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: "Find all JSON config files in {{ repo_clone_dir }}"
+  ansible.builtin.find:
+    paths: "{{ repo_clone_dir }}"
+    patterns: "*.json"
+    recurse: true
+    excludes:
+      - ".schemas/*"
+      - "package*.json"
+  register: json_files
+
+- name: "Process JSON files (env filter + merge + scope suffix)"
+  when: json_files.files | length > 0
+  block:
+    - name: "Read all JSON files"
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ json_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: json_contents
+
+    - name: "Filter and merge JSON by environment"
+      ansible.builtin.set_fact:
+        merged_resources: {}
+      # Initialize empty dict — populated by the processing script below
+
+    - name: "Process each JSON file (filter by env, extract resource type)"
+      ansible.builtin.set_fact:
+        merged_resources: >-
+          {{ merged_resources | combine(
+               { resource_type: (merged_resources[resource_type] | default([])) + resource_items },
+               recursive=false
+             ) }}
+      vars:
+        file_content: "{{ item.content | b64decode | from_json }}"
+        file_basename: "{{ item.source | basename | regex_replace('\\.json$', '') }}"
+        # Environment filter: include files with no env suffix OR matching env suffix
+        file_env_suffix: "{{ file_basename | regex_search('-(' + 'dev|tst|npr|prd' + ')$') | default('') }}"
+        is_env_specific: "{{ file_env_suffix | length > 0 }}"
+        matches_env: "{{ (not is_env_specific) or (file_env_suffix == '-' + env_filter) }}"
+        # Extract the single top-level key as the resource type
+        resource_type: "{{ (file_content | dict2items | first).key }}"
+        resource_items: "{{ (file_content | dict2items | first).value }}"
+      loop: "{{ json_contents.results }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+      when: matches_env | bool
+
+    - name: "Write scope-suffixed JSON files to output directory"
+      ansible.builtin.copy:
+        content: "{{ { item.key + '_' + repo_scope: item.value } | to_nice_json }}"
+        dest: "{{ output_dir }}/{{ item.key }}_{{ repo_scope }}.json"
+        mode: "0644"
+      loop: "{{ merged_resources | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}_{{ repo_scope }}"
+      when: merged_resources | length > 0
+
+- name: "Report processing results"
+  ansible.builtin.debug:
+    msg: >-
+      Processed {{ json_files.files | length }} JSON files from {{ repo_clone_dir | basename }}
+      → scope: {{ repo_scope }} | env: {{ env_filter }}
+      → {{ merged_resources | default({}) | length }} resource types written to {{ output_dir }}

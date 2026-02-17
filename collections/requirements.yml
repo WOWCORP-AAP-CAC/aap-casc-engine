@@ -1,0 +1,15 @@
+---
+collections:
+  # CasC engine collection (core dependency — pinned to tested version)
+  - name: infra.aap_configuration
+    version: ">=2.9.0"
+
+  # Red Hat supported collections
+  - name: ansible.netcommon
+  - name: ansible.posix
+  - name: ansible.utils
+
+  # Community / partner collections (add per customer needs)
+  # - name: community.mongodb
+  # - name: netbox.netbox
+  # - name: community.general

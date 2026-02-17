@@ -1,0 +1,16 @@
+{
+    "controller_projects": [
+        {
+            "name": "prj-pbk-myorg01-db_patching",
+            "description": "Database patching automation playbooks",
+            "scm_type": "git",
+            "scm_url": "https://gitlab.example.com/casc/playbooks-myorg01-db_patching.git",
+            "scm_branch": "main",
+            "default_environment": "ee-rhel9-ansible218-base",
+            "scm_clean": false,
+            "scm_delete_on_update": true,
+            "scm_update_on_launch": false,
+            "organization": "org-myorg01"
+        }
+    ]
+}

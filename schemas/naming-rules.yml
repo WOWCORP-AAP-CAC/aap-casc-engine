@@ -1,0 +1,44 @@
+---
+# Naming convention rules for AAP CasC resources
+# Each rule maps a resource type (JSON top-level key) to a regex pattern
+# and an example of a valid name.
+
+aap_organizations:
+  pattern: "^org-[a-z0-9_]+$"
+  example: "org-team_a"
+  description: "Organizations: org-<identifier>"
+
+controller_projects:
+  pattern: "^prj-pbk-[a-z0-9]+-[a-z0-9_]+(-[a-z]+)?$"
+  example: "prj-pbk-myorg01-db_patching"
+  description: "Projects: prj-pbk-<org_id>-<use_case>"
+
+controller_credentials:
+  pattern: "^crd-[a-z0-9_]+-[a-z]+-[a-z0-9_]+$"
+  example: "crd-myorg01-cst-db_prod"
+  description: "Credentials: crd-<org_id>-<type_prefix>-<purpose>"
+
+controller_credential_types:
+  pattern: "^ctp-[a-z0-9_]+$"
+  example: "ctp-database_credentials"
+  description: "Credential types: ctp-<purpose>"
+
+controller_inventories:
+  pattern: "^inv-[a-z0-9_]+-[a-z]+-[a-z0-9_]+(-[a-z0-9_]+)?$"
+  example: "inv-myorg01-src-prod-servers"
+  description: "Inventories: inv-<org_id>-<source_type>-<scope>-<name>"
+
+controller_templates:
+  pattern: "^jt-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$"
+  example: "jt-myorg01-db_patching"
+  description: "Job templates: jt-<org_id>-<use_case>"
+
+controller_schedules:
+  pattern: "^sch-[a-z0-9_]+(-[a-z]+)?$"
+  example: "sch-platform-drift-detection-dev"
+  description: "Schedules: sch-<purpose>-<env>"
+
+controller_execution_environments:
+  pattern: "^ee-[a-z0-9]+-[a-z0-9_]+-[a-z]+$"
+  example: "ee-rhel9-ansible218-base"
+  description: "Execution environments: ee-<os>-<ansible_version>-<purpose>"

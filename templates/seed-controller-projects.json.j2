@@ -1,0 +1,16 @@
+{
+    "controller_projects": [
+        {
+            "name": "prj-pbk-{{ org_id }}-example",
+            "description": "Example project — replace with your automation use-case",
+            "scm_type": "git",
+            "scm_url": "{{ scm_base_url }}/playbooks-{{ org_id }}-example.git",
+            "scm_branch": "main",
+            "default_environment": "{{ default_ee }}",
+            "scm_clean": false,
+            "scm_delete_on_update": true,
+            "scm_update_on_launch": false,
+            "organization": "org-{{ org_id }}"
+        }
+    ]
+}

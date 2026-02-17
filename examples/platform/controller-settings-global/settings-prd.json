@@ -1,0 +1,11 @@
+{
+    "controller_settings": [
+        {
+            "name": "AWX_TASK_ENV",
+            "value": {
+                "HTTPS_PROXY": "http://proxy.prod.example.com:8080",
+                "NO_PROXY": "localhost,127.0.0.1,.example.com"
+            }
+        }
+    ]
+}

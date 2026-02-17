@@ -1,0 +1,67 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AAP Controller Job Templates Configuration",
+    "type": "object",
+    "properties": {
+        "controller_templates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "organization", "project", "playbook"],
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "pattern": "^jt-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$",
+                        "description": "Job template name following naming convention: jt-<org_id>-<use_case>"
+                    },
+                    "description": { "type": "string" },
+                    "organization": {
+                        "type": "string",
+                        "pattern": "^org-[a-z0-9_]+$"
+                    },
+                    "project": { "type": "string" },
+                    "playbook": { "type": "string" },
+                    "inventory": { "type": "string" },
+                    "credentials": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "execution_environment": { "type": "string" },
+                    "extra_vars": {
+                        "oneOf": [
+                            { "type": "object" },
+                            { "type": "string" }
+                        ]
+                    },
+                    "ask_variables_on_launch": { "type": "boolean" },
+                    "ask_inventory_on_launch": { "type": "boolean" },
+                    "ask_credential_on_launch": { "type": "boolean" },
+                    "ask_limit_on_launch": { "type": "boolean" },
+                    "ask_tags_on_launch": { "type": "boolean" },
+                    "ask_skip_tags_on_launch": { "type": "boolean" },
+                    "survey_enabled": { "type": "boolean" },
+                    "survey_spec": { "type": "object" },
+                    "become_enabled": { "type": "boolean" },
+                    "diff_mode": { "type": "boolean" },
+                    "verbosity": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 5
+                    },
+                    "job_type": {
+                        "type": "string",
+                        "enum": ["run", "check"]
+                    },
+                    "limit": { "type": "string" },
+                    "job_tags": { "type": "string" },
+                    "skip_tags": { "type": "string" },
+                    "timeout": { "type": "integer" },
+                    "forks": { "type": "integer" }
+                },
+                "additionalProperties": false
+            }
+        }
+    },
+    "required": ["controller_templates"],
+    "additionalProperties": false
+}
