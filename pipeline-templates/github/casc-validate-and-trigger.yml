@@ -133,7 +133,7 @@ jobs:
           # Resolve dispatcher JT ID by name
           JT_ID=$(curl -sf \
             -H "Authorization: Bearer ${{ steps.env-map.outputs.token }}" \
-            "https://${{ steps.env-map.outputs.aap_host }}/api/v2/job_templates/?name=${{ secrets.DISPATCHER_JT_NAME }}" \
+            "https://${{ steps.env-map.outputs.aap_host }}/api/controller/v2/job_templates/?name=${{ secrets.DISPATCHER_JT_NAME }}" \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['results'][0]['id'])")
 
           curl -sf -X POST \
@@ -147,4 +147,4 @@ jobs:
                 \"trigger_source\": \"ci-cd-pipeline\"
               }
             }" \
-            "https://${{ steps.env-map.outputs.aap_host }}/api/v2/job_templates/${JT_ID}/launch/"
+            "https://${{ steps.env-map.outputs.aap_host }}/api/controller/v2/job_templates/${JT_ID}/launch/"

@@ -86,7 +86,7 @@
     # execution_environments, schedules, etc.) as needed for full coverage.
     - name: "Export live organizations"
       ansible.builtin.uri:
-        url: "https://{{ aap_hostname }}/api/v2/organizations/?page_size=200"
+        url: "https://{{ aap_hostname }}/api/gateway/v1/organizations/?page_size=200"
         method: GET
         user: "{{ aap_username }}"
         password: "{{ aap_password }}"
@@ -96,7 +96,7 @@
 
     - name: "Export live credential types"
       ansible.builtin.uri:
-        url: "https://{{ aap_hostname }}/api/v2/credential_types/?managed=false&page_size=200"
+        url: "https://{{ aap_hostname }}/api/controller/v2/credential_types/?managed=false&page_size=200"
         method: GET
         user: "{{ aap_username }}"
         password: "{{ aap_password }}"
@@ -106,7 +106,7 @@
 
     - name: "Export live projects"
       ansible.builtin.uri:
-        url: "https://{{ aap_hostname }}/api/v2/projects/?page_size=200"
+        url: "https://{{ aap_hostname }}/api/controller/v2/projects/?page_size=200"
         method: GET
         user: "{{ aap_username }}"
         password: "{{ aap_password }}"
@@ -116,7 +116,7 @@
 
     - name: "Export live job templates"
       ansible.builtin.uri:
-        url: "https://{{ aap_hostname }}/api/v2/job_templates/?page_size=200"
+        url: "https://{{ aap_hostname }}/api/controller/v2/job_templates/?page_size=200"
         method: GET
         user: "{{ aap_username }}"
         password: "{{ aap_password }}"

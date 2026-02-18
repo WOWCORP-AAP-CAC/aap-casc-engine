@@ -120,7 +120,7 @@ trigger:dispatcher:
       # Resolve dispatcher JT ID by name (consistent name across all AAP environments)
       JT_ID=$(curl -sf \
         -H "Authorization: Bearer ${TOKEN}" \
-        "https://${AAP_HOST}/api/v2/job_templates/?name=${DISPATCHER_JT_NAME}" \
+        "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}" \
         | python3 -c "import sys,json; print(json.load(sys.stdin)['results'][0]['id'])")
 
       curl -sf -X POST \
@@ -134,7 +134,7 @@ trigger:dispatcher:
             \"trigger_source\": \"ci-cd-pipeline\"
           }
         }" \
-        "https://${AAP_HOST}/api/v2/job_templates/${JT_ID}/launch/"
+        "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/"
   retry: 2
   rules:
     - if: '$CI_COMMIT_BRANCH =~ /^(feature\/|develop|release\/|master|main)/'
