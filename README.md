@@ -175,20 +175,53 @@ Tenant repos reference the reusable workflow:
 ```yaml
 # .github/workflows/casc.yml in tenant repo
 name: CasC Pipeline
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+    branches: [main]
 jobs:
   casc:
     uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
+    with:
+      dispatcher_jt_name: jt-platform-casc-dispatcher
     secrets: inherit
 ```
 
+The workflow supports **dual authentication**:
+
+- **Bearer token** (production) — per-environment secrets with branch-to-env routing
+- **Basic auth** (demo/sandbox) — single-host secrets for quick validation setups
+
+If per-env token secrets are set, Bearer token auth with branch routing is used. Otherwise, if `AAP_HOST` + `AAP_USERNAME` + `AAP_PASSWORD` are set, basic auth against a single AAP host is used. If neither is configured, the trigger stage is skipped (validate-only mode).
+
 ### Required CI/CD Variables
+
+**Production mode (Bearer token — per-environment):**
 
 | Variable | Description |
 |----------|-------------|
 | `AAP_DEV_HOST` / `AAP_TST_HOST` / `AAP_NPR_HOST` / `AAP_PRD_HOST` | AAP API endpoints per environment |
 | `AAP_DEV_TOKEN` / `AAP_TST_TOKEN` / `AAP_NPR_TOKEN` / `AAP_PRD_TOKEN` | Per-environment AAP API tokens |
-| `DISPATCHER_JT_NAME` | Job Template name for the dispatcher (e.g., `jt-platform-casc-dispatcher`) |
+
+**Demo/sandbox mode (basic auth — single host):**
+
+| Variable | Description |
+|----------|-------------|
+| `AAP_HOST` | AAP controller hostname |
+| `AAP_USERNAME` | AAP admin username |
+| `AAP_PASSWORD` | AAP admin password |
+
+**Workflow inputs:**
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `dispatcher_jt_name` | `jt-platform-casc-dispatcher` | Name of the dispatcher Job Template to trigger |
+
+**Optional secrets:**
+
+| Secret | Description |
+|--------|-------------|
+| `ENGINE_REPO_TOKEN` | GitHub PAT for accessing the engine repo when it is private (defaults to `github.token` for public repos) |
 
 ## AAP Job Templates
 

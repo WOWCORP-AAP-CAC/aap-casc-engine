@@ -9,7 +9,7 @@ aap_organizations:
   description: "Organizations: org-<identifier>"
 
 controller_projects:
-  pattern: "^prj-pbk-[a-z0-9]+-[a-z0-9_]+(-[a-z]+)?$"
+  pattern: "^prj-pbk-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$"
   example: "prj-pbk-myorg01-db_patching"
   description: "Projects: prj-pbk-<org_id>-<use_case>"
 

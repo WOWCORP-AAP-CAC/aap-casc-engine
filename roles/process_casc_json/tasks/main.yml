@@ -1,12 +1,18 @@
 ---
 # process_casc_json — Process CasC JSON files from a cloned repository
 #
+# Each JSON file MUST contain exactly one top-level key matching a known
+# infra.aap_configuration dispatch variable (e.g., "controller_projects").
+# Files with multiple top-level keys or unrecognized keys will fail validation.
+# The allowlist lives in defaults/main.yml (casc_allowed_resource_keys).
+#
 # This role implements the core JSON processing pipeline:
 #   1. Find all JSON files in the cloned repo directory
 #   2. Filter by environment (files with -<env> suffix or no env suffix)
-#   3. Read and merge JSON arrays per resource type
-#   4. Add scope suffix to the variable name (e.g., controller_projects → controller_projects_myorg01)
-#   5. Write processed JSON to the output directory for include_vars
+#   3. Validate each file has exactly one top-level key from the allowlist
+#   4. Read and merge JSON arrays per resource type
+#   5. Add scope suffix to the variable name (e.g., controller_projects → controller_projects_myorg01)
+#   6. Write processed JSON to the output directory for include_vars
 #
 # Required variables:
 #   repo_clone_dir: path to the cloned repo (e.g., /tmp/casc-repos/controller-projects-myorg01)
@@ -41,10 +47,37 @@
         label: "{{ item.path | basename }}"
       register: json_contents
 
+    - name: "Validate single top-level key per JSON file"
+      ansible.builtin.assert:
+        that:
+          - (item.content | b64decode | from_json | dict2items | length) == 1
+        fail_msg: >-
+          INVALID: {{ item.source | basename }} has {{ (item.content | b64decode | from_json | dict2items | length) }}
+          top-level keys ({{ (item.content | b64decode | from_json).keys() | list | join(', ') }}).
+          Each JSON file must contain exactly one top-level resource key
+          (e.g., "controller_projects" or "aap_organizations").
+        quiet: true
+      loop: "{{ json_contents.results }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+
+    - name: "Validate top-level key is a known dispatch variable"
+      ansible.builtin.assert:
+        that:
+          - (item.content | b64decode | from_json | dict2items | first).key in casc_allowed_resource_keys
+        fail_msg: >-
+          UNKNOWN RESOURCE TYPE: {{ item.source | basename }} uses key
+          "{{ (item.content | b64decode | from_json | dict2items | first).key }}"
+          which is not a recognized infra.aap_configuration dispatch variable.
+          Allowed keys: {{ casc_allowed_resource_keys | join(', ') }}.
+        quiet: true
+      loop: "{{ json_contents.results }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+
     - name: "Filter and merge JSON by environment"
       ansible.builtin.set_fact:
         merged_resources: {}
-      # Initialize empty dict — populated by the processing script below
 
     - name: "Process each JSON file (filter by env, extract resource type)"
       ansible.builtin.set_fact:

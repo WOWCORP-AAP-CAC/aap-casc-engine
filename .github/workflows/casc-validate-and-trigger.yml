@@ -1,13 +1,22 @@
-# Standalone reference copy of the GitHub Actions CasC pipeline
-# For customers who cannot use reusable workflows (different GitHub org, self-hosted runners, etc.)
+# Production-grade reusable workflow for CasC tenant repositories
+# Lives at: aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml
 #
-# The live reusable workflow is at: .github/workflows/casc-validate-and-trigger.yml
-# This file is kept in sync with it for reference purposes.
+# Tenant repo usage (.github/workflows/casc.yml):
+#   name: CasC Pipeline
+#   on:
+#     push:
+#     pull_request:
+#       branches: [main]
+#   jobs:
+#     casc:
+#       uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
+#       with:
+#         dispatcher_jt_name: jt-platform-casc-dispatcher
+#       secrets: inherit
 #
-# To use directly, copy this file to your tenant repo at .github/workflows/casc.yml
-# and replace the workflow_call trigger with push/pull_request triggers.
-#
-# Preferred approach: use the reusable workflow via workflow_call (see README.md)
+# Supports two authentication modes:
+#   1. Bearer token (production) — per-environment secrets: AAP_DEV_HOST/TOKEN, etc.
+#   2. Basic auth (demo/sandbox) — single-host secrets: AAP_HOST, AAP_USERNAME, AAP_PASSWORD
 
 name: CasC Validate and Trigger
 
@@ -154,6 +163,7 @@ jobs:
         run: |
           BRANCH="${GITHUB_REF_NAME}"
 
+          # Check for per-environment Bearer token auth (production mode)
           case "$BRANCH" in
             feature/*)   ENV="dev"; HOST="${{ secrets.AAP_DEV_HOST }}"; TOKEN="${{ secrets.AAP_DEV_TOKEN }}" ;;
             develop)     ENV="tst"; HOST="${{ secrets.AAP_TST_HOST }}"; TOKEN="${{ secrets.AAP_TST_TOKEN }}" ;;
@@ -192,12 +202,14 @@ jobs:
           echo "Job Template: ${JT_NAME}"
           echo "Auth mode: ${AUTH_MODE}"
 
+          # Build auth arguments for curl
           if [ "$AUTH_MODE" = "bearer" ]; then
             AUTH_ARGS=(-H "${{ steps.auth.outputs.auth_header }}")
           else
             AUTH_ARGS=(-u "${{ secrets.AAP_USERNAME }}:${{ secrets.AAP_PASSWORD }}")
           fi
 
+          # Resolve JT ID by name
           echo "Looking up Job Template: ${JT_NAME}"
           JT_RESPONSE=$(curl -sk "${AUTH_ARGS[@]}" \
             "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${JT_NAME}")
@@ -211,6 +223,7 @@ jobs:
           fi
           echo "Found JT ID: ${JT_ID}"
 
+          # Launch the dispatcher with trigger metadata
           echo "Launching dispatcher..."
           LAUNCH_RESPONSE=$(curl -sk -X POST "${AUTH_ARGS[@]}" \
             -H "Content-Type: application/json" \
@@ -234,6 +247,7 @@ jobs:
             exit 1
           fi
 
+          # Poll for job completion
           echo "Waiting for job to complete..."
           for i in $(seq 1 60); do
             sleep 10

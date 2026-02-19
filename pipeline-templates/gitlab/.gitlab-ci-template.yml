@@ -1,6 +1,16 @@
 # Platform-managed shared pipeline template for tenant CasC repositories
 # Lives in: aap-casc-engine/pipeline-templates/gitlab/.gitlab-ci-template.yml
 # Tenant repos include this template — they do NOT define their own pipelines
+#
+# Supports two authentication modes:
+#   1. Bearer token (production) — per-environment CI/CD variables: AAP_DEV_HOST/TOKEN, etc.
+#   2. Basic auth (demo/sandbox) — single-host CI/CD variables: AAP_HOST, AAP_USERNAME, AAP_PASSWORD
+#
+# Tenant repo usage (.gitlab-ci.yml):
+#   include:
+#     - project: 'platform-team/aap-casc-engine'
+#       ref: 'main'
+#       file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
 
 stages:
   - validate
@@ -8,11 +18,9 @@ stages:
 
 variables:
   SCHEMA_DIR: "${CI_PROJECT_DIR}/.schemas"
+  DISPATCHER_JT_NAME: "jt-platform-casc-dispatcher"
 
-# ── Stage 1: Validate ────────────────────────────────────────────────────────
-# Schemas are fetched from aap-casc-engine during pipeline init.
-# The CI/CD platform include mechanism pulls the engine repo, making
-# schemas available at .schemas/ via the fetch-schemas job below.
+# ── Pre-stage: Fetch schemas from engine repo ────────────────────────────────
 fetch:schemas:
   stage: .pre
   image: alpine:latest
@@ -23,8 +31,7 @@ fetch:schemas:
       git clone --depth 1 --branch main \
         "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/platform-team/aap-casc-engine.git" /tmp/engine
       mkdir -p .schemas
-      cp /tmp/engine/schemas/*.schema.json .schemas/
-      # Copy naming validation scripts and OPA policies (if present)
+      cp /tmp/engine/schemas/*.schema.json .schemas/ 2>/dev/null || true
       [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/
       [ -f /tmp/engine/schemas/naming-rules.yml ] && cp /tmp/engine/schemas/naming-rules.yml .schemas/
       [ -d /tmp/engine/schemas/policies ] && cp -r /tmp/engine/schemas/policies .schemas/
@@ -32,30 +39,47 @@ fetch:schemas:
     paths:
       - .schemas/
 
+# ── Stage 1: Validate ────────────────────────────────────────────────────────
 validate:json-schema:
   stage: validate
   image: python:3.11-slim
   before_script:
-    - pip install check-jsonschema jq
+    - pip install check-jsonschema pyyaml
   script:
     - |
-      echo "Validating JSON files against schema contracts..."
+      echo "=== CasC JSON Validation Pipeline ==="
+      ERRORS=0
       for json_file in $(find . -name "*.json" -not -path "./.schemas/*"); do
-        # Derive the resource type from the JSON top-level key
-        # Each CasC JSON file has exactly one top-level key (e.g., "controller_projects")
+        key_count=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1])).keys()))" "$json_file" 2>/dev/null)
+        if [ "$key_count" != "1" ]; then
+          echo "ERROR: $json_file has $key_count top-level keys (expected exactly 1)"
+          ERRORS=$((ERRORS + 1))
+          continue
+        fi
         resource_type=$(python3 -c "import json,sys; print(list(json.load(open(sys.argv[1])).keys())[0])" "$json_file" 2>/dev/null)
         if [ -z "$resource_type" ]; then
-          echo "WARNING: Could not extract resource type from $json_file — skipping"
+          echo "ERROR: Could not extract resource type from $json_file"
+          ERRORS=$((ERRORS + 1))
           continue
         fi
         schema_file="${SCHEMA_DIR}/${resource_type}.schema.json"
         if [ -f "$schema_file" ]; then
           echo "Validating: $json_file against $schema_file (resource: ${resource_type})"
-          check-jsonschema --schemafile "$schema_file" "$json_file"
+          if ! check-jsonschema --schemafile "$schema_file" "$json_file"; then
+            ERRORS=$((ERRORS + 1))
+          fi
         else
-          echo "WARNING: No schema found for resource type '${resource_type}' (expected: $schema_file)"
+          echo "ERROR: No schema found for resource type '${resource_type}' (expected: $schema_file)"
+          ERRORS=$((ERRORS + 1))
         fi
       done
+      echo ""
+      if [ "$ERRORS" -gt 0 ]; then
+        echo "=== VALIDATION FAILED: $ERRORS error(s) ==="
+        exit 1
+      else
+        echo "=== ALL JSON FILES PASSED SCHEMA VALIDATION ==="
+      fi
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
@@ -63,12 +87,14 @@ validate:json-schema:
 validate:naming-convention:
   stage: validate
   image: python:3.11-slim
+  before_script:
+    - pip install pyyaml
   script:
     - |
-      # Naming validation scripts are sourced from the engine repo during .pre stage
       if [ -f ".schemas/validate_naming.py" ] && [ -f ".schemas/naming-rules.yml" ]; then
-        echo "Checking naming conventions..."
+        echo "=== Checking naming conventions ==="
         python3 .schemas/validate_naming.py --config-dir . --rules .schemas/naming-rules.yml
+        echo "=== NAMING CONVENTIONS PASSED ==="
       else
         echo "No naming validation scripts found — skipping."
       fi
@@ -81,12 +107,13 @@ validate:policy-compliance:
   image: openpolicyagent/opa:latest
   script:
     - |
-      # OPA policies are optional — run only if policies directory exists in engine schemas
       if [ -d ".schemas/policies" ]; then
-        echo "Checking policy compliance..."
+        echo "=== Checking OPA policy compliance ==="
         for json_file in $(find . -name "*.json" -not -path "./.schemas/*"); do
+          echo "Policy check: $json_file"
           opa eval --data .schemas/policies/ --input "$json_file" "data.casc.deny" --format pretty
         done
+        echo "=== OPA POLICY CHECK COMPLETE ==="
       else
         echo "No OPA policies found — skipping."
       fi
@@ -95,10 +122,10 @@ validate:policy-compliance:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 # ── Stage 2: Trigger (lightweight — single curl to correct AAP environment) ──
-# This stage maps the Git branch to the target environment and AAP host,
-# then launches the dispatcher Job Template via a single API call.
-# The dispatcher handles everything else: cloning repos, processing JSON,
-# and applying config via infra.aap_configuration.dispatch.
+# Supports dual auth: Bearer token (production) or basic auth (demo/sandbox).
+# If per-env token variables are set, Bearer token auth with branch routing is used.
+# Otherwise, if AAP_HOST + AAP_USERNAME + AAP_PASSWORD are set, basic auth is used.
+# If neither is configured, the trigger stage is skipped.
 trigger:dispatcher:
   stage: trigger
   image: python:3.11-slim
@@ -106,35 +133,118 @@ trigger:dispatcher:
     - apt-get update -qq && apt-get install -y -qq curl > /dev/null
   script:
     - |
-      # Map branch to target environment, AAP host, and per-env token
+      # Determine auth mode: Bearer token (per-env) or basic auth (single host)
       case "$CI_COMMIT_BRANCH" in
-        feature/*)   TARGET_ENV="dev";  AAP_HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
-        develop)     TARGET_ENV="tst";  AAP_HOST="$AAP_TST_HOST";  TOKEN="$AAP_TST_TOKEN" ;;
-        release/*)   TARGET_ENV="npr";  AAP_HOST="$AAP_NPR_HOST";  TOKEN="$AAP_NPR_TOKEN" ;;
-        master|main) TARGET_ENV="prd";  AAP_HOST="$AAP_PRD_HOST";  TOKEN="$AAP_PRD_TOKEN" ;;
-        *)           TARGET_ENV="dev";  AAP_HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
+        feature/*)   TARGET_ENV="dev";  HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
+        develop)     TARGET_ENV="tst";  HOST="$AAP_TST_HOST";  TOKEN="$AAP_TST_TOKEN" ;;
+        release/*)   TARGET_ENV="npr";  HOST="$AAP_NPR_HOST";  TOKEN="$AAP_NPR_TOKEN" ;;
+        master|main) TARGET_ENV="prd";  HOST="$AAP_PRD_HOST";  TOKEN="$AAP_PRD_TOKEN" ;;
+        *)           TARGET_ENV="dev";  HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
       esac
 
-      echo "Triggering dispatcher on ${AAP_HOST} for environment: ${TARGET_ENV}"
+      if [ -n "$HOST" ] && [ -n "$TOKEN" ]; then
+        AUTH_MODE="bearer"
+        AAP_HOST="$HOST"
+        AUTH_ARGS="-H \"Authorization: Bearer ${TOKEN}\""
+        echo "Using Bearer token auth for environment: ${TARGET_ENV}"
+      elif [ -n "$AAP_HOST" ] && [ -n "$AAP_USERNAME" ] && [ -n "$AAP_PASSWORD" ]; then
+        AUTH_MODE="basic"
+        AUTH_ARGS="-u \"${AAP_USERNAME}:${AAP_PASSWORD}\""
+        echo "Using basic auth (demo/sandbox mode) for environment: ${TARGET_ENV}"
+      else
+        echo "No AAP credentials configured — skipping trigger (validate-only mode)"
+        exit 0
+      fi
 
-      # Resolve dispatcher JT ID by name (consistent name across all AAP environments)
-      JT_ID=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
-        "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}" \
-        | python3 -c "import sys,json; print(json.load(sys.stdin)['results'][0]['id'])")
+      echo "=== Triggering CasC Dispatcher on AAP ==="
+      echo "Host: ${AAP_HOST}"
+      echo "Environment: ${TARGET_ENV}"
+      echo "Job Template: ${DISPATCHER_JT_NAME}"
 
-      curl -sf -X POST \
-        -H "Authorization: Bearer ${TOKEN}" \
-        -H "Content-Type: application/json" \
-        -d "{
-          \"extra_vars\": {
-            \"target_env\": \"${TARGET_ENV}\",
-            \"trigger_commit\": \"${CI_COMMIT_SHA}\",
-            \"triggered_repo\": \"${CI_PROJECT_NAME}\",
-            \"trigger_source\": \"ci-cd-pipeline\"
-          }
-        }" \
-        "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/"
+      # Resolve dispatcher JT ID by name
+      echo "Looking up Job Template: ${DISPATCHER_JT_NAME}"
+      if [ "$AUTH_MODE" = "bearer" ]; then
+        JT_RESPONSE=$(curl -sk \
+          -H "Authorization: Bearer ${TOKEN}" \
+          "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}")
+      else
+        JT_RESPONSE=$(curl -sk \
+          -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
+          "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}")
+      fi
+
+      JT_ID=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0]['id'] if r.get('results') else 'NOT_FOUND')")
+
+      if [ "$JT_ID" = "NOT_FOUND" ] || [ -z "$JT_ID" ]; then
+        echo "ERROR: Job Template '${DISPATCHER_JT_NAME}' not found on ${AAP_HOST}"
+        echo "Response: $JT_RESPONSE"
+        exit 1
+      fi
+      echo "Found JT ID: ${JT_ID}"
+
+      # Launch the dispatcher with trigger metadata
+      echo "Launching dispatcher..."
+      if [ "$AUTH_MODE" = "bearer" ]; then
+        LAUNCH_RESPONSE=$(curl -sk -X POST \
+          -H "Authorization: Bearer ${TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"extra_vars\": {
+              \"target_env\": \"${TARGET_ENV}\",
+              \"trigger_commit\": \"${CI_COMMIT_SHA}\",
+              \"triggered_repo\": \"${CI_PROJECT_NAME}\",
+              \"trigger_source\": \"ci-cd-pipeline\"
+            }
+          }" \
+          "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/")
+      else
+        LAUNCH_RESPONSE=$(curl -sk -X POST \
+          -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"extra_vars\": {
+              \"target_env\": \"${TARGET_ENV}\",
+              \"trigger_commit\": \"${CI_COMMIT_SHA}\",
+              \"triggered_repo\": \"${CI_PROJECT_NAME}\",
+              \"trigger_source\": \"ci-cd-pipeline\"
+            }
+          }" \
+          "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/")
+      fi
+
+      JOB_ID=$(echo "$LAUNCH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id', 'UNKNOWN'))")
+      echo "Dispatcher job launched: ID=${JOB_ID}"
+      echo "AAP UI: https://${AAP_HOST}/#/jobs/playbook/${JOB_ID}/output"
+
+      if [ "$JOB_ID" = "UNKNOWN" ] || [ -z "$JOB_ID" ]; then
+        echo "ERROR: Failed to launch dispatcher"
+        echo "Response: $LAUNCH_RESPONSE"
+        exit 1
+      fi
+
+      # Poll for job completion
+      echo "Waiting for job to complete..."
+      for i in $(seq 1 60); do
+        sleep 10
+        if [ "$AUTH_MODE" = "bearer" ]; then
+          STATUS=$(curl -sk \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
+        else
+          STATUS=$(curl -sk \
+            -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
+            "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
+        fi
+        echo "  Status: ${STATUS} (check ${i}/60)"
+        case "$STATUS" in
+          successful) echo "=== DISPATCHER COMPLETED SUCCESSFULLY ===" && exit 0 ;;
+          failed|error|canceled) echo "=== DISPATCHER FAILED (status: ${STATUS}) ===" && exit 1 ;;
+        esac
+      done
+      echo "=== TIMEOUT: Job still running after 10 minutes ==="
+      exit 1
   retry: 2
   rules:
     - if: '$CI_COMMIT_BRANCH =~ /^(feature\/|develop|release\/|master|main)/'
