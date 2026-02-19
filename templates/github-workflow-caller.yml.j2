@@ -1,0 +1,11 @@
+name: CasC Pipeline
+on:
+  push:
+  pull_request:
+    branches: [main]
+jobs:
+  casc:
+    uses: {{ platform_org }}/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
+    with:
+      dispatcher_jt_name: jt-platform-casc-dispatcher
+    secrets: inherit

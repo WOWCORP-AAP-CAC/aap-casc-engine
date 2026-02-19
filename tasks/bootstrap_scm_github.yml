@@ -1,0 +1,281 @@
+---
+# bootstrap_scm_github.yml — GitHub-specific SCM operations for tenant bootstrap
+#
+# Steps 1-5: Push platform JSON, create tenant repos, seed, set permissions,
+# update manifest. Called from bootstrap.yml via include_tasks.
+#
+# All operations are idempotent — safe to rerun. File writes use
+# GET-then-PUT (with SHA when updating existing files). Repo creation
+# tolerates 422 (already exists). Manifest updates skip duplicate entries.
+#
+# Required variables: platform_org, orgs_repo, teams_repo, rbac_user_repo,
+#   rbac_team_repo, registry_repo, tenant_scm_org, scm_api_token, org_id,
+#   _effective_team_group, team_lead, team_lead_username, tenant_repos
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 1a: Push org + team JSON to platform repos (create-or-update)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Check if org JSON already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ orgs_repo }}/contents/org-{{ org_id }}.json"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_org_file
+
+- name: "GH – Push organization JSON to {{ orgs_repo }}"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ orgs_repo }}/contents/org-{{ org_id }}.json"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: add organization org-' + org_id,
+          'content': lookup('template', 'templates/org-template.json.j2') | b64encode}
+         | combine({'sha': _gh_org_file.json.sha} if _gh_org_file.status == 200 else {}) }}
+    status_code: [200, 201]
+  vars:
+    org_name: "org-{{ org_id }}"
+    org_description: "{{ team_name }} automation organization"
+    org_default_ee: "{{ default_ee }}"
+
+- name: "GH – Check if team JSON already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ teams_repo }}/contents/team-{{ org_id }}.json"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_team_file
+
+- name: "GH – Push team JSON to {{ teams_repo }}"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ teams_repo }}/contents/team-{{ org_id }}.json"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: add team for org-' + org_id,
+          'content': lookup('template', 'templates/team-template.json.j2') | b64encode}
+         | combine({'sha': _gh_team_file.json.sha} if _gh_team_file.status == 200 else {}) }}
+    status_code: [200, 201]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Steps 1b/1c: Push RBAC JSON to RBAC repos (conditional, create-or-update)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Check if RBAC user JSON already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_rbac_user_file
+  when: rbac_user_repo | default('') | length > 0
+
+- name: "GH – Push RBAC user assignments to {{ rbac_user_repo }}"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: add RBAC user assignments for org-' + org_id,
+          'content': lookup('template', 'templates/rbac-user-template.json.j2') | b64encode}
+         | combine({'sha': _gh_rbac_user_file.json.sha} if (_gh_rbac_user_file.status | default(404)) == 200 else {}) }}
+    status_code: [200, 201]
+  vars:
+    org_name: "org-{{ org_id }}"
+    admin_user: "{{ team_lead }}"
+  when: rbac_user_repo | default('') | length > 0
+
+- name: "GH – Check if RBAC team JSON already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_rbac_team_file
+  when: rbac_team_repo | default('') | length > 0
+
+- name: "GH – Push RBAC team assignments to {{ rbac_team_repo }}"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: add RBAC team assignments for org-' + org_id,
+          'content': lookup('template', 'templates/rbac-team-template.json.j2') | b64encode}
+         | combine({'sha': _gh_rbac_team_file.json.sha} if (_gh_rbac_team_file.status | default(404)) == 200 else {}) }}
+    status_code: [200, 201]
+  vars:
+    org_name: "org-{{ org_id }}"
+    dev_team: "{{ _effective_team_group }}"
+  when: rbac_team_repo | default('') | length > 0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 2: Create tenant CasC repositories (tolerates already-exists)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Create tenant repos in {{ tenant_scm_org }}"
+  ansible.builtin.uri:
+    url: "https://api.github.com/orgs/{{ tenant_scm_org }}/repos"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      name: "{{ item }}"
+      description: "CasC repo for tenant {{ org_id }} — managed by Hybrid CasC bootstrap"
+      private: false
+      auto_init: true
+    status_code: [200, 201, 422]
+  loop: "{{ tenant_repos }}"
+  register: _gh_created_repos
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 3: Seed repos with pipeline + example JSON (create-or-update)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Check if thin caller workflow already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/contents/.github/workflows/casc.yml"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ tenant_repos }}"
+  register: _gh_workflow_checks
+
+- name: "GH – Seed thin caller workflow in each tenant repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item }}/contents/.github/workflows/casc.yml"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: add CasC pipeline-as-a-service (thin caller)',
+          'content': lookup('template', 'templates/github-workflow-caller.yml.j2') | b64encode}
+         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
+    status_code: [200, 201]
+  loop: "{{ _gh_workflow_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: "GH – Check if example JSON already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/contents/example.json"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ tenant_repos }}"
+  register: _gh_example_checks
+
+- name: "GH – Seed example JSON in each tenant repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item }}/contents/example.json"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: add example JSON configuration',
+          'content': _seed_content | b64encode}
+         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
+    status_code: [200, 201]
+  vars:
+    _repo_basename: "{{ item.item | regex_replace('-' + org_id + '$', '') }}"
+    _per_type_template: "templates/seed-{{ _repo_basename }}.json.j2"
+    _combined_template: "templates/seed-combined-tenant.json.j2"
+    _template: "{{ _per_type_template if lookup('first_found', dict(files=[_per_type_template], skip=true)) else _combined_template }}"
+    _seed_content: "{{ lookup('template', _template) }}"
+  loop: "{{ _gh_example_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 4: Set repository permissions (idempotent — PUT is naturally so)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Grant team lead collaborator access to tenant repos"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/collaborators/{{ team_lead_username }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      permission: "maintain"
+    status_code: [200, 201, 204]
+  loop: "{{ tenant_repos }}"
+  when: team_lead_username | default('') | length > 0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 5: Update repos-manifest.yml in registry repo (dedup-safe)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Get current repos-manifest.yml from registry repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ registry_repo }}/contents/repos-manifest.yml"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+  register: _gh_manifest_file
+
+- name: "GH – Parse current manifest"
+  ansible.builtin.set_fact:
+    _current_manifest: "{{ (_gh_manifest_file.json.content | b64decode) | from_yaml }}"
+    _manifest_sha: "{{ _gh_manifest_file.json.sha }}"
+
+- name: "GH – Compute tenant entries to add (skip repos already in manifest)"
+  ansible.builtin.set_fact:
+    _existing_repo_names: "{{ _current_manifest.tenant_repos | default([]) | map(attribute='name') | list }}"
+
+- name: "GH – Build new tenant entries (only missing repos)"
+  ansible.builtin.set_fact:
+    _new_entries: "{{ _new_entries | default([]) + [{'name': item, 'scope': org_id, 'org': tenant_scm_org}] }}"
+  loop: "{{ tenant_repos }}"
+  when: item not in _existing_repo_names
+
+- name: "GH – Update repos-manifest.yml with new tenant entries"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ registry_repo }}/contents/repos-manifest.yml"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      message: "Bootstrap: register tenant {{ org_id }} repos in manifest"
+      content: "{{ _updated_manifest | to_nice_yaml(indent=2) | b64encode }}"
+      sha: "{{ _manifest_sha }}"
+    status_code: [200, 201]
+  vars:
+    _updated_manifest: "{{ _current_manifest | combine({'tenant_repos': _current_manifest.tenant_repos + (_new_entries | default([]))}) }}"
+  when: (_new_entries | default([])) | length > 0

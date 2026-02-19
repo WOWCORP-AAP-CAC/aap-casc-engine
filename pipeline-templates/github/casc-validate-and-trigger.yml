@@ -1,11 +1,14 @@
-# Standalone reference copy of the GitHub Actions CasC pipeline
+# Standalone copy of the GitHub Actions CasC pipeline
 # For customers who cannot use reusable workflows (different GitHub org, self-hosted runners, etc.)
 #
 # The live reusable workflow is at: .github/workflows/casc-validate-and-trigger.yml
-# This file is kept in sync with it for reference purposes.
+# The reusable workflow auto-derives the engine repo from github.workflow_ref.
+# This standalone copy cannot do that, so it requires ENGINE_REPO to be set.
 #
-# To use directly, copy this file to your tenant repo at .github/workflows/casc.yml
-# and replace the workflow_call trigger with push/pull_request triggers.
+# To use directly:
+#   1. Copy this file to your tenant repo at .github/workflows/casc.yml
+#   2. Replace the workflow_call trigger with push/pull_request triggers
+#   3. Set ENGINE_REPO as a GitHub Actions repository or org variable (Settings > Variables)
 #
 # Preferred approach: use the reusable workflow via workflow_call (see README.md)
 
@@ -59,7 +62,8 @@ jobs:
       - name: Checkout engine repo (schemas)
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/aap-casc-engine
+          # Set vars.ENGINE_REPO to "<platform-org>/aap-casc-engine" (repo or org variable)
+          repository: ${{ vars.ENGINE_REPO || 'aap-casc-platform-demo/aap-casc-engine' }}
           path: .engine
           sparse-checkout: schemas
           token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}

@@ -8,7 +8,7 @@
 #
 # Tenant repo usage (.gitlab-ci.yml):
 #   include:
-#     - project: 'platform-team/aap-casc-engine'
+#     - project: '<platform-group>/aap-casc-engine'
 #       ref: 'main'
 #       file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
 
@@ -17,6 +17,8 @@ stages:
   - trigger
 
 variables:
+  # Override ENGINE_PROJECT_PATH at the GitLab group level to match your platform group
+  ENGINE_PROJECT_PATH: "platform-team/aap-casc-engine"
   SCHEMA_DIR: "${CI_PROJECT_DIR}/.schemas"
   DISPATCHER_JT_NAME: "jt-platform-casc-dispatcher"
 
@@ -29,7 +31,7 @@ fetch:schemas:
   script:
     - |
       git clone --depth 1 --branch main \
-        "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/platform-team/aap-casc-engine.git" /tmp/engine
+        "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${ENGINE_PROJECT_PATH}.git" /tmp/engine
       mkdir -p .schemas
       cp /tmp/engine/schemas/*.schema.json .schemas/ 2>/dev/null || true
       [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/

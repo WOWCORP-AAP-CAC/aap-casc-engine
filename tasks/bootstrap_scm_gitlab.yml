@@ -1,0 +1,301 @@
+---
+# bootstrap_scm_gitlab.yml — GitLab-specific SCM operations for tenant bootstrap
+#
+# Steps 1-5: Push platform JSON, create tenant repos, seed, set permissions,
+# update manifest. Called from bootstrap.yml via include_tasks.
+#
+# All operations are idempotent — safe to rerun. File writes check for
+# existing files first (GET → POST create or PUT update). Repo creation
+# tolerates already-exists errors. Manifest updates skip duplicate entries.
+#
+# Required variables:
+#   platform_org          — GitLab group path (for manifest org + clone URLs)
+#   orgs_repo_id          — numeric project ID for org definitions repo
+#   teams_repo_id         — numeric project ID for team definitions repo
+#   rbac_user_repo_id     — numeric project ID for user RBAC repo (optional)
+#   rbac_team_repo_id     — numeric project ID for team RBAC repo (optional)
+#   registry_repo_id      — numeric project ID for registry repo (manifest)
+#   tenant_scm_org        — GitLab group *path* (for manifest org + clone URLs)
+#   tenant_scm_namespace_id — numeric GitLab namespace ID (for Projects API)
+#   scm_api_token, org_id, team_name, _effective_team_group,
+#   team_lead, team_lead_user_id, tenant_repos
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 1a: Push org + team JSON to platform repos (create-or-update)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Check if org JSON already exists"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ orgs_repo_id }}/repository/files/org-{{ org_id }}.json?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  register: _gl_org_file
+
+- name: "GL – Push organization JSON to orgs repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ orgs_repo_id }}/repository/files/org-{{ org_id }}.json"
+    method: "{{ 'PUT' if _gl_org_file.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ lookup('template', 'templates/org-template.json.j2') }}"
+      commit_message: "Bootstrap: {{ 'update' if _gl_org_file.status == 200 else 'add' }} organization org-{{ org_id }}"
+    status_code: [200, 201]
+  vars:
+    org_name: "org-{{ org_id }}"
+    org_description: "{{ team_name }} automation organization"
+    org_default_ee: "{{ default_ee }}"
+
+- name: "GL – Check if team JSON already exists"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ teams_repo_id }}/repository/files/team-{{ org_id }}.json?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  register: _gl_team_file
+
+- name: "GL – Push team JSON to teams repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ teams_repo_id }}/repository/files/team-{{ org_id }}.json"
+    method: "{{ 'PUT' if _gl_team_file.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ lookup('template', 'templates/team-template.json.j2') }}"
+      commit_message: "Bootstrap: {{ 'update' if _gl_team_file.status == 200 else 'add' }} team for org-{{ org_id }}"
+    status_code: [200, 201]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Steps 1b/1c: Push RBAC JSON (conditional, create-or-update)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Check if RBAC user JSON already exists"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ rbac_user_repo_id }}/repository/files/rbac-user-{{ org_id }}.json?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  register: _gl_rbac_user_file
+  when: rbac_user_repo_id | default('') | length > 0
+
+- name: "GL – Push RBAC user assignments"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ rbac_user_repo_id }}/repository/files/rbac-user-{{ org_id }}.json"
+    method: "{{ 'PUT' if (_gl_rbac_user_file.status | default(404)) == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ lookup('template', 'templates/rbac-user-template.json.j2') }}"
+      commit_message: "Bootstrap: RBAC user assignments for org-{{ org_id }}"
+    status_code: [200, 201]
+  vars:
+    org_name: "org-{{ org_id }}"
+    admin_user: "{{ team_lead }}"
+  when: rbac_user_repo_id | default('') | length > 0
+
+- name: "GL – Check if RBAC team JSON already exists"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ rbac_team_repo_id }}/repository/files/rbac-team-{{ org_id }}.json?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  register: _gl_rbac_team_file
+  when: rbac_team_repo_id | default('') | length > 0
+
+- name: "GL – Push RBAC team assignments"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ rbac_team_repo_id }}/repository/files/rbac-team-{{ org_id }}.json"
+    method: "{{ 'PUT' if (_gl_rbac_team_file.status | default(404)) == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ lookup('template', 'templates/rbac-team-template.json.j2') }}"
+      commit_message: "Bootstrap: RBAC team assignments for org-{{ org_id }}"
+    status_code: [200, 201]
+  vars:
+    org_name: "org-{{ org_id }}"
+    dev_team: "{{ _effective_team_group }}"
+  when: rbac_team_repo_id | default('') | length > 0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 2: Create tenant CasC repositories (tolerates already-exists)
+# Uses tenant_scm_namespace_id (numeric) for the GitLab Projects API.
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Create tenant repos in GitLab namespace {{ tenant_scm_namespace_id }}"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      name: "{{ item }}"
+      namespace_id: "{{ tenant_scm_namespace_id }}"
+      visibility: "internal"
+      initialize_with_readme: true
+    status_code: [200, 201]
+  loop: "{{ tenant_repos }}"
+  register: _gl_created_repos
+  failed_when: >-
+    _gl_created_repos is failed and
+    ('has already been taken' not in (_gl_created_repos.json.message | default({}) | string))
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 2b: Look up project IDs for seeding (handles both new and existing)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Look up project IDs for tenant repos"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ tenant_scm_org | urlencode }}%2F{{ item | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  loop: "{{ tenant_repos }}"
+  register: _gl_tenant_projects
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 3: Seed repos with pipeline + example JSON (create-or-update)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Check if CI config already exists in tenant repos"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/.gitlab-ci.yml?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _gl_tenant_projects.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+  register: _gl_ci_checks
+
+- name: "GL – Seed GitLab CI include in each tenant repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/files/.gitlab-ci.yml"
+    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: |
+        include:
+          - project: '{{ platform_org }}/aap-casc-engine'
+            ref: 'main'
+            file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
+      commit_message: "Bootstrap: shared pipeline template"
+    status_code: [200, 201]
+  loop: "{{ _gl_ci_checks.results }}"
+  loop_control:
+    label: "{{ item.item.json.name }}"
+
+- name: "GL – Check if example JSON already exists in tenant repos"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/example.json?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _gl_tenant_projects.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+  register: _gl_example_checks
+
+- name: "GL – Seed example JSON in each tenant repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/files/example.json"
+    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ _seed_content }}"
+      commit_message: "Bootstrap: example JSON configuration"
+    status_code: [200, 201]
+  vars:
+    _repo_basename: "{{ item.item.json.name | regex_replace('-' + org_id + '$', '') }}"
+    _per_type_template: "templates/seed-{{ _repo_basename }}.json.j2"
+    _combined_template: "templates/seed-combined-tenant.json.j2"
+    _template: "{{ _per_type_template if lookup('first_found', dict(files=[_per_type_template], skip=true)) else _combined_template }}"
+    _seed_content: "{{ lookup('template', _template) }}"
+  loop: "{{ _gl_example_checks.results }}"
+  loop_control:
+    label: "{{ item.item.json.name }}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 4: Set repository permissions (tolerates already-member 409)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Grant tenant team maintainer access"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/members"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      user_id: "{{ team_lead_user_id }}"
+      access_level: 40
+    status_code: [200, 201, 409]
+  loop: "{{ _gl_tenant_projects.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+  when: team_lead_user_id | default('') | length > 0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 5: Update repos-manifest.yml in registry repo (dedup-safe)
+# Uses tenant_scm_org (group path) for the manifest 'org' field.
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Get current repos-manifest.yml from registry repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ registry_repo_id }}/repository/files/repos-manifest.yml?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  register: _gl_manifest_file
+
+- name: "GL – Parse current manifest"
+  ansible.builtin.set_fact:
+    _current_manifest: "{{ (_gl_manifest_file.json.content | b64decode) | from_yaml }}"
+
+- name: "GL – Compute existing repo names to prevent duplicates"
+  ansible.builtin.set_fact:
+    _existing_repo_names: "{{ _current_manifest.tenant_repos | default([]) | map(attribute='name') | list }}"
+
+- name: "GL – Build new tenant entries (only missing repos)"
+  ansible.builtin.set_fact:
+    _new_entries: "{{ _new_entries | default([]) + [{'name': item, 'scope': org_id, 'org': tenant_scm_org}] }}"
+  loop: "{{ tenant_repos }}"
+  when: item not in _existing_repo_names
+
+- name: "GL – Update repos-manifest.yml with new tenant entries"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ registry_repo_id }}/repository/files/repos-manifest.yml"
+    method: PUT
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ _updated_manifest | to_nice_yaml(indent=2) }}"
+      commit_message: "Bootstrap: register tenant {{ org_id }} repos in manifest"
+    status_code: [200, 201]
+  vars:
+    _updated_manifest: "{{ _current_manifest | combine({'tenant_repos': _current_manifest.tenant_repos + (_new_entries | default([]))}) }}"
+  when: (_new_entries | default([])) | length > 0

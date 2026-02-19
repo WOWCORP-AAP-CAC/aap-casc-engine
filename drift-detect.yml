@@ -24,13 +24,39 @@
     scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
     scm_token: "{{ lookup('env', 'SCM_TOKEN') }}"
 
-  vars_files:
-    - repos-manifest.yml
+    # Registry repo — the platform repo containing repos-manifest.yml.
+    registry_repo: ""
+    registry_repo_org: ""
+    registry_branch: "main"
+    registry_dir: "/tmp/casc-registry"
 
   tasks:
+    # ── Phase 0: Load manifest from registry repo or local file ────────
+    - name: "Clone registry repo to load manifest"
+      ansible.builtin.include_role:
+        name: git_clone_repos
+      vars:
+        repos_to_clone:
+          - name: "{{ registry_repo }}"
+            org: "{{ registry_repo_org }}"
+            scope: _registry
+        clone_base_dir: "{{ registry_dir }}"
+        clone_branch: "{{ registry_branch }}"
+        git_base_url: "{{ scm_base_url }}"
+        git_token: "{{ scm_token }}"
+      when: registry_repo | default('') | length > 0
+
+    - name: "Load manifest from registry repo"
+      ansible.builtin.include_vars:
+        file: "{{ registry_dir }}/{{ registry_repo }}/repos-manifest.yml"
+      when: registry_repo | default('') | length > 0
+
+    - name: "Load manifest from local file (fallback)"
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/repos-manifest.yml"
+      when: registry_repo | default('') | length == 0
+
     # ── Phase 1: Load desired state from Git (clone + process) ─────────
-    # Same Git-direct approach as the dispatcher: clone repos, process
-    # JSON (env filter, merge, suffix), and load into variables.
     - name: "Resolve target branch"
       ansible.builtin.set_fact:
         target_branch: "{{ env_branch_map[target_env] | default('develop') }}"

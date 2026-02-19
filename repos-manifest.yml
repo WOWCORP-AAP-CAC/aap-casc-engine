@@ -1,14 +1,20 @@
 ---
-# Repos Manifest — Central registry of all CasC repositories
+# Repos Manifest — Example / Fallback
 #
-# The dispatcher uses this to know which repos to clone and how to scope-suffix them.
-# The bootstrap playbook updates this file automatically when onboarding new tenants.
+# CANONICAL LOCATION: In production, repos-manifest.yml lives in the registry repo
+# (typically aap-organizations-global in the platform SCM org). The dispatcher and
+# drift-detect playbooks clone that registry repo first (Phase 0) to load the manifest.
+# This local copy serves as a fallback when registry_repo is not configured, and as
+# a reference example for new deployments.
 #
 # scope: Determines the suffix added during processing.
-#   - platform repos → scope: platform → suffixed keys like aap_organizations_platform
-#   - tenant repos   → scope: myorg01  → suffixed keys like controller_projects_myorg01
+#   - platform repos -> scope: platform -> suffixed keys like aap_organizations_platform
+#   - tenant repos   -> scope: myorg01  -> suffixed keys like controller_projects_myorg01
 # The dispatch role's dispatch_include_wildcard_vars: true merges all suffixed keys
 # back into their base variables automatically.
+#
+# org: (optional) SCM org/group for cross-org cloning. When set, the git_clone_repos
+# role constructs the URL as https://HOST/ORG/REPO.git instead of using git_base_url.
 
 # Environment-to-branch mapping
 # The dispatcher uses this to clone repos at the correct branch for each target_env

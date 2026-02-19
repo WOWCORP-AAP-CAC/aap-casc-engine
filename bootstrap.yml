@@ -2,19 +2,27 @@
 # Hybrid CasC — Bootstrap New Tenant Organization
 #
 # Automates onboarding a new tenant organization to AAP:
-#   1. Adds org/RBAC JSON configs to platform repos (via SCM API)
-#   2. Creates tenant CasC repositories (via SCM API)
-#   3. Seeds repos with shared pipeline include + example JSON files
-#   4. Sets repository permissions (tenant team = maintainer)
-#   5. Registers new repos in repos-manifest.yml
-#   6. Applies platform config to AAP via the dispatch role
+#   1. Pushes org/team JSON to platform repos, RBAC to RBAC repos (via SCM API)
+#   2. Creates tenant CasC repositories in the tenant's SCM org/namespace
+#   3. Seeds repos with CI/CD pipeline include + example JSON files
+#   4. Sets repository permissions (tenant team lead = maintainer)
+#   5. Updates repos-manifest.yml in the registry repo
+#   6. Pre-checks AAP for existing user/team, renders staging JSON, dispatches
 #
-# Usage:
-#   ansible-playbook bootstrap.yml \
-#     -e org_id=newteam01 \
-#     -e team_name="New Team" \
-#     -e team_lead=newteam_lead \
-#     -e team_group=newteam_developers
+# Supports both GitHub and GitLab. Provider is set via SCM_PROVIDER env var
+# (github|gitlab) or auto-detected from scm_base_url (covers github.com,
+# GitHub Enterprise, gitlab.com, and self-managed GitLab).
+# SCM-specific operations are delegated to tasks/bootstrap_scm_{provider}.yml.
+# All SCM steps are idempotent — safe to rerun without side effects.
+#
+# Usage (via AAP Job Template with Survey):
+#   Survey provides: org_id, team_name, team_lead, team_lead_email,
+#                    repo_pattern, tenant_scm_org
+#   JT extra vars provide: platform_org, orgs_repo, teams_repo, etc.
+#
+# GitLab note: tenant_scm_org is the group *path* (used in clone URLs and
+#   manifest entries). tenant_scm_namespace_id is the numeric namespace ID
+#   (used by the GitLab Projects API for repo creation).
 
 - name: "Hybrid CasC — Bootstrap New Tenant Organization"
   hosts: localhost
@@ -22,23 +30,74 @@
   gather_facts: false
 
   vars:
-    # Provided by the platform team during onboarding
+    # SCM connection
+    scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
+    scm_api_token: "{{ lookup('env', 'SCM_API_TOKEN') }}"
+
+    # Explicit SCM_PROVIDER override (github|gitlab) or auto-detect from URL.
+    # Auto-detect uses 'github' in URL (covers github.com and GitHub Enterprise).
+    _scm_provider_override: "{{ lookup('env', 'SCM_PROVIDER') | default('') }}"
+    scm_provider: >-
+      {{ _scm_provider_override
+         if _scm_provider_override in ['github', 'gitlab']
+         else ('github' if 'github' in scm_base_url else 'gitlab') }}
+
+    # Platform org/group — where platform CasC repos live
+    platform_org: "{{ lookup('env', 'PLATFORM_ORG') }}"
+
+    # Per-resource-type platform repos (GitHub: names, GitLab: use _id variants)
+    orgs_repo: "{{ lookup('env', 'ORGS_REPO') | default('aap-organizations-global') }}"
+    teams_repo: "{{ lookup('env', 'TEAMS_REPO') | default('aap-teams-global') }}"
+    rbac_user_repo: "{{ lookup('env', 'RBAC_USER_REPO') | default('') }}"
+    rbac_team_repo: "{{ lookup('env', 'RBAC_TEAM_REPO') | default('') }}"
+    registry_repo: "{{ lookup('env', 'REGISTRY_REPO') | default(orgs_repo) }}"
+
+    # GitLab-specific numeric project/namespace IDs (ignored for GitHub)
+    orgs_repo_id: "{{ lookup('env', 'ORGS_REPO_ID') | default('') }}"
+    teams_repo_id: "{{ lookup('env', 'TEAMS_REPO_ID') | default('') }}"
+    rbac_user_repo_id: "{{ lookup('env', 'RBAC_USER_REPO_ID') | default('') }}"
+    rbac_team_repo_id: "{{ lookup('env', 'RBAC_TEAM_REPO_ID') | default('') }}"
+    registry_repo_id: "{{ lookup('env', 'REGISTRY_REPO_ID') | default(orgs_repo_id) }}"
+
+    # Tenant-specific (from AAP Survey)
     org_id: "{{ lookup('env', 'ORG_ID') }}"
     team_name: "{{ lookup('env', 'TEAM_NAME') }}"
     team_lead: "{{ lookup('env', 'TEAM_LEAD') }}"
-    team_group: "{{ lookup('env', 'TEAM_GROUP') }}"
-    default_ee: "{{ lookup('env', 'DEFAULT_EE') | default('ACME RHEL 9 Ansible 2.18 Base') }}"
-    scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"  # e.g., https://gitlab.example.com/casc
-    scm_api_token: "{{ lookup('env', 'SCM_API_TOKEN') }}"
-    environments: ["dev", "tst", "npr", "prd"]
+    team_lead_email: "{{ lookup('env', 'TEAM_LEAD_EMAIL') | default('') }}"
+    team_lead_first_name: "{{ lookup('env', 'TEAM_LEAD_FIRST_NAME') | default('') }}"
+    team_lead_last_name: "{{ lookup('env', 'TEAM_LEAD_LAST_NAME') | default('') }}"
+    team_lead_password: "{{ lookup('env', 'TEAM_LEAD_PASSWORD') | default('change_me') }}"
+    team_group: "{{ lookup('env', 'TEAM_GROUP') | default('') }}"
+    repo_pattern: "{{ lookup('env', 'REPO_PATTERN') | default('per-resource-type') }}"
 
-    # SCM project IDs for platform repos (looked up or provided as extra vars)
-    # These are the GitLab/GitHub project IDs of the platform CasC repos
-    orgs_repo_id: "{{ lookup('env', 'ORGS_REPO_ID') }}"
-    rbac_user_repo_id: "{{ lookup('env', 'RBAC_USER_REPO_ID') }}"
-    rbac_team_repo_id: "{{ lookup('env', 'RBAC_TEAM_REPO_ID') }}"
-    scm_casc_group_id: "{{ lookup('env', 'SCM_CASC_GROUP_ID') }}"  # SCM group/org for CasC repos
-    team_lead_user_id: "{{ lookup('env', 'TEAM_LEAD_USER_ID') }}"  # SCM user ID for repo access
+    # tenant_scm_org: string path/slug for the tenant's SCM org or GitLab group.
+    #   Used in manifest 'org' field and by git_clone_repos for URL construction.
+    #   GitHub example: "aap-casc-tenant-alpha-demo"
+    #   GitLab example: "tenant-alpha" (the group path, not its numeric ID)
+    tenant_scm_org: "{{ lookup('env', 'TENANT_SCM_ORG') }}"
+
+    # tenant_scm_namespace_id: numeric GitLab namespace/group ID for the
+    #   Projects API. Required for GitLab only; ignored for GitHub.
+    tenant_scm_namespace_id: "{{ lookup('env', 'TENANT_SCM_NAMESPACE_ID') | default('') }}"
+
+    # GitHub-specific collaborator username
+    team_lead_username: "{{ lookup('env', 'TEAM_LEAD_USERNAME') | default('') }}"
+    # GitLab-specific user ID for permissions
+    team_lead_user_id: "{{ lookup('env', 'TEAM_LEAD_USER_ID') | default('') }}"
+
+    default_ee: "{{ lookup('env', 'DEFAULT_EE') | default('Default execution environment') }}"
+
+    # Tenant repos — auto-generated from repo_pattern or overridden via CSV
+    tenant_repos_csv: "{{ lookup('env', 'TENANT_REPOS_CSV') | default('') }}"
+    tenant_repos: >-
+      {{ (tenant_repos_csv.split(',') | map('trim') | list)
+         if tenant_repos_csv | length > 0
+         else (['casc-tenant-' + org_id] if repo_pattern == 'combined'
+               else ['controller-projects-' + org_id,
+                     'controller-credentials-' + org_id,
+                     'controller-inventories-' + org_id,
+                     'controller-job_templates-' + org_id,
+                     'controller-schedules-' + org_id]) }}
 
     # AAP connection for applying config
     aap_hostname: "{{ lookup('env', 'AAP_HOSTNAME') }}"
@@ -47,191 +106,138 @@
     aap_validate_certs: true
     bootstrap_target_env: "{{ lookup('env', 'BOOTSTRAP_TARGET_ENV') | default('dev') }}"
 
-    # Repository names to create
-    tenant_repos:
-      - "controller-projects-{{ org_id }}"
-      - "controller-credentials-{{ org_id }}"
-      - "controller-inventories-{{ org_id }}"
-      - "controller-job_templates-{{ org_id }}"
-      - "controller-schedules-{{ org_id }}"
+    # Working directories
+    bootstrap_staging_dir: "/tmp/bootstrap-staging"
+    bootstrap_clone_dir: "/tmp/bootstrap-repos"
 
   tasks:
-    # ── Step 1: Add JSON configs to platform repos ─────────────────────
-    - name: "Add organization JSON to aap-organizations-global repo"
+    # ── Validation ─────────────────────────────────────────────────────────
+    - name: "Compute effective team group (safe fallback)"
+      ansible.builtin.set_fact:
+        _effective_team_group: "{{ team_group if (team_group | length > 0) else team_name }}"
+
+    - name: "Validate common required inputs"
+      ansible.builtin.assert:
+        that:
+          - org_id | length > 0
+          - team_name | length > 0
+          - team_lead | length > 0
+          - tenant_scm_org | length > 0
+          - _effective_team_group | length > 0
+        fail_msg: "Missing required bootstrap input(s). org_id, team_name, team_lead, tenant_scm_org must be non-empty."
+
+    - name: "Validate SCM provider value"
+      ansible.builtin.assert:
+        that:
+          - scm_provider in ['github', 'gitlab']
+        fail_msg: >-
+          scm_provider must be 'github' or 'gitlab'. Got: '{{ scm_provider }}'.
+          Set SCM_PROVIDER env var explicitly for GitHub Enterprise or non-standard URLs.
+
+    - name: "Validate GitHub-specific inputs"
+      ansible.builtin.assert:
+        that:
+          - tenant_scm_org | length > 0
+        fail_msg: "GitHub bootstrap requires tenant_scm_org (org slug)."
+      when: scm_provider == 'github'
+
+    - name: "Validate GitLab-specific inputs"
+      ansible.builtin.assert:
+        that:
+          - tenant_scm_org | length > 0
+          - tenant_scm_namespace_id | length > 0
+        fail_msg: >-
+          GitLab bootstrap requires both tenant_scm_org (group path for clone URLs)
+          and tenant_scm_namespace_id (numeric namespace ID for the Projects API).
+      when: scm_provider == 'gitlab'
+
+    - name: "Log bootstrap parameters"
+      ansible.builtin.debug:
+        msg: >-
+          Bootstrap: org={{ org_id }} | team={{ team_name }} | lead={{ team_lead }}
+          | provider={{ scm_provider }} | pattern={{ repo_pattern }}
+          | tenant_org={{ tenant_scm_org }}
+          {{ '| tenant_ns_id=' + tenant_scm_namespace_id if scm_provider == 'gitlab' else '' }}
+          | repos={{ tenant_repos | length }}
+          | effective_team_group={{ _effective_team_group }}
+
+    # ── Steps 1-5: SCM operations (provider-specific, idempotent) ──────────
+    - name: "Execute {{ scm_provider }} SCM operations (Steps 1-5)"
+      ansible.builtin.include_tasks: "tasks/bootstrap_scm_{{ scm_provider }}.yml"
+
+    # ── Step 6a: Pre-check AAP for user/team, render staging JSON ────────
+
+    - name: "Ensure staging directory exists"
+      ansible.builtin.file:
+        path: "{{ bootstrap_staging_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: "Check if user {{ team_lead }} already exists in AAP"
       ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ orgs_repo_id }}/repository/files/org-{{ org_id }}.json"
-        method: POST
-        headers:
-          PRIVATE-TOKEN: "{{ scm_api_token }}"
-        body_format: json
-        body:
-          branch: "main"
-          content: "{{ lookup('template', 'templates/org-template.json.j2') }}"
-          commit_message: "Bootstrap: add organization org-{{ org_id }}"
-        status_code: [200, 201]
+        url: "https://{{ aap_hostname }}/api/gateway/v1/users/?username={{ team_lead }}"
+        method: GET
+        user: "{{ aap_username }}"
+        password: "{{ aap_password }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        force_basic_auth: true
+      register: user_check
+      failed_when: false
+
+    - name: "Render user JSON to staging (user not found in AAP)"
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'templates/user-template.json.j2') }}"
+        dest: "{{ bootstrap_staging_dir }}/aap_user_accounts_bootstrap.json"
+      when: >-
+        user_check.status != 200 or
+        (user_check.json.count | default(0)) == 0
+
+    - name: "Render team JSON to staging (org is new, team cannot pre-exist)"
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'templates/team-template.json.j2') }}"
+        dest: "{{ bootstrap_staging_dir }}/aap_teams_bootstrap.json"
+
+    - name: "Render RBAC user assignment to staging"
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'templates/rbac-user-template.json.j2') }}"
+        dest: "{{ bootstrap_staging_dir }}/gateway_role_user_assignments_bootstrap.json"
+      vars:
+        org_name: "org-{{ org_id }}"
+        admin_user: "{{ team_lead }}"
+
+    - name: "Render RBAC team assignment to staging"
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'templates/rbac-team-template.json.j2') }}"
+        dest: "{{ bootstrap_staging_dir }}/gateway_role_team_assignments_bootstrap.json"
+      vars:
+        org_name: "org-{{ org_id }}"
+        dev_team: "{{ _effective_team_group }}"
+
+    - name: "Render org JSON to staging"
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'templates/org-template.json.j2') }}"
+        dest: "{{ bootstrap_staging_dir }}/aap_organizations_bootstrap.json"
       vars:
         org_name: "org-{{ org_id }}"
         org_description: "{{ team_name }} automation organization"
         org_default_ee: "{{ default_ee }}"
 
-    - name: "Add RBAC user assignments JSON to gateway-role_user_assignments-global repo"
-      ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ rbac_user_repo_id }}/repository/files/rbac-user-{{ org_id }}.json"
-        method: POST
-        headers:
-          PRIVATE-TOKEN: "{{ scm_api_token }}"
-        body_format: json
-        body:
-          branch: "main"
-          content: "{{ lookup('template', 'templates/rbac-user-template.json.j2') }}"
-          commit_message: "Bootstrap: add RBAC user assignments for org-{{ org_id }}"
-        status_code: [200, 201]
-      vars:
-        org_name: "org-{{ org_id }}"
-        admin_user: "{{ team_lead }}"
+    # ── Step 6b: Load staging + dispatch to AAP ──────────────────────────
 
-    - name: "Add RBAC team assignments JSON to gateway-role_team_assignments-global repo"
-      ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ rbac_team_repo_id }}/repository/files/rbac-team-{{ org_id }}.json"
-        method: POST
-        headers:
-          PRIVATE-TOKEN: "{{ scm_api_token }}"
-        body_format: json
-        body:
-          branch: "main"
-          content: "{{ lookup('template', 'templates/rbac-team-template.json.j2') }}"
-          commit_message: "Bootstrap: add RBAC team assignments for org-{{ org_id }}"
-        status_code: [200, 201]
-      vars:
-        org_name: "org-{{ org_id }}"
-        dev_team: "{{ team_group }}"
-
-    # ── Step 2: Create SCM repositories ─────────────────────────────────
-    - name: "Create tenant CasC repositories"
-      ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects"
-        method: POST
-        headers:
-          PRIVATE-TOKEN: "{{ scm_api_token }}"
-        body_format: json
-        body:
-          name: "{{ item }}"
-          namespace_id: "{{ scm_casc_group_id }}"
-          visibility: "internal"
-          initialize_with_readme: true
-        status_code: [200, 201]
-      loop: "{{ tenant_repos }}"
-      register: created_repos
-
-    # ── Step 3: Seed repos with template files ──────────────────────────
-    - name: "Seed repos with shared pipeline include and template JSON"
-      ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/.gitlab-ci.yml"
-        method: POST
-        headers:
-          PRIVATE-TOKEN: "{{ scm_api_token }}"
-        body_format: json
-        body:
-          branch: "main"
-          content: |
-            include:
-              - project: 'platform-team/aap-casc-engine'
-                ref: 'main'
-                file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
-          commit_message: "Bootstrap: add shared pipeline template"
-      loop: "{{ created_repos.results }}"
-      loop_control:
-        label: "{{ item.json.name }}"
-
-    - name: "Seed each repo with an example JSON file"
-      ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/example.json"
-        method: POST
-        headers:
-          PRIVATE-TOKEN: "{{ scm_api_token }}"
-        body_format: json
-        body:
-          branch: "main"
-          content: "{{ lookup('template', 'templates/seed-' + (item.json.name | regex_replace('-' + org_id + '$', '')) + '.json.j2') }}"
-          commit_message: "Bootstrap: add example JSON configuration"
-        status_code: [200, 201]
-      loop: "{{ created_repos.results }}"
-      loop_control:
-        label: "{{ item.json.name }}"
-
-    # ── Step 4: Set repository permissions ──────────────────────────────
-    - name: "Grant tenant team maintainer access"
-      ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/members"
-        method: POST
-        headers:
-          PRIVATE-TOKEN: "{{ scm_api_token }}"
-        body_format: json
-        body:
-          user_id: "{{ team_lead_user_id }}"
-          access_level: 40  # Maintainer
-        status_code: [200, 201, 409]
-      loop: "{{ created_repos.results }}"
-      loop_control:
-        label: "{{ item.json.name }}"
-
-    # ── Step 5: Register new repos in the repos manifest ─────────────────
-    - name: "Update repos-manifest.yml in aap-casc-engine"
-      ansible.builtin.blockinfile:
-        path: "repos-manifest.yml"
-        marker: "# {mark} TENANT {{ org_id }}"
-        block: |
-          - name: {{ item }}
-            scope: {{ org_id }}
-        insertafter: "tenant_repos:"
-      delegate_to: localhost
-      loop: "{{ tenant_repos }}"
-
-    - name: "Commit updated repos-manifest.yml to aap-casc-engine"
-      ansible.builtin.shell: |
-        cd {{ playbook_dir }}
-        git add repos-manifest.yml
-        git commit -m "Bootstrap: register tenant {{ org_id }} repos in manifest"
-        git push origin main
-      delegate_to: localhost
-
-    # ── Step 6: Clone platform repos, process JSON, and apply to AAP ────
-    # Bootstrap only applies platform-level config (org, RBAC, team assignments).
-    # Tenant repos are empty at this point — they'll be populated by the tenant.
-    - name: "Clone platform repos for initial apply"
-      ansible.builtin.include_role:
-        name: git_clone_repos
-      vars:
-        repos_to_clone: "{{ lookup('file', 'repos-manifest.yml') | from_yaml | json_query('platform_repos') }}"
-        clone_base_dir: "/tmp/bootstrap-repos"
-        clone_branch: "main"
-        git_base_url: "{{ scm_base_url }}"
-        git_token: "{{ scm_api_token }}"
-
-    - name: "Process platform JSON (env filter + merge + suffix)"
-      ansible.builtin.include_role:
-        name: process_casc_json
-      vars:
-        repo_clone_dir: "/tmp/bootstrap-repos/{{ item.name }}"
-        repo_scope: "{{ item.scope }}"
-        output_dir: "/tmp/bootstrap-staging"
-        env_filter: "{{ bootstrap_target_env | default('dev') }}"
-      loop: "{{ lookup('file', 'repos-manifest.yml') | from_yaml | json_query('platform_repos') }}"
-      loop_control:
-        label: "{{ item.name }}"
-
-    - name: "Load processed platform config"
+    - name: "Load bootstrap staging config"
       ansible.builtin.include_vars:
-        dir: "/tmp/bootstrap-staging"
+        dir: "{{ bootstrap_staging_dir }}"
         extensions: [json]
         depth: 1
 
-    - name: "Apply organization, RBAC, and team config to AAP"
+    - name: "Apply bootstrap config to AAP via dispatch"
       ansible.builtin.include_role:
         name: infra.aap_configuration.dispatch
       vars:
         dispatch_include_wildcard_vars: true
         aap_configuration_collect_logs: true
+
+    # ── Completion ───────────────────────────────────────────────────────
 
     - name: "Bootstrap complete"
       ansible.builtin.debug:
@@ -239,12 +245,21 @@
           ══════════════════════════════════════════════════════
           TENANT BOOTSTRAP COMPLETE
           ══════════════════════════════════════════════════════
-          Organization: org-{{ org_id }}
-          Team Lead:    {{ team_lead }} (admin)
-          Team Group:   {{ team_group }} (execute)
-          Default EE:   {{ default_ee }}
-          Repositories created:
+          Organization:  org-{{ org_id }}
+          Team Lead:     {{ team_lead }}
+          Team:          {{ _effective_team_group }}
+          Default EE:    {{ default_ee }}
+          SCM Provider:  {{ scm_provider }}
+          Repo Pattern:  {{ repo_pattern }}
+          Tenant SCM:    {{ tenant_scm_org }}
+          User created:  {{ 'yes (local)' if (user_check.status != 200 or (user_check.json.count | default(0)) == 0) else 'no (exists in AAP/IdP)' }}
+          Repositories:
           {% for repo in tenant_repos %}
-            • {{ scm_base_url }}/casc/{{ repo }}
+            • {{ repo }} (in {{ tenant_scm_org }})
           {% endfor %}
           ══════════════════════════════════════════════════════
+
+    - name: "Cleanup staging directory"
+      ansible.builtin.file:
+        path: "{{ bootstrap_staging_dir }}"
+        state: absent

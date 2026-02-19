@@ -65,10 +65,19 @@ jobs:
       - name: Checkout tenant repo
         uses: actions/checkout@v4
 
+      - name: Derive engine repo from workflow context
+        id: engine
+        run: |
+          # github.workflow_ref = "owner/repo/.github/workflows/file.yml@refs/heads/branch"
+          ENGINE_REPO="${{ github.workflow_ref }}"
+          ENGINE_REPO="${ENGINE_REPO%%/.github/*}"
+          echo "repo=${ENGINE_REPO}" >> $GITHUB_OUTPUT
+          echo "Engine repo: ${ENGINE_REPO}"
+
       - name: Checkout engine repo (schemas)
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/aap-casc-engine
+          repository: ${{ steps.engine.outputs.repo }}
           path: .engine
           sparse-checkout: schemas
           token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
