@@ -3,13 +3,8 @@ collections:
   - name: infra.aap_configuration
     version: ">=2.9.0"
 
-  # Transitive dependencies of infra.aap_configuration
-  # Listed explicitly for visibility; installed automatically by ansible-galaxy
-  - name: ansible.platform
-    version: ">=2.5.0"
-  - name: ansible.controller
-    version: ">=4.6.0"
-  - name: ansible.hub
-    version: ">=1.0.0"
-  - name: ansible.eda
-    version: ">=2.5.0"
+  # Transitive dependencies (pulled automatically by infra.aap_configuration):
+  #   ansible.platform, ansible.controller, ansible.hub, ansible.eda
+  # These are Red Hat Certified collections bundled with AAP execution
+  # environments. Do NOT list them explicitly — their version constraints
+  # are managed by infra.aap_configuration's own metadata.
