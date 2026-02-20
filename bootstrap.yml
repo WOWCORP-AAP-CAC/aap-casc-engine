@@ -69,6 +69,8 @@
     team_lead_password: "{{ lookup('env', 'TEAM_LEAD_PASSWORD') | default('change_me') }}"
     team_group: "{{ lookup('env', 'TEAM_GROUP') | default('') }}"
     repo_pattern: "{{ lookup('env', 'REPO_PATTERN') | default('per-resource-type') }}"
+    repo_visibility: "{{ lookup('env', 'REPO_VISIBILITY') | default('public', true) }}"
+    _repo_private: "{{ repo_visibility == 'private' }}"
 
     # tenant_scm_org: string path/slug for the tenant's SCM org or GitLab group.
     #   Used in manifest 'org' field and by git_clone_repos for URL construction.
@@ -134,6 +136,13 @@
         fail_msg: >-
           scm_provider must be 'github' or 'gitlab'. Got: '{{ scm_provider }}'.
           Set SCM_PROVIDER env var explicitly for GitHub Enterprise or non-standard URLs.
+
+    - name: "Validate repo visibility value"
+      ansible.builtin.assert:
+        that:
+          - repo_visibility in ['public', 'private']
+        fail_msg: >-
+          repo_visibility must be 'public' or 'private'. Got: '{{ repo_visibility }}'.
 
     - name: "Validate GitHub-specific inputs"
       ansible.builtin.assert:

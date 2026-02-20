@@ -145,7 +145,7 @@
     body:
       name: "{{ item }}"
       namespace_id: "{{ tenant_scm_namespace_id }}"
-      visibility: "internal"
+      visibility: "{{ repo_visibility }}"
       initialize_with_readme: true
     status_code: [200, 201]
   loop: "{{ tenant_repos }}"
