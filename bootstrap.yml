@@ -207,22 +207,6 @@
         content: "{{ lookup('template', 'templates/team-template.json.j2') }}"
         dest: "{{ bootstrap_staging_dir }}/aap_teams_bootstrap.json"
 
-    - name: "Render RBAC user assignment to staging"
-      ansible.builtin.copy:
-        content: "{{ lookup('template', 'templates/rbac-user-template.json.j2') }}"
-        dest: "{{ bootstrap_staging_dir }}/gateway_role_user_assignments_bootstrap.json"
-      vars:
-        org_name: "org-{{ org_id }}"
-        admin_user: "{{ team_lead }}"
-
-    - name: "Render RBAC team assignment to staging"
-      ansible.builtin.copy:
-        content: "{{ lookup('template', 'templates/rbac-team-template.json.j2') }}"
-        dest: "{{ bootstrap_staging_dir }}/gateway_role_team_assignments_bootstrap.json"
-      vars:
-        org_name: "org-{{ org_id }}"
-        dev_team: "{{ _effective_team_group }}"
-
     - name: "Render org JSON to staging"
       ansible.builtin.copy:
         content: "{{ lookup('template', 'templates/org-template.json.j2') }}"
@@ -232,15 +216,125 @@
         org_description: "{{ team_name }} automation organization"
         org_default_ee: "{{ default_ee }}"
 
-    # ── Step 6b: Load staging + dispatch to AAP ──────────────────────────
+    # ── Step 6b: Dispatch org + team + user to AAP (phase 1) ─────────────
 
-    - name: "Load bootstrap staging config"
+    - name: "Load bootstrap staging config (phase 1: org, team, user)"
       ansible.builtin.include_vars:
         dir: "{{ bootstrap_staging_dir }}"
         extensions: [json]
         depth: 1
 
-    - name: "Apply bootstrap config to AAP via dispatch"
+    - name: "Apply org/team/user config to AAP via dispatch"
+      ansible.builtin.include_role:
+        name: infra.aap_configuration.dispatch
+      vars:
+        dispatch_include_wildcard_vars: true
+        aap_configuration_collect_logs: true
+
+    # ── Step 6c: Look up org numeric ID, render and dispatch RBAC ────────
+
+    - name: "Look up organization numeric ID from AAP"
+      ansible.builtin.uri:
+        url: "{{ aap_hostname }}/api/gateway/v1/organizations/?name=org-{{ org_id }}"
+        method: GET
+        user: "{{ aap_username }}"
+        password: "{{ aap_password }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        force_basic_auth: true
+      register: _org_lookup
+
+    - name: "Extract org object_id"
+      ansible.builtin.set_fact:
+        _org_object_id: "{{ _org_lookup.json.results[0].id }}"
+
+    - name: "Render RBAC user assignment to staging"
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'templates/rbac-user-template.json.j2') }}"
+        dest: "{{ bootstrap_staging_dir }}/gateway_role_user_assignments_bootstrap.json"
+      vars:
+        org_object_id: "{{ _org_object_id }}"
+        admin_user: "{{ team_lead }}"
+
+    - name: "Render RBAC team assignment to staging"
+      ansible.builtin.copy:
+        content: "{{ lookup('template', 'templates/rbac-team-template.json.j2') }}"
+        dest: "{{ bootstrap_staging_dir }}/gateway_role_team_assignments_bootstrap.json"
+      vars:
+        org_object_id: "{{ _org_object_id }}"
+        dev_team: "{{ _effective_team_group }}"
+
+    # ── Step 6d: Push RBAC JSON to SCM repos (now that we have org_object_id) ─
+
+    - name: "Push RBAC JSON to SCM repos (GitHub)"
+      when: scm_provider == 'github'
+      block:
+        - name: "GH – Check if RBAC user JSON already exists"
+          ansible.builtin.uri:
+            url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ scm_api_token }}"
+              Accept: "application/vnd.github.v3+json"
+            status_code: [200, 404]
+          register: _gh_rbac_user_file
+          when: rbac_user_repo | default('') | length > 0
+
+        - name: "GH – Push RBAC user assignments to {{ rbac_user_repo }}"
+          ansible.builtin.uri:
+            url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
+            method: PUT
+            headers:
+              Authorization: "Bearer {{ scm_api_token }}"
+              Accept: "application/vnd.github.v3+json"
+            body_format: json
+            body: >-
+              {{ {'message': 'Bootstrap: add RBAC user assignments for org-' + org_id,
+                  'content': lookup('template', 'templates/rbac-user-template.json.j2') | b64encode}
+                 | combine({'sha': _gh_rbac_user_file.json.sha} if (_gh_rbac_user_file.status | default(404)) == 200 else {}) }}
+            status_code: [200, 201]
+          vars:
+            org_object_id: "{{ _org_object_id }}"
+            admin_user: "{{ team_lead }}"
+          when: rbac_user_repo | default('') | length > 0
+
+        - name: "GH – Check if RBAC team JSON already exists"
+          ansible.builtin.uri:
+            url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ scm_api_token }}"
+              Accept: "application/vnd.github.v3+json"
+            status_code: [200, 404]
+          register: _gh_rbac_team_file
+          when: rbac_team_repo | default('') | length > 0
+
+        - name: "GH – Push RBAC team assignments to {{ rbac_team_repo }}"
+          ansible.builtin.uri:
+            url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
+            method: PUT
+            headers:
+              Authorization: "Bearer {{ scm_api_token }}"
+              Accept: "application/vnd.github.v3+json"
+            body_format: json
+            body: >-
+              {{ {'message': 'Bootstrap: add RBAC team assignments for org-' + org_id,
+                  'content': lookup('template', 'templates/rbac-team-template.json.j2') | b64encode}
+                 | combine({'sha': _gh_rbac_team_file.json.sha} if (_gh_rbac_team_file.status | default(404)) == 200 else {}) }}
+            status_code: [200, 201]
+          vars:
+            org_object_id: "{{ _org_object_id }}"
+            dev_team: "{{ _effective_team_group }}"
+          when: rbac_team_repo | default('') | length > 0
+
+    # ── Step 6e: Dispatch RBAC to AAP (phase 2) ─────────────────────────
+
+    - name: "Load RBAC staging config (phase 2)"
+      ansible.builtin.include_vars:
+        dir: "{{ bootstrap_staging_dir }}"
+        extensions: [json]
+        depth: 1
+
+    - name: "Apply RBAC assignments to AAP via dispatch"
       ansible.builtin.include_role:
         name: infra.aap_configuration.dispatch
       vars:

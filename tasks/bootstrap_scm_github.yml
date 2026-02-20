@@ -72,63 +72,9 @@
 # Steps 1b/1c: Push RBAC JSON to RBAC repos (conditional, create-or-update)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Check if RBAC user JSON already exists"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404]
-  register: _gh_rbac_user_file
-  when: rbac_user_repo | default('') | length > 0
-
-- name: "GH – Push RBAC user assignments to {{ rbac_user_repo }}"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body: >-
-      {{ {'message': 'Bootstrap: add RBAC user assignments for org-' + org_id,
-          'content': lookup('template', 'templates/rbac-user-template.json.j2') | b64encode}
-         | combine({'sha': _gh_rbac_user_file.json.sha} if (_gh_rbac_user_file.status | default(404)) == 200 else {}) }}
-    status_code: [200, 201]
-  vars:
-    org_name: "org-{{ org_id }}"
-    admin_user: "{{ team_lead }}"
-  when: rbac_user_repo | default('') | length > 0
-
-- name: "GH – Check if RBAC team JSON already exists"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404]
-  register: _gh_rbac_team_file
-  when: rbac_team_repo | default('') | length > 0
-
-- name: "GH – Push RBAC team assignments to {{ rbac_team_repo }}"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body: >-
-      {{ {'message': 'Bootstrap: add RBAC team assignments for org-' + org_id,
-          'content': lookup('template', 'templates/rbac-team-template.json.j2') | b64encode}
-         | combine({'sha': _gh_rbac_team_file.json.sha} if (_gh_rbac_team_file.status | default(404)) == 200 else {}) }}
-    status_code: [200, 201]
-  vars:
-    org_name: "org-{{ org_id }}"
-    dev_team: "{{ _effective_team_group }}"
-  when: rbac_team_repo | default('') | length > 0
+# RBAC JSON push is deferred to bootstrap.yml (after org creation in AAP)
+# because the gateway_role_*_assignments module requires the org's numeric
+# object_id, which is only available after the org is created.
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 2: Create tenant CasC repositories (tolerates already-exists)
