@@ -1,5 +1,6 @@
 ---
 # Inventory for Pre-production AAP environment
+# Per-env host falls back to CONTROLLER_HOST (single-host credential value).
 
 all:
   hosts:
@@ -7,7 +8,7 @@ all:
       ansible_connection: local
   vars:
     target_env: npr
-    aap_hostname: "{{ lookup('env', 'AAP_NPR_HOST') }}"
-    aap_username: "{{ lookup('env', 'AAP_USERNAME') }}"
-    aap_password: "{{ lookup('env', 'AAP_PASSWORD') }}"
-    aap_validate_certs: true
+    aap_hostname: "{{ lookup('env', 'CONTROLLER_NPR_HOST') | default(lookup('env', 'CONTROLLER_HOST'), true) }}"
+    aap_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
+    aap_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+    aap_validate_certs: "{{ lookup('env', 'CONTROLLER_VERIFY_SSL') | default(true, true) | bool }}"

@@ -11,6 +11,15 @@
 #     - project: '<platform-group>/aap-casc-engine'
 #       ref: 'main'
 #       file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
+#
+# IMPORTANT: AAP_HOST/AAP_USERNAME/AAP_PASSWORD here are CI/CD platform variables
+# (GitLab group-level CI/CD variables) used by the trigger stage curl commands.
+# They are NOT the same as CONTROLLER_HOST/CONTROLLER_USERNAME/CONTROLLER_PASSWORD
+# injected by AAP credential types into Job Templates at runtime.
+#
+# CI_JOB_TOKEN: The engine project must add tenant projects/groups to its
+# CI/CD Job Token allowlist (Settings > CI/CD > Token Access) for the schemas
+# fetch stage to succeed. Without this, git clone will fail the pipeline job.
 
 stages:
   - validate

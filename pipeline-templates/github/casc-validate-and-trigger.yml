@@ -11,6 +11,15 @@
 #   3. Set ENGINE_REPO as a GitHub Actions repository or org variable (Settings > Variables)
 #
 # Preferred approach: use the reusable workflow via workflow_call (see README.md)
+#
+# IMPORTANT: AAP_HOST/AAP_USERNAME/AAP_PASSWORD here are CI/CD platform secrets
+# (GitHub Actions org/repo secrets) used by the trigger stage curl commands.
+# They are NOT the same as CONTROLLER_HOST/CONTROLLER_USERNAME/CONTROLLER_PASSWORD
+# injected by AAP credential types into Job Templates at runtime.
+#
+# ENGINE_REPO_TOKEN: Required when the engine repo is private and in a different
+# org from the calling repo. Set as an org secret in each tenant GitHub org.
+# Falls back to github.token for public or same-org engine repos.
 
 name: CasC Validate and Trigger
 

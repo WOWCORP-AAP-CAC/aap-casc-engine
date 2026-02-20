@@ -90,17 +90,21 @@ tenant_repos:
   # ... add your tenant repos
 ```
 
-### 2. Configure Inventory
+### 2. Configure Connection
 
-Update `inventory/<env>.yml` with your AAP environment connection details, or set environment variables:
+**Via AAP Job Templates (production):** AAP credentials inject `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, and `SCM_TOKEN` automatically. No manual configuration needed -- see [AAP Credential Types](#aap-credential-types) below.
+
+**Via CLI (local testing):** Set environment variables directly. The playbooks read these from play-level `vars:`, which take precedence over inventory files:
 
 ```bash
-export AAP_HOSTNAME="aap-controller.dev.example.com"
-export AAP_USERNAME="admin"
-export AAP_PASSWORD="<your-password>"
+export CONTROLLER_HOST="aap-controller.dev.example.com"
+export CONTROLLER_USERNAME="admin"
+export CONTROLLER_PASSWORD="<your-password>"
 export SCM_BASE_URL="https://gitlab.example.com/casc"
 export SCM_TOKEN="<your-scm-token>"
 ```
+
+> **Inventory files:** `inventory/{dev,tst,npr,prd}.yml` set `target_env` and provide per-environment host fallbacks (`CONTROLLER_DEV_HOST`, etc.) for advanced multi-env CLI workflows. Note that playbook play-level `vars:` have higher Ansible precedence than inventory group vars, so `CONTROLLER_HOST` from the environment (read by play vars) is used unless overridden with `-e`.
 
 ### 3. Run the Dispatcher
 
@@ -163,10 +167,12 @@ Tenant repos include the shared pipeline template:
 ```yaml
 # .gitlab-ci.yml in tenant repo
 include:
-  - project: 'platform-team/aap-casc-engine'
+  - project: '<platform-group>/aap-casc-engine'
     ref: 'main'
     file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
 ```
+
+> **Note:** Replace `<platform-group>` with the full path to the engine project in your GitLab instance. Override the `ENGINE_PROJECT_PATH` CI/CD variable if the engine project lives at a non-default path.
 
 ### GitHub Actions
 
@@ -208,8 +214,8 @@ If per-env token secrets are set, Bearer token auth with branch routing is used.
 | Variable | Description |
 |----------|-------------|
 | `AAP_HOST` | AAP controller hostname |
-| `AAP_USERNAME` | AAP admin username |
-| `AAP_PASSWORD` | AAP admin password |
+| `AAP_USERNAME` | AAP username (least-privilege: execute-only on dispatcher JT) |
+| `AAP_PASSWORD` | AAP password |
 
 **Workflow inputs:**
 
@@ -232,6 +238,83 @@ Create these Job Templates in each AAP environment:
 | `jt-platform-casc-dispatcher` | `site.yml` | Main dispatcher — apply CasC configuration |
 | `jt-platform-drift-detection` | `drift-detect.yml` | Drift detection and reconciliation |
 | `jt-platform-bootstrap-tenant` | `bootstrap.yml` | Onboard new tenant organizations |
+
+## AAP Credential Types
+
+All sensitive connection values are injected at runtime via AAP credentials attached to Job Templates. Playbooks read exclusively from environment variables -- no plaintext secrets in `extra_vars`.
+
+### Built-in: Red Hat Ansible Automation Platform
+
+Injects `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, `CONTROLLER_VERIFY_SSL` as environment variables. All three playbooks (`site.yml`, `drift-detect.yml`, `bootstrap.yml`) read these via `lookup('env', ...)`.
+
+- Credential name (demo): `cred-platform-aap-connection`
+- Attach to all 3 Job Templates
+
+### Custom: CasC SCM Token
+
+The built-in GitHub/GitLab PAT credential types have empty injectors -- they cannot pass tokens to playbooks. Create a custom credential type:
+
+- **Name:** `CasC SCM Token`
+- **Input:** `scm_token` (secret string)
+- **Injector:** `env: { SCM_TOKEN: "{{ '{{' }}scm_token{{ '}}' }}" }`
+
+Both `scm_token` (git clone) and `scm_api_token` (bootstrap SCM API) resolve from the single `SCM_TOKEN` environment variable.
+
+- Credential name (demo): `cred-platform-scm-token`
+- Attach to all 3 Job Templates
+
+### What Stays in extra_vars
+
+Non-sensitive configuration values remain in JT `extra_vars`:
+- `target_env`, `scm_base_url`, `registry_repo`, `registry_repo_org`, `platform_org`, `orgs_repo`, etc.
+
+## SCM Token Requirements
+
+The `SCM_TOKEN` credential should belong to a **dedicated service account** (machine user), not a personal user. Required permissions:
+
+| Playbook | Access Needed |
+|----------|--------------|
+| `site.yml` (dispatcher) | **Read** across all CasC repos (platform + tenant orgs) |
+| `drift-detect.yml` | **Read** across all CasC repos (platform + tenant orgs) |
+| `bootstrap.yml` | **Read-write** in the target tenant SCM org + platform registry repo |
+
+A single token with broad access is the simplest model but has a wider blast radius if compromised. For production hardening options (GitHub App, per-org credentials, fine-grained PATs, GitLab Group Access Tokens), see the master design document.
+
+## Tenant Onboarding Workflow
+
+Bootstrap follows a 4-phase handshake between the platform and tenant teams:
+
+1. **Intake** -- Tenant provides `org_id`, `team_name`, `team_lead`, `tenant_scm_org`, preferred `repo_pattern`
+2. **SCM + CI/CD prerequisite** -- Platform team adds service account to tenant's SCM org and configures CI/CD secrets
+3. **Bootstrap execution** -- Platform team runs `jt-platform-bootstrap-tenant` with tenant survey inputs
+4. **Handover** -- Platform team provides tenant with repo URLs, pipeline usage guide, and first-action path
+
+See the platform team user guide for a detailed checklist.
+
+## CI/CD Secret Requirements
+
+The CI/CD pipeline trigger stage authenticates with AAP using secrets stored in the CI/CD platform. These are separate from AAP credential types.
+
+**GitHub Actions** (per tenant org):
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `AAP_HOST` | Basic auth | AAP controller hostname |
+| `AAP_USERNAME` | Basic auth | AAP username with execute permission on dispatcher JT |
+| `AAP_PASSWORD` | Basic auth | AAP password |
+| `AAP_DEV_HOST` / `AAP_DEV_TOKEN` | Bearer auth | Per-environment AAP endpoints and OAuth tokens |
+| `ENGINE_REPO_TOKEN` | If engine is private | PAT with read access to the engine repo |
+
+**GitLab CI** (per tenant group):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AAP_HOST` | Basic auth | AAP controller hostname |
+| `AAP_USERNAME` | Basic auth | AAP username |
+| `AAP_PASSWORD` | Basic auth | AAP password |
+| Engine `CI_JOB_TOKEN` allowlist | Always | Add tenant groups to the engine project's Token Access settings |
+
+The AAP user/token used by CI/CD should have **only Execute permission** on the dispatcher JT. Rotate tokens on a schedule and enable AAP activity stream monitoring.
 
 ## Local Validation
 

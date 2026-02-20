@@ -32,7 +32,7 @@
   vars:
     # SCM connection
     scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
-    scm_api_token: "{{ lookup('env', 'SCM_API_TOKEN') }}"
+    scm_api_token: "{{ lookup('env', 'SCM_TOKEN') }}"
 
     # Explicit SCM_PROVIDER override (github|gitlab) or auto-detect from URL.
     # Auto-detect uses 'github' in URL (covers github.com and GitHub Enterprise).
@@ -99,11 +99,12 @@
                      'controller-job_templates-' + org_id,
                      'controller-schedules-' + org_id]) }}
 
-    # AAP connection for applying config
-    aap_hostname: "{{ lookup('env', 'AAP_HOSTNAME') }}"
-    aap_username: "{{ lookup('env', 'AAP_USERNAME') }}"
-    aap_password: "{{ lookup('env', 'AAP_PASSWORD') }}"
-    aap_validate_certs: true
+    # AAP connection — injected by AAP credential type
+    # "Red Hat Ansible Automation Platform" (CONTROLLER_* env vars)
+    aap_hostname: "{{ lookup('env', 'CONTROLLER_HOST') }}"
+    aap_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
+    aap_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+    aap_validate_certs: "{{ lookup('env', 'CONTROLLER_VERIFY_SSL') | default(true, true) | bool }}"
     bootstrap_target_env: "{{ lookup('env', 'BOOTSTRAP_TARGET_ENV') | default('dev') }}"
 
     # Working directories

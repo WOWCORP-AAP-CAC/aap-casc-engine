@@ -1,7 +1,6 @@
 ---
 # Inventory for Dev AAP environment
-# Connection variables are resolved from environment variables or AAP credentials.
-# This file provides environment-specific defaults that can be overridden.
+# Per-env host falls back to CONTROLLER_HOST (single-host credential value).
 
 all:
   hosts:
@@ -9,7 +8,7 @@ all:
       ansible_connection: local
   vars:
     target_env: dev
-    aap_hostname: "{{ lookup('env', 'AAP_DEV_HOST') }}"
-    aap_username: "{{ lookup('env', 'AAP_USERNAME') }}"
-    aap_password: "{{ lookup('env', 'AAP_PASSWORD') }}"
-    aap_validate_certs: true
+    aap_hostname: "{{ lookup('env', 'CONTROLLER_DEV_HOST') | default(lookup('env', 'CONTROLLER_HOST'), true) }}"
+    aap_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
+    aap_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+    aap_validate_certs: "{{ lookup('env', 'CONTROLLER_VERIFY_SSL') | default(true, true) | bool }}"
