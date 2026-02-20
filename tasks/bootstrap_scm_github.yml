@@ -129,9 +129,9 @@
   loop_control:
     label: "{{ item.item }}"
 
-- name: "GH – Check if example JSON already exists"
+- name: "GH – Check if example JSON sample already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/contents/example.json"
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/contents/example.json.sample"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -140,16 +140,16 @@
   loop: "{{ tenant_repos }}"
   register: _gh_example_checks
 
-- name: "GH – Seed example JSON in each tenant repo"
+- name: "GH – Seed example JSON sample in each tenant repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item }}/contents/example.json"
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item }}/contents/example.json.sample"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add example JSON configuration',
+      {{ {'message': 'Bootstrap: add example JSON sample (rename to .json to activate)',
           'content': _seed_content | to_nice_json(indent=4) | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]

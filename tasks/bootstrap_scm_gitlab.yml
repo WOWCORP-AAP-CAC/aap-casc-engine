@@ -149,9 +149,9 @@
   loop_control:
     label: "{{ item.item.json.name }}"
 
-- name: "GL – Check if example JSON already exists in tenant repos"
+- name: "GL – Check if example JSON sample already exists in tenant repos"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/example.json?ref=main"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/example.json.sample?ref=main"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -161,9 +161,9 @@
     label: "{{ item.json.name }}"
   register: _gl_example_checks
 
-- name: "GL – Seed example JSON in each tenant repo"
+- name: "GL – Seed example JSON sample in each tenant repo"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/files/example.json"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/files/example.json.sample"
     method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -171,7 +171,7 @@
     body:
       branch: "main"
       content: "{{ _seed_content }}"
-      commit_message: "Bootstrap: example JSON configuration"
+      commit_message: "Bootstrap: example JSON sample (rename to .json to activate)"
     status_code: [200, 201]
   vars:
     _repo_basename: "{{ item.item.json.name | regex_replace('-' + org_id + '$', '') }}"
