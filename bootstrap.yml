@@ -183,9 +183,13 @@
         state: directory
         mode: "0755"
 
+    - name: "Build AAP base URL (ensure https:// prefix)"
+      ansible.builtin.set_fact:
+        _aap_base_url: "{{ aap_hostname if aap_hostname is match('^https?://') else 'https://' + aap_hostname }}"
+
     - name: "Check if user {{ team_lead }} already exists in AAP"
       ansible.builtin.uri:
-        url: "https://{{ aap_hostname }}/api/gateway/v1/users/?username={{ team_lead }}"
+        url: "{{ _aap_base_url }}/api/gateway/v1/users/?username={{ team_lead }}"
         method: GET
         user: "{{ aap_username }}"
         password: "{{ aap_password }}"
@@ -235,7 +239,7 @@
 
     - name: "Look up organization numeric ID from AAP"
       ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/gateway/v1/organizations/?name=org-{{ org_id }}"
+        url: "{{ _aap_base_url }}/api/gateway/v1/organizations/?name=org-{{ org_id }}"
         method: GET
         user: "{{ aap_username }}"
         password: "{{ aap_password }}"
