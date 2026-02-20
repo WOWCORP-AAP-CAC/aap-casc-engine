@@ -36,7 +36,7 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add organization org-' + org_id,
-          'content': lookup('template', 'templates/org-template.json.j2') | b64encode}
+          'content': lookup('template', 'templates/org-template.json.j2') | to_nice_json(indent=4) | b64encode}
          | combine({'sha': _gh_org_file.json.sha} if _gh_org_file.status == 200 else {}) }}
     status_code: [200, 201]
   vars:
@@ -64,7 +64,7 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add team for org-' + org_id,
-          'content': lookup('template', 'templates/team-template.json.j2') | b64encode}
+          'content': lookup('template', 'templates/team-template.json.j2') | to_nice_json(indent=4) | b64encode}
          | combine({'sha': _gh_team_file.json.sha} if _gh_team_file.status == 200 else {}) }}
     status_code: [200, 201]
 
@@ -150,7 +150,7 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add example JSON configuration',
-          'content': _seed_content | b64encode}
+          'content': _seed_content | to_nice_json(indent=4) | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
   vars:

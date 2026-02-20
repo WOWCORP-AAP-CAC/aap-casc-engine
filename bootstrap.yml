@@ -293,7 +293,7 @@
             body_format: json
             body: >-
               {{ {'message': 'Bootstrap: add RBAC user assignments for org-' + org_id,
-                  'content': lookup('template', 'templates/rbac-user-template.json.j2') | b64encode}
+                  'content': lookup('template', 'templates/rbac-user-template.json.j2') | to_nice_json(indent=4) | b64encode}
                  | combine({'sha': _gh_rbac_user_file.json.sha} if (_gh_rbac_user_file.status | default(404)) == 200 else {}) }}
             status_code: [200, 201]
           vars:
@@ -322,7 +322,7 @@
             body_format: json
             body: >-
               {{ {'message': 'Bootstrap: add RBAC team assignments for org-' + org_id,
-                  'content': lookup('template', 'templates/rbac-team-template.json.j2') | b64encode}
+                  'content': lookup('template', 'templates/rbac-team-template.json.j2') | to_nice_json(indent=4) | b64encode}
                  | combine({'sha': _gh_rbac_team_file.json.sha} if (_gh_rbac_team_file.status | default(404)) == 200 else {}) }}
             status_code: [200, 201]
           vars:
