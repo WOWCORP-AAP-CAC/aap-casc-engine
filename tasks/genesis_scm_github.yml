@@ -27,7 +27,7 @@
     status_code: [200, 201, 422]
   failed_when: >-
     _gh_repo_result.status == 422 and
-    'already exists' not in (_gh_repo_result.content | default(''))
+    'already exists' not in (_gh_repo_result.json | default({}) | string)
   register: _gh_repo_result
   loop: "{{ platform_repos }}"
   loop_control:

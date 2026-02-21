@@ -28,7 +28,7 @@
     status_code: [200, 201, 400]
   failed_when: >-
     _gl_repo_result.status == 400 and
-    'has already been taken' not in (_gl_repo_result.content | default(''))
+    'has already been taken' not in (_gl_repo_result.json | default({}) | string)
   register: _gl_repo_result
   loop: "{{ platform_repos }}"
   loop_control:
