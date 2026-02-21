@@ -125,7 +125,7 @@
         loop_var: casc_repo
         label: "{{ casc_repo.name }}"
 
-    # Phase 5: Load processed variables
+    # Phase 5: Load scope-suffixed variables into host scope
     - name: "Load processed config (scope-suffixed)"
       ansible.builtin.include_vars:
         dir: "{{ staging_dir }}"
@@ -133,9 +133,10 @@
         depth: 1
 
   roles:
-    # Phase 6: Apply ALL configuration via the built-in dispatch role
+    # Phase 6: Apply ALL configuration via the built-in dispatch role.
     # dispatch_include_wildcard_vars merges scope-suffixed vars automatically:
     #   controller_projects_platform + controller_projects_myorg01 → controller_projects
+    # Requires infra.aap_configuration >= 4.0.0, < 5.0.0 (see collections/requirements.yml).
     - role: infra.aap_configuration.dispatch
       vars:
         dispatch_include_wildcard_vars: true

@@ -67,7 +67,7 @@ aap-casc-engine/
 - **AAP 2.5+** with Gateway, Controller, Hub, and (optionally) EDA
 - **Git SCM** (GitLab, GitHub, or compatible) with API access
 - **CI/CD platform** (GitLab CI, GitHub Actions, or compatible)
-- **`infra.aap_configuration`** collection v2.9.0+ installed in the Execution Environment
+- **`infra.aap_configuration`** collection v4.x (>=4.0.0, <5.0.0) installed in the Execution Environment
 - Python 3.9+ (for local validation)
 
 ### 1. Review the Manifest Defaults
@@ -384,7 +384,7 @@ python3 schemas/validate_naming.py --config-dir . --rules schemas/naming-rules.y
 
 ## Dependencies
 
-- [infra.aap_configuration](https://github.com/redhat-cop/infra.aap_configuration) >= 2.9.0 — Red Hat Communities of Practice collection for AAP management
+- [infra.aap_configuration](https://github.com/redhat-cop/infra.aap_configuration) >= 4.0.0, < 5.0.0 — Red Hat Communities of Practice collection for AAP management (wildcard variable merge in dispatch)
 - Red Hat Ansible Automation Platform 2.5+
 - Python 3.9+
 

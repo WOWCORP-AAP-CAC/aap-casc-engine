@@ -92,7 +92,7 @@
         extensions: [json]
         depth: 1
 
-    - name: "Merge suffixed variables into base variables"
+    - name: "Merge suffixed variables into standard dispatch variables"
       ansible.builtin.include_role:
         name: infra.aap_configuration.dispatch
         tasks_from: include_wildcard_vars.yml
