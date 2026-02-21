@@ -68,6 +68,7 @@ aap-casc-engine/
 - **Git SCM** (GitLab, GitHub, or compatible) with API access
 - **CI/CD platform** (GitLab CI, GitHub Actions, or compatible)
 - **`infra.aap_configuration`** collection v4.x (>=4.0.0, <5.0.0) installed in the Execution Environment
+- **Galaxy server** configured in AAP for Red Hat Certified collection dependencies (e.g., `ansible.platform`). Options: Red Hat Automation Hub (`console.redhat.com`), Private Automation Hub bundled with AAP, or a customer-managed Galaxy repository. The Galaxy credential must be attached to the organization that owns the engine project.
 - Python 3.9+ (for local validation)
 
 ### 1. Review the Manifest Defaults
@@ -100,11 +101,50 @@ aap-casc-engine/
 
 Genesis merges overrides with the defaults and pushes the result to the manifest repo. After genesis, the manifest repo's copy is the operational single source of truth. The dispatcher, drift-detect, and bootstrap load it at runtime.
 
-**Repo naming convention — `-global` suffix:**
+**Naming conventions:**
 
-The `-global` suffix on platform repos means **"platform-managed"** (governance scope), not "no org association in AAP." Some platform-managed resources are truly global in AAP (e.g., `controller_settings`, `controller_credential_types`), while others reference organizations but are managed centrally by the platform team (e.g., `aap_organizations`, `aap_teams`, RBAC assignments). Execution environments (`controller_execution_environments`) have an optional `organization` field — when omitted, they're available to all orgs, which is the typical platform-managed pattern.
+The engine enforces several naming conventions across repositories, JSON config files, and AAP resources:
+
+**Repository naming:**
+
+| Scope | Pattern | Example |
+|-------|---------|---------|
+| Platform (global governance) | `<casc_key>-global` | `aap-organizations-global`, `controller-settings-global` |
+| Platform (schedules) | `controller-schedules-platform` | `controller-schedules-platform` |
+| Tenant (org-scoped) | `controller-<type>-<org_id>` | `controller-templates-demo_alpha` |
+
+The `-global` suffix means **"platform-managed"** (governance scope), not "no org association in AAP." Some platform-managed resources are truly global in AAP (e.g., `controller_settings`, `controller_credential_types`), while others reference organizations but are managed centrally by the platform team (e.g., `aap_organizations`, `aap_teams`, RBAC assignments). Execution environments (`controller_execution_environments`) have an optional `organization` field — when omitted, they're available to all orgs, which is the typical platform-managed pattern.
 
 Org-scoped resources that tenants manage directly — projects, credentials, inventories, templates, workflows, schedules, and notifications — live in per-tenant repos (`controller-<type>-<org_id>`) created by the bootstrap playbook.
+
+**JSON config file naming — environment-specific imports:**
+
+Files are included or excluded based on the `target_env` variable (set in the dispatcher/drift-detect JT) and the **env-to-branch mapping** defined in `repos-manifest.yml`. The engine checks each filename for an environment suffix:
+
+| Filename pattern | Included when `target_env` is | Description |
+|------------------|-------------------------------|-------------|
+| `resource-name.json` | Any environment | Universal — always included |
+| `resource-name-dev.json` | `dev` only | Development-specific config |
+| `resource-name-tst.json` | `tst` only | Test-specific config |
+| `resource-name-npr.json` | `npr` only | Pre-production-specific config |
+| `resource-name-prd.json` | `prd` only | Production-specific config |
+
+> **Warning — accidental env-suffix matching:** The engine uses a regex (`-(dev|tst|npr|prd)$` before `.json`) to detect environment-specific files. Any filename ending in `-dev`, `-tst`, `-npr`, or `-prd` (before `.json`) is treated as environment-specific and will be **excluded** when the dispatcher runs for a different environment. For example, a file named `inv-dev.json` would only be included when `target_env=dev` — if this inventory is intended for all environments, name it `inv-development.json` or `inv-alpha-dev-servers.json` instead. Similarly, `crd-prod.json` would not match `prd` (the suffix must be exactly `-prd`), but `crd-prd.json` would.
+
+**AAP resource naming prefixes:**
+
+| Resource type | Prefix | Example |
+|---------------|--------|---------|
+| Organizations | `org-` | `org-demo_alpha` |
+| Projects | `prj-` | `prj-hello-world` |
+| Credentials | `crd-` | `crd-demo-machine` |
+| Credential Types | `ctp-` | `ctp-database_credentials` |
+| Inventories | `inv-` | `inv-alpha-development` |
+| Job Templates | `jt-` | `jt-hello-world` |
+| Workflows | `wfjt-` | `wfjt-deploy-pipeline` |
+| Schedules | `sch-` | `sch-nightly` |
+| Notifications | `ntf-` | `ntf-slack-alerts` |
+| Execution Environments | `ee-` | `ee-rhel9-ansible218-base` |
 
 ### 2. Run Platform Genesis
 
