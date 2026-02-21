@@ -3,6 +3,7 @@ on:
   push:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 jobs:
   casc:
     uses: {{ platform_scm_org }}/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main

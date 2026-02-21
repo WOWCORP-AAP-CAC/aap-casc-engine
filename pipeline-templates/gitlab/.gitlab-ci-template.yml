@@ -43,9 +43,9 @@ fetch:schemas:
         "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${ENGINE_PROJECT_PATH}.git" /tmp/engine
       mkdir -p .schemas
       cp /tmp/engine/schemas/*.schema.json .schemas/ 2>/dev/null || true
-      [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/
-      [ -f /tmp/engine/schemas/naming-rules.yml ] && cp /tmp/engine/schemas/naming-rules.yml .schemas/
-      [ -d /tmp/engine/schemas/policies ] && cp -r /tmp/engine/schemas/policies .schemas/
+      [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/ || true
+      [ -f /tmp/engine/schemas/naming-rules.yml ] && cp /tmp/engine/schemas/naming-rules.yml .schemas/ || true
+      [ -d /tmp/engine/schemas/policies ] && cp -r /tmp/engine/schemas/policies .schemas/ || true
   artifacts:
     paths:
       - .schemas/
@@ -92,6 +92,7 @@ validate:json-schema:
         echo "=== ALL JSON FILES PASSED SCHEMA VALIDATION ==="
       fi
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
@@ -110,6 +111,7 @@ validate:naming-convention:
         echo "No naming validation scripts found — skipping."
       fi
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
@@ -130,6 +132,7 @@ validate:policy-compliance:
       fi
   allow_failure: true
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 # ── Stage 2: Trigger (lightweight — single curl to correct AAP environment) ──
@@ -140,6 +143,7 @@ validate:policy-compliance:
 trigger:dispatcher:
   stage: trigger
   image: python:3.11-slim
+  resource_group: casc-dispatcher
   before_script:
     - apt-get update -qq && apt-get install -y -qq curl > /dev/null
   script:
@@ -156,16 +160,23 @@ trigger:dispatcher:
       if [ -n "$HOST" ] && [ -n "$TOKEN" ]; then
         AUTH_MODE="bearer"
         AAP_HOST="$HOST"
-        AUTH_ARGS="-H \"Authorization: Bearer ${TOKEN}\""
         echo "Using Bearer token auth for environment: ${TARGET_ENV}"
       elif [ -n "$AAP_HOST" ] && [ -n "$AAP_USERNAME" ] && [ -n "$AAP_PASSWORD" ]; then
         AUTH_MODE="basic"
-        AUTH_ARGS="-u \"${AAP_USERNAME}:${AAP_PASSWORD}\""
         echo "Using basic auth (demo/sandbox mode) for environment: ${TARGET_ENV}"
       else
         echo "No AAP credentials configured — skipping trigger (validate-only mode)"
         exit 0
       fi
+
+      # Helper function for authenticated curl
+      auth_curl() {
+        if [ "$AUTH_MODE" = "bearer" ]; then
+          curl -sk -H "Authorization: Bearer ${TOKEN}" "$@"
+        else
+          curl -sk -u "${AAP_USERNAME}:${AAP_PASSWORD}" "$@"
+        fi
+      }
 
       echo "=== Triggering CasC Dispatcher on AAP ==="
       echo "Host: ${AAP_HOST}"
@@ -174,15 +185,7 @@ trigger:dispatcher:
 
       # Resolve dispatcher JT ID by name
       echo "Looking up Job Template: ${DISPATCHER_JT_NAME}"
-      if [ "$AUTH_MODE" = "bearer" ]; then
-        JT_RESPONSE=$(curl -sk \
-          -H "Authorization: Bearer ${TOKEN}" \
-          "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}")
-      else
-        JT_RESPONSE=$(curl -sk \
-          -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
-          "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}")
-      fi
+      JT_RESPONSE=$(auth_curl "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}")
 
       JT_ID=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0]['id'] if r.get('results') else 'NOT_FOUND')")
 
@@ -193,35 +196,42 @@ trigger:dispatcher:
       fi
       echo "Found JT ID: ${JT_ID}"
 
+      # Verify allow_simultaneous is false — this is the safety net against concurrent dispatchers
+      ALLOW_SIMUL=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0].get('allow_simultaneous', False))")
+      if [ "$ALLOW_SIMUL" = "True" ]; then
+        echo "ERROR: Dispatcher JT '${DISPATCHER_JT_NAME}' has allow_simultaneous=true — this must be false to prevent concurrent full-sweep runs"
+        exit 1
+      fi
+
+      # Wait for any running dispatcher to finish before launching
+      echo "Checking if dispatcher is already running..."
+      for attempt in $(seq 1 12); do
+        RUNNING=$(auth_curl \
+          "https://${AAP_HOST}/api/controller/v2/jobs/?job_template=${JT_ID}&status__in=running,pending,waiting&page_size=1" \
+          | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))")
+        if [ "$RUNNING" = "0" ]; then
+          break
+        fi
+        echo "  Dispatcher is busy (attempt ${attempt}/12) — waiting 15s..."
+        sleep 15
+      done
+      if [ "$RUNNING" != "0" ]; then
+        echo "WARNING: Dispatcher still running after 3 min wait — launching anyway (AAP will queue)"
+      fi
+
       # Launch the dispatcher with trigger metadata
       echo "Launching dispatcher..."
-      if [ "$AUTH_MODE" = "bearer" ]; then
-        LAUNCH_RESPONSE=$(curl -sk -X POST \
-          -H "Authorization: Bearer ${TOKEN}" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"extra_vars\": {
-              \"target_env\": \"${TARGET_ENV}\",
-              \"trigger_commit\": \"${CI_COMMIT_SHA}\",
-              \"triggered_repo\": \"${CI_PROJECT_NAME}\",
-              \"trigger_source\": \"ci-cd-pipeline\"
-            }
-          }" \
-          "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/")
-      else
-        LAUNCH_RESPONSE=$(curl -sk -X POST \
-          -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"extra_vars\": {
-              \"target_env\": \"${TARGET_ENV}\",
-              \"trigger_commit\": \"${CI_COMMIT_SHA}\",
-              \"triggered_repo\": \"${CI_PROJECT_NAME}\",
-              \"trigger_source\": \"ci-cd-pipeline\"
-            }
-          }" \
-          "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/")
-      fi
+      LAUNCH_RESPONSE=$(auth_curl -X POST \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"extra_vars\": {
+            \"target_env\": \"${TARGET_ENV}\",
+            \"trigger_commit\": \"${CI_COMMIT_SHA}\",
+            \"triggered_repo\": \"${CI_PROJECT_NAME}\",
+            \"trigger_source\": \"ci-cd-pipeline\"
+          }
+        }" \
+        "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/")
 
       JOB_ID=$(echo "$LAUNCH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id', 'UNKNOWN'))")
       echo "Dispatcher job launched: ID=${JOB_ID}"
@@ -237,17 +247,9 @@ trigger:dispatcher:
       echo "Waiting for job to complete..."
       for i in $(seq 1 60); do
         sleep 10
-        if [ "$AUTH_MODE" = "bearer" ]; then
-          STATUS=$(curl -sk \
-            -H "Authorization: Bearer ${TOKEN}" \
-            "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
-            | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
-        else
-          STATUS=$(curl -sk \
-            -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
-            "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
-            | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
-        fi
+        STATUS=$(auth_curl \
+          "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
+          | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
         echo "  Status: ${STATUS} (check ${i}/60)"
         case "$STATUS" in
           successful) echo "=== DISPATCHER COMPLETED SUCCESSFULLY ===" && exit 0 ;;
@@ -258,5 +260,7 @@ trigger:dispatcher:
       exit 1
   retry: 2
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: manual
     - if: '$CI_COMMIT_BRANCH =~ /^(feature\/|develop|release\/|master|main)/'
       when: on_success

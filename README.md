@@ -226,6 +226,7 @@ on:
   push:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 jobs:
   casc:
     uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
@@ -233,6 +234,10 @@ jobs:
       dispatcher_jt_name: jt-platform-casc-dispatcher
     secrets: inherit
 ```
+
+The `workflow_dispatch` event enables manual pipeline runs from the GitHub Actions tab or via `gh workflow run`.
+
+**Concurrency and serialization:** Within each repo, the trigger job uses `concurrency: { group: casc-dispatcher-trigger, cancel-in-progress: false }` to queue rapid successive pushes (GitLab equivalent: `resource_group: casc-dispatcher`). Across repos, the trigger script polls the AAP API for running/pending/waiting dispatcher jobs and waits up to 3 minutes before launching — this AAP-level busy-wait is the primary cross-repo serialization mechanism. The dispatcher JT must have `allow_simultaneous` set to **false** (the default) as the ultimate safety net — the pipeline verifies this at runtime and fails immediately if misconfigured. Even if two pipelines pass the busy-wait simultaneously, AAP queues the second launch.
 
 The workflow supports **dual authentication**:
 
@@ -269,6 +274,8 @@ If per-env token secrets are set, Bearer token auth with branch routing is used.
 | Secret | Description |
 |--------|-------------|
 | `ENGINE_REPO_TOKEN` | GitHub PAT for accessing the engine repo when it is private (defaults to `github.token` for public repos) |
+
+**Environment promotion:** The pipeline validates and triggers the dispatcher — it does not auto-create promotion PRs/MRs between branches. Promotion (e.g., `develop` → `release/npr` → `main`) is a manual step through your standard change management workflow. Organizations that want auto-promotion can add a `promote` job to their thin caller (not to this reusable workflow). See the platform-team-user-guide for patterns and examples.
 
 ## AAP Job Templates
 
