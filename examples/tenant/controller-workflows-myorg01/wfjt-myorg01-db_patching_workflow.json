@@ -1,0 +1,33 @@
+{
+    "controller_workflows": [
+        {
+            "name": "wfjt-myorg01-db_patching_workflow",
+            "description": "Database patching orchestration for myorg01",
+            "organization": "org-myorg01",
+            "simplified_workflow_nodes": [
+                {
+                    "identifier": "node-pre-check",
+                    "unified_job_template": "jt-myorg01-db_pre_check",
+                    "success_nodes": ["node-patch"],
+                    "failure_nodes": [],
+                    "always_nodes": []
+                },
+                {
+                    "identifier": "node-patch",
+                    "unified_job_template": "jt-myorg01-db_patching",
+                    "success_nodes": ["node-post-check"],
+                    "failure_nodes": [],
+                    "always_nodes": []
+                },
+                {
+                    "identifier": "node-post-check",
+                    "unified_job_template": "jt-myorg01-db_post_check",
+                    "success_nodes": [],
+                    "failure_nodes": [],
+                    "always_nodes": []
+                }
+            ],
+            "ask_variables_on_launch": true
+        }
+    ]
+}

@@ -8,6 +8,7 @@ The `aap-casc-engine` is the core deliverable of the **Hybrid AAP Configuration-
 
 - **Dispatcher playbook** — Clones CasC repos from Git, processes JSON (env filter, merge, scope suffix), and applies configuration to AAP via the `infra.aap_configuration.dispatch` role
 - **Drift detection** — Compares Git desired state vs AAP live state, generates drift reports, and optionally auto-remediates
+- **Platform genesis** — Automated one-time setup of all platform CasC repos, CI/CD seeding, and manifest push to the registry repo
 - **Bootstrap automation** — Automated tenant onboarding (org creation, RBAC, repo scaffolding)
 - **Pipeline-as-a-Service** — Shared CI/CD templates (GitLab CI + GitHub Actions) for validation and deployment
 - **JSON schema contracts** — Validation schemas for all AAP resource types
@@ -18,9 +19,9 @@ The `aap-casc-engine` is the core deliverable of the **Hybrid AAP Configuration-
 | Persona | Responsibility | Interface |
 |---------|---------------|-----------|
 | **Platform Team** | Manage engine, governance, shared resources, onboarding | This repo + platform CasC repos |
-| **Tenant Teams** | Define their AAP resources (projects, credentials, templates, etc.) | Flat JSON files — no Ansible knowledge required |
+| **Tenant Teams** | Define their AAP resources (projects, credentials, templates, etc.) | Declarative JSON files — engine and collection complexity abstracted |
 
-Tenant teams commit JSON files to their dedicated repos. The platform-managed pipeline validates and triggers the dispatcher, which applies configuration to AAP. Tenants never interact with Ansible, the dispatch role, or this engine directly.
+Tenant teams commit JSON files to their dedicated repos. The platform-managed pipeline validates and triggers the dispatcher, which applies configuration to AAP. Tenants never interact with the dispatch role, collection internals, or this engine directly — the JSON-as-Interface and pipeline-as-a-service abstract all of that.
 
 ## Repository Structure
 
@@ -29,8 +30,9 @@ aap-casc-engine/
 ├── site.yml                          # Dispatcher playbook (main entry point)
 ├── drift-detect.yml                  # Drift detection playbook
 ├── remediate.yml                     # Drift remediation tasks
+├── genesis.yml                       # Platform genesis playbook
 ├── bootstrap.yml                     # Tenant onboarding playbook
-├── repos-manifest.yml                # Registry of all CasC repos + env-branch map
+├── repos-manifest.yml                # Single source of truth: CasC repos + env-branch map
 ├── ansible.cfg                       # Ansible configuration
 ├── inventory/
 │   ├── dev.yml                       # Dev AAP environment
@@ -68,29 +70,58 @@ aap-casc-engine/
 - **`infra.aap_configuration`** collection v2.9.0+ installed in the Execution Environment
 - Python 3.9+ (for local validation)
 
-### 1. Configure the Repos Manifest
+### 1. Customize the Manifest
 
-Edit `repos-manifest.yml` to register your platform and tenant CasC repositories:
+`repos-manifest.yml` in this engine repo is the **single source of truth** for all CasC repository definitions. After forking, edit it to match your environment:
 
-```yaml
-env_branch_map:
-  dev: develop
-  tst: develop
-  npr: release/npr
-  prd: main
+| Field | What to set | Default |
+|-------|-------------|---------|
+| `default_organization` | Your AAP organization name | `Default` |
+| `env_branch_map` | Your branching strategy (see table below) | All environments map to `main` |
+| `platform_repos` | Add or remove platform repos as needed (genesis auto-derives `casc_key` and `description` for custom entries) | 9 standard repos |
+| `tenant_repos` | Leave empty — bootstrap adds entries automatically | `[]` |
 
-platform_repos:
-  - name: aap-organizations-global
-    scope: platform
-  # ... add your platform repos
+**Common `env_branch_map` patterns:**
 
-tenant_repos:
-  - name: controller-projects-myorg01
-    scope: myorg01
-  # ... add your tenant repos
+| Strategy | dev | tst | npr | prd |
+|----------|-----|-----|-----|-----|
+| Single branch (demo) | main | main | main | main |
+| GitFlow | develop | develop | release/npr | main |
+| Environment branches | env/dev | env/tst | env/npr | main |
+| Trunk-based (with tags) | main | main | main | main |
+
+This file is consumed by every engine playbook: genesis reads it and pushes it to the registry repo, the dispatcher and drift-detect load it at runtime, and bootstrap appends tenant entries to the registry repo's copy.
+
+**Repo naming convention — `-global` suffix:**
+
+The `-global` suffix on platform repos means **"platform-managed"** (governance scope), not "no org association in AAP." Some platform-managed resources are truly global in AAP (e.g., `controller_settings`, `controller_credential_types`), while others reference organizations but are managed centrally by the platform team (e.g., `aap_organizations`, `aap_teams`, RBAC assignments). Execution environments (`controller_execution_environments`) have an optional `organization` field — when omitted, they're available to all orgs, which is the typical platform-managed pattern.
+
+Org-scoped resources that tenants manage directly — projects, credentials, inventories, templates, workflows, schedules, and notifications — live in per-tenant repos (`controller-<type>-<org_id>`) created by the bootstrap playbook.
+
+### 2. Run Platform Genesis
+
+Run the genesis playbook to create all platform CasC repos automatically:
+
+```bash
+export SCM_TOKEN="<your-scm-token>"
+ansible-playbook genesis.yml \
+  -e platform_org=<your-platform-org> \
+  -e scm_base_url=https://github.com \
+  -e engine_repo=aap-casc-engine
 ```
 
-### 2. Configure Connection
+Genesis reads `repos-manifest.yml` from this engine repo and:
+1. Creates all platform repos listed in `platform_repos` (idempotent — tolerates already-existing repos)
+2. Pushes `repos-manifest.yml` to the registry repo (default: `aap-organizations-global`, override via `REGISTRY_REPO` env var) on first run only — reruns skip this to preserve `tenant_repos` entries added by bootstrap
+3. Seeds CI/CD thin callers and READMEs in each repo
+
+**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `cred-platform-scm-token`, and set extra vars for `scm_base_url`, `platform_org`, and `engine_repo`. No AAP connection credential is needed — genesis only interacts with the SCM API.
+
+### Post-Genesis Manifest Changes
+
+After genesis pushes the manifest to the registry repo, subsequent changes to the manifest (e.g., new branch mappings, additional platform repos) should be made directly in the registry repo's copy (`<registry-repo>/repos-manifest.yml` — default: `aap-organizations-global`). The engine's local copy serves as the initial seed and as a CLI fallback when `registry_repo` is not configured.
+
+### 3. Configure Connection
 
 **Via AAP Job Templates (production):** AAP credentials inject `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, and `SCM_TOKEN` automatically. No manual configuration needed -- see [AAP Credential Types](#aap-credential-types) below.
 
@@ -106,7 +137,7 @@ export SCM_TOKEN="<your-scm-token>"
 
 > **Inventory files:** `inventory/{dev,tst,npr,prd}.yml` set `target_env` and provide per-environment host fallbacks (`CONTROLLER_DEV_HOST`, etc.) for advanced multi-env CLI workflows. Note that playbook play-level `vars:` have higher Ansible precedence than inventory group vars, so `CONTROLLER_HOST` from the environment (read by play vars) is used unless overridden with `-e`.
 
-### 3. Run the Dispatcher
+### 4. Run the Dispatcher
 
 **Full apply** (all repos — scheduled reconciliation):
 
@@ -123,7 +154,7 @@ ansible-playbook site.yml \
   -e trigger_source=ci-cd-pipeline
 ```
 
-### 4. Run Drift Detection
+### 5. Run Drift Detection
 
 ```bash
 # Report mode (detect only)
@@ -133,7 +164,7 @@ ansible-playbook drift-detect.yml -e target_env=dev -e drift_mode=report
 ansible-playbook drift-detect.yml -e target_env=prd -e drift_mode=remediate
 ```
 
-### 5. Bootstrap a New Tenant
+### 6. Bootstrap a New Tenant
 
 ```bash
 ansible-playbook bootstrap.yml \
@@ -152,7 +183,7 @@ ansible-playbook bootstrap.yml \
 
 ## Key Design Principles
 
-- **JSON-as-Interface** — All AAP resources are defined as flat JSON files with standard variable names. No Ansible knowledge required for tenants.
+- **JSON-as-Interface** — All AAP resources are defined as flat JSON files with standard variable names. The engine and `infra.aap_configuration` collection complexity is fully abstracted from tenant teams.
 - **Scope suffixing** — The `process_casc_json` role adds suffixes (e.g., `controller_projects_myorg01`). The `dispatch` role's wildcard merging combines them automatically.
 - **Dual-mode apply** — Targeted apply for CI/CD triggers (fast, single tenant); full apply for scheduled reconciliation (comprehensive).
 - **Git as single source of truth** — No artifact repositories. The dispatcher clones repos directly from Git.
@@ -235,6 +266,7 @@ Create these Job Templates in each AAP environment:
 
 | Job Template | Playbook | Purpose |
 |-------------|----------|---------|
+| `jt-platform-genesis` | `genesis.yml` | One-time platform repo creation (SCM only) |
 | `jt-platform-casc-dispatcher` | `site.yml` | Main dispatcher — apply CasC configuration |
 | `jt-platform-drift-detection` | `drift-detect.yml` | Drift detection and reconciliation |
 | `jt-platform-bootstrap-tenant` | `bootstrap.yml` | Onboard new tenant organizations |
@@ -245,10 +277,10 @@ All sensitive connection values are injected at runtime via AAP credentials atta
 
 ### Built-in: Red Hat Ansible Automation Platform
 
-Injects `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, `CONTROLLER_VERIFY_SSL` as environment variables. All three playbooks (`site.yml`, `drift-detect.yml`, `bootstrap.yml`) read these via `lookup('env', ...)`.
+Injects `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, `CONTROLLER_VERIFY_SSL` as environment variables. The dispatcher, drift-detect, and bootstrap playbooks read these via `lookup('env', ...)`.
 
 - Credential name (demo): `cred-platform-aap-connection`
-- Attach to all 3 Job Templates
+- Attach to dispatcher, drift-detection, and bootstrap JTs (not genesis — genesis only uses SCM)
 
 ### Custom: CasC SCM Token
 
@@ -258,10 +290,10 @@ The built-in GitHub/GitLab PAT credential types have empty injectors -- they can
 - **Input:** `scm_token` (secret string)
 - **Injector:** `env: { SCM_TOKEN: "{{ '{{' }}scm_token{{ '}}' }}" }`
 
-Both `scm_token` (git clone) and `scm_api_token` (bootstrap SCM API) resolve from the single `SCM_TOKEN` environment variable.
+Both `scm_token` (git clone) and `scm_api_token` (bootstrap/genesis SCM API) resolve from the single `SCM_TOKEN` environment variable.
 
 - Credential name (demo): `cred-platform-scm-token`
-- Attach to all 3 Job Templates
+- Attach to all 4 Job Templates (genesis, dispatcher, drift-detection, bootstrap)
 
 ### What Stays in extra_vars
 
@@ -274,6 +306,7 @@ The `SCM_TOKEN` credential should belong to a **dedicated service account** (mac
 
 | Playbook | Access Needed |
 |----------|--------------|
+| `genesis.yml` | **Read-write** in the platform SCM org (repo creation + file writes) |
 | `site.yml` (dispatcher) | **Read** across all CasC repos (platform + tenant orgs) |
 | `drift-detect.yml` | **Read** across all CasC repos (platform + tenant orgs) |
 | `bootstrap.yml` | **Read-write** in the target tenant SCM org + platform registry repo |

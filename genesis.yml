@@ -1,0 +1,203 @@
+---
+# Hybrid CasC — Platform Genesis
+#
+# One-time automated setup of all platform CasC repositories in the
+# customer's SCM organization. Creates repos, seeds CI/CD thin callers,
+# seeds per-repo READMEs, and pushes repos-manifest.yml to the registry repo.
+#
+# repos-manifest.yml (in this engine repo) is the SINGLE SOURCE OF TRUTH.
+# Genesis reads it at startup to determine which platform repos to create
+# and pushes it to the registry repo on first run. Customize the manifest
+# in your fork before running genesis.
+#
+# Supports both GitHub and GitLab. Provider is set via SCM_PROVIDER env var
+# (github|gitlab) or auto-detected from scm_base_url.
+# SCM-specific operations are delegated to tasks/genesis_scm_{provider}.yml.
+# All operations are idempotent — safe to rerun without side effects.
+#
+# Usage (via AAP Job Template):
+#   JT extra vars: scm_base_url, platform_org, engine_repo
+#   Survey: platform_org, repo_visibility
+#   Credential: cred-platform-scm-token (injects SCM_TOKEN)
+
+- name: "Hybrid CasC — Platform Genesis"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') | default('https://github.com', true) }}"
+    scm_api_token: "{{ lookup('env', 'SCM_TOKEN') }}"
+
+    _scm_provider_override: "{{ lookup('env', 'SCM_PROVIDER') | default('') }}"
+    scm_provider: >-
+      {{ _scm_provider_override
+         if _scm_provider_override in ['github', 'gitlab']
+         else ('github' if 'github' in scm_base_url else 'gitlab') }}
+
+    platform_org: "{{ lookup('env', 'PLATFORM_ORG') | default('') }}"
+    engine_repo: "{{ lookup('env', 'ENGINE_REPO') | default('aap-casc-engine') }}"
+    repo_visibility: "{{ lookup('env', 'REPO_VISIBILITY') | default('public', true) }}"
+    _repo_private: "{{ repo_visibility == 'private' }}"
+
+    # GitLab-specific: numeric namespace ID for the platform group
+    platform_namespace_id: "{{ lookup('env', 'PLATFORM_NAMESPACE_ID') | default('') }}"
+
+    registry_repo: "{{ lookup('env', 'REGISTRY_REPO') | default('aap-organizations-global', true) }}"
+
+    # README metadata — genesis-specific, not part of the runtime manifest.
+    # Maps repo name to casc_key, description, and registry flag for README seeding.
+    _repo_metadata:
+      aap-organizations-global:
+        casc_key: aap_organizations
+        description: "Organization definitions and repos-manifest.yml registry"
+        is_registry: true
+      aap-teams-global:
+        casc_key: aap_teams
+        description: "Team definitions (populated by bootstrap)"
+      gateway-role_definitions-global:
+        casc_key: gateway_role_definitions
+        description: "Custom role definitions for RBAC"
+      gateway-role_user_assignments-global:
+        casc_key: gateway_role_user_assignments
+        description: "User-to-role RBAC assignments (populated by bootstrap)"
+      gateway-role_team_assignments-global:
+        casc_key: gateway_role_team_assignments
+        description: "Team-to-role RBAC assignments (populated by bootstrap)"
+      controller-credential_types-global:
+        casc_key: controller_credential_types
+        description: "Shared credential type definitions"
+      controller-execution_environments-global:
+        casc_key: controller_execution_environments
+        description: "Shared execution environment definitions"
+      controller-settings-global:
+        casc_key: controller_settings
+        description: "Controller settings configuration"
+      controller-schedules-platform:
+        casc_key: controller_schedules
+        description: "Platform-level schedules (drift detection, reconciliation)"
+
+  tasks:
+    # ── Load manifest (single source of truth) ──────────────────────────────
+
+    - name: "Load repos-manifest.yml (single source of truth)"
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/repos-manifest.yml"
+        name: repos_manifest
+
+    - name: "Derive platform repos from manifest"
+      ansible.builtin.set_fact:
+        platform_repos: "{{ repos_manifest.platform_repos }}"
+        default_organization: "{{ repos_manifest.default_organization | default('Default') }}"
+
+    # ── Enrich platform_repos with README metadata ──────────────────────────
+
+    - name: "Enrich repos with metadata for README seeding"
+      ansible.builtin.set_fact:
+        _enriched_repos: []
+
+    - name: "Merge metadata into each repo entry"
+      ansible.builtin.set_fact:
+        _enriched_repos: >-
+          {{ _enriched_repos + [item | combine(
+               _repo_metadata[item.name] | default({
+                 'casc_key': item.name | regex_replace('-global$', '') | regex_replace('^(controller|gateway)-', '') | regex_replace('-', '_'),
+                 'description': 'CasC repo: ' ~ item.name
+               })
+             )] }}
+      loop: "{{ platform_repos }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "Use enriched repos for all subsequent tasks"
+      ansible.builtin.set_fact:
+        platform_repos: "{{ _enriched_repos }}"
+
+    # ── Build manifest seed content (for pushing to registry) ───────────────
+
+    - name: "Build manifest seed content (tenant_repos forced to empty)"
+      ansible.builtin.set_fact:
+        _genesis_manifest: "{{ repos_manifest | combine({'tenant_repos': []}) | to_nice_yaml(indent=2) }}"
+
+    # ── Validation ─────────────────────────────────────────────────────────
+
+    - name: "Validate required inputs"
+      ansible.builtin.assert:
+        that:
+          - platform_org | length > 0
+          - scm_api_token | length > 0
+        fail_msg: >-
+          platform_org and SCM_TOKEN are required.
+          platform_org='{{ platform_org }}', SCM_TOKEN={{ 'set' if scm_api_token | length > 0 else 'MISSING' }}.
+
+    - name: "Validate SCM provider"
+      ansible.builtin.assert:
+        that:
+          - scm_provider in ['github', 'gitlab']
+        fail_msg: >-
+          scm_provider must be 'github' or 'gitlab'. Got: '{{ scm_provider }}'.
+
+    - name: "Validate registry repo is in platform_repos"
+      ansible.builtin.assert:
+        that:
+          - registry_repo in (platform_repos | map(attribute='name') | list)
+        fail_msg: >-
+          registry_repo '{{ registry_repo }}' not found in platform_repos.
+          Available repos: {{ platform_repos | map(attribute='name') | list | join(', ') }}.
+
+    - name: "Validate repo visibility"
+      ansible.builtin.assert:
+        that:
+          - repo_visibility in ['public', 'private']
+        fail_msg: >-
+          repo_visibility must be 'public' or 'private'. Got: '{{ repo_visibility }}'.
+
+    - name: "Validate GitLab-specific inputs"
+      ansible.builtin.assert:
+        that:
+          - platform_namespace_id | length > 0
+        fail_msg: >-
+          platform_namespace_id is required for GitLab.
+      when: scm_provider == 'gitlab'
+
+    - name: "Log genesis parameters"
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════════
+          PLATFORM GENESIS (single source: repos-manifest.yml)
+          ══════════════════════════════════════════════════════
+          Provider:       {{ scm_provider }}
+          Platform Org:   {{ platform_org }}
+          Engine Repo:    {{ engine_repo }}
+          Default Org:    {{ default_organization }}
+          Visibility:     {{ repo_visibility }}
+          Repos to create: {{ platform_repos | length }}
+          {% for r in platform_repos %}
+            {{ loop.index }}. {{ r.name }}{{ ' (registry)' if r.is_registry | default(false) else '' }}
+          {% endfor %}
+          ══════════════════════════════════════════════════════
+
+    # ── SCM Operations ─────────────────────────────────────────────────────
+
+    - name: "Execute {{ scm_provider }} genesis operations"
+      ansible.builtin.include_tasks: "tasks/genesis_scm_{{ scm_provider }}.yml"
+
+    # ── Completion ─────────────────────────────────────────────────────────
+
+    - name: "Genesis complete"
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════════
+          PLATFORM GENESIS COMPLETE
+          ══════════════════════════════════════════════════════
+          Platform Org:    {{ platform_org }}
+          Repos Created:   {{ platform_repos | length }}
+          Registry Repo:   {{ registry_repo }}
+          Manifest Pushed: repos-manifest.yml (from engine repo)
+          CI/CD Seeded:    {{ '.github/workflows/casc.yml' if scm_provider == 'github' else '.gitlab-ci.yml' }}
+          ══════════════════════════════════════════════════════
+          Next steps:
+            1. Create AAP Project pointing to {{ platform_org }}/{{ engine_repo }}
+            2. Create dispatcher, drift-detection, and bootstrap Job Templates
+            3. Run bootstrap to onboard your first tenant
+          ══════════════════════════════════════════════════════

@@ -1,0 +1,154 @@
+---
+# genesis_scm_gitlab.yml — GitLab-specific SCM operations for platform genesis
+#
+# Creates all platform repos, pushes repos-manifest.yml (from the engine repo),
+# seeds CI/CD includes, and README.md files. All operations are idempotent.
+#
+# Required variables: platform_org, platform_namespace_id, engine_repo,
+#   platform_repos, registry_repo, scm_base_url, scm_api_token,
+#   repo_visibility, _genesis_manifest
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 1: Create all platform repos (tolerates already-exists)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Create platform repos in {{ platform_org }}"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      description: "{{ item.description }}"
+      namespace_id: "{{ platform_namespace_id }}"
+      visibility: "{{ repo_visibility }}"
+      initialize_with_readme: true
+    status_code: [200, 201, 400]
+  failed_when: >-
+    _gl_repo_result.status == 400 and
+    'has already been taken' not in (_gl_repo_result.content | default(''))
+  register: _gl_repo_result
+  loop: "{{ platform_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Look up project IDs for subsequent file operations
+- name: "GL – Look up project IDs"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_org ~ '/' ~ item.name) | urlencode() | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  loop: "{{ platform_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _gl_project_lookups
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 2: Push repos-manifest.yml to registry repo (from engine, first-time only)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Find registry project ID"
+  ansible.builtin.set_fact:
+    _gl_registry_project_id: >-
+      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', registry_repo) | first).json.id }}
+
+- name: "GL – Check if repos-manifest.yml already exists"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_registry_project_id }}/repository/files/repos-manifest.yml?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  register: _gl_manifest_check
+
+- name: "GL – Push repos-manifest.yml (first-time only)"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_registry_project_id }}/repository/files/repos-manifest.yml"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ _genesis_manifest }}"
+      commit_message: "Genesis: initialize repos-manifest.yml registry"
+    status_code: [200, 201]
+  when: _gl_manifest_check.status == 404
+
+- name: "GL – Skip manifest (already exists — preserving tenant entries)"
+  ansible.builtin.debug:
+    msg: "repos-manifest.yml already exists in registry repo. Skipping to preserve tenant_repos entries."
+  when: _gl_manifest_check.status == 200
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 3: Seed CI/CD include in each repo
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Check if .gitlab-ci.yml already exists in each repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/.gitlab-ci.yml?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _gl_project_lookups.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  register: _gl_ci_checks
+
+- name: "GL – Seed .gitlab-ci.yml in each repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/files/.gitlab-ci.yml"
+    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: |
+        include:
+          - project: '{{ platform_org }}/{{ engine_repo }}'
+            ref: 'main'
+            file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
+      commit_message: "Genesis: add shared CasC pipeline template"
+    status_code: [200, 201]
+  loop: "{{ _gl_ci_checks.results }}"
+  loop_control:
+    label: "{{ item.item.item.name }}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 4: Seed README.md in each repo
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Check if README.md already exists in each repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/README.md?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _gl_project_lookups.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  register: _gl_readme_checks
+
+- name: "GL – Seed README.md in each repo"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/files/README.md"
+    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ lookup('template', 'templates/genesis-readme.md.j2') }}"
+      commit_message: "Genesis: add README with repo purpose and usage"
+    status_code: [200, 201]
+  vars:
+    repo: "{{ item.item.item }}"
+  loop: "{{ _gl_readme_checks.results }}"
+  loop_control:
+    label: "{{ item.item.item.name }}"

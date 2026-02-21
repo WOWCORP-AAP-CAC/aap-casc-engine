@@ -106,7 +106,7 @@
 
 - name: "GL – Look up project IDs for tenant repos"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ tenant_scm_org | urlencode }}%2F{{ item | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ (tenant_scm_org ~ '/' ~ item) | urlencode() | replace('/', '%2F') }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"

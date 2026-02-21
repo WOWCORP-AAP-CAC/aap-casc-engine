@@ -1,0 +1,19 @@
+{
+    "controller_notifications": [
+        {
+            "name": "ntf-{{ org_id }}-example-email",
+            "description": "Example email notification — replace with your integration",
+            "organization": "org-{{ org_id }}",
+            "notification_type": "email",
+            "notification_configuration": {
+                "host": "smtp.example.com",
+                "port": 587,
+                "username": "notifications@example.com",
+                "sender": "aap-notifications@example.com",
+                "recipients": ["team-{{ org_id }}@example.com"],
+                "use_tls": true,
+                "use_ssl": false
+            }
+        }
+    ]
+}

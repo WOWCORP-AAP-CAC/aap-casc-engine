@@ -98,8 +98,10 @@
                else ['controller-projects-' + org_id,
                      'controller-credentials-' + org_id,
                      'controller-inventories-' + org_id,
-                     'controller-job_templates-' + org_id,
-                     'controller-schedules-' + org_id]) }}
+                     'controller-templates-' + org_id,
+                     'controller-workflows-' + org_id,
+                     'controller-schedules-' + org_id,
+                     'controller-notifications-' + org_id]) }}
 
     # AAP connection — injected by AAP credential type
     # "Red Hat Ansible Automation Platform" (CONTROLLER_* env vars)

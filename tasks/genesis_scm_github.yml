@@ -1,0 +1,137 @@
+---
+# genesis_scm_github.yml — GitHub-specific SCM operations for platform genesis
+#
+# Creates all platform repos, pushes repos-manifest.yml (from the engine repo),
+# seeds CI/CD thin callers, and README.md files. All operations are idempotent.
+#
+# Required variables: platform_org, engine_repo, platform_repos, registry_repo,
+#   scm_api_token, repo_visibility, _repo_private, _genesis_manifest
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 1: Create all platform repos (tolerates already-exists 422)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Create platform repos in {{ platform_org }}"
+  ansible.builtin.uri:
+    url: "https://api.github.com/orgs/{{ platform_org }}/repos"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      name: "{{ item.name }}"
+      description: "{{ item.description }}"
+      private: "{{ _repo_private | bool }}"
+      auto_init: true
+    status_code: [200, 201, 422]
+  failed_when: >-
+    _gh_repo_result.status == 422 and
+    'already exists' not in (_gh_repo_result.content | default(''))
+  register: _gh_repo_result
+  loop: "{{ platform_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 2: Push repos-manifest.yml to registry repo (from engine, first-time only)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Check if repos-manifest.yml already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ registry_repo }}/contents/repos-manifest.yml"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_manifest_check
+
+- name: "GH – Push repos-manifest.yml (first-time only)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ registry_repo }}/contents/repos-manifest.yml"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      message: "Genesis: initialize repos-manifest.yml registry"
+      content: "{{ _genesis_manifest | b64encode }}"
+    status_code: [200, 201]
+  when: _gh_manifest_check.status == 404
+
+- name: "GH – Skip manifest (already exists — preserving tenant entries)"
+  ansible.builtin.debug:
+    msg: "repos-manifest.yml already exists in {{ registry_repo }}. Skipping to preserve tenant_repos entries."
+  when: _gh_manifest_check.status == 200
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 3: Seed CI/CD thin caller workflow in each repo
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Check if CI/CD workflow already exists in each repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ item.name }}/contents/.github/workflows/casc.yml"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ platform_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _gh_workflow_checks
+
+- name: "GH – Seed CI/CD thin caller in each repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ item.item.name }}/contents/.github/workflows/casc.yml"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Genesis: add CasC pipeline-as-a-service (thin caller)',
+          'content': lookup('template', 'templates/github-workflow-caller.yml.j2') | b64encode}
+         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
+    status_code: [200, 201]
+  loop: "{{ _gh_workflow_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 4: Seed README.md in each repo
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Check if README.md already exists in each repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ item.name }}/contents/README.md"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ platform_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _gh_readme_checks
+
+- name: "GH – Seed README.md in each repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_org }}/{{ item.item.name }}/contents/README.md"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Genesis: add README with repo purpose and usage',
+          'content': lookup('template', 'templates/genesis-readme.md.j2') | b64encode}
+         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
+    status_code: [200, 201]
+  vars:
+    repo: "{{ item.item }}"
+  loop: "{{ _gh_readme_checks.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"

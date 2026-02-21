@@ -1,0 +1,47 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AAP Controller Notification Templates Configuration",
+    "type": "object",
+    "properties": {
+        "controller_notifications": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "organization", "notification_type"],
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "pattern": "^ntf-[a-z0-9_]+-[a-z]+-[a-z0-9_]+$",
+                        "description": "Notification name following naming convention: ntf-<org_id>-<type>-<purpose>"
+                    },
+                    "description": { "type": "string" },
+                    "organization": {
+                        "type": "string",
+                        "pattern": "^org-[a-z0-9_]+$"
+                    },
+                    "notification_type": {
+                        "type": "string",
+                        "enum": ["email", "slack", "pagerduty", "webhook", "irc", "mattermost", "rocketchat", "twilio", "grafana"]
+                    },
+                    "notification_configuration": {
+                        "type": "object",
+                        "description": "Provider-specific configuration (fields vary by notification_type)"
+                    },
+                    "messages": {
+                        "type": "object",
+                        "description": "Custom message templates for started/success/error events",
+                        "properties": {
+                            "started": { "type": "object" },
+                            "success": { "type": "object" },
+                            "error": { "type": "object" }
+                        },
+                        "additionalProperties": false
+                    }
+                },
+                "additionalProperties": false
+            }
+        }
+    },
+    "required": ["controller_notifications"],
+    "additionalProperties": false
+}

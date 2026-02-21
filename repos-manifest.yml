@@ -1,32 +1,57 @@
 ---
-# Repos Manifest — Example / Fallback
+# repos-manifest.yml — Single Source of Truth
 #
-# CANONICAL LOCATION: In production, repos-manifest.yml lives in the registry repo
-# (typically aap-organizations-global in the platform SCM org). The dispatcher and
-# drift-detect playbooks clone that registry repo first (Phase 0) to load the manifest.
-# This local copy serves as a fallback when registry_repo is not configured, and as
-# a reference example for new deployments.
+# This file is the SINGLE SOURCE OF TRUTH for CasC repository definitions.
+# It is consumed by every engine playbook:
 #
-# scope: Determines the suffix added during processing.
-#   - platform repos -> scope: platform -> suffixed keys like aap_organizations_platform
-#   - tenant repos   -> scope: myorg01  -> suffixed keys like controller_projects_myorg01
-# The dispatch role's dispatch_include_wildcard_vars: true merges all suffixed keys
-# back into their base variables automatically.
+#   - genesis.yml    — reads this file, creates the platform repos listed below,
+#                      and pushes this manifest to the registry repo (first-time only)
+#   - site.yml       — loads the manifest (from registry repo or local fallback)
+#                      to determine which repos to clone, process, and apply
+#   - drift-detect   — same as site.yml
+#   - bootstrap.yml  — appends new tenant entries to the registry repo's copy
 #
-# org: (optional) SCM org/group for cross-org cloning. When set, the git_clone_repos
-# role constructs the URL as https://HOST/ORG/REPO.git instead of using git_base_url.
+# CUSTOMER CUSTOMIZATION:
+#   After forking the engine repo, edit this file to match your environment:
+#     - default_organization  — your AAP organization name
+#     - env_branch_map        — your branching strategy (see examples below)
+#     - platform_repos        — add or remove platform repos as needed
+#     - tenant_repos          — leave empty; bootstrap adds entries automatically
+#   Then run the genesis Job Template. Genesis reads this file and pushes it to
+#   the registry repo. Post-genesis manifest changes (e.g. new branch mappings)
+#   are made directly in the registry repo's copy.
+#
+# REGISTRY REPO PATTERN:
+#   In production, the dispatcher and drift-detect clone the registry repo
+#   (typically aap-organizations-global) to load this manifest at runtime.
+#   This local copy serves as the initial genesis seed and as a CLI fallback
+#   when registry_repo is not configured.
+#
+# FIELD REFERENCE:
+#   scope  — suffix added during processing
+#            platform repos -> scope: platform -> keys like aap_organizations_platform
+#            tenant repos   -> scope: myorg01  -> keys like controller_projects_myorg01
+#   org    — (optional) SCM org/group for cross-org cloning; when set, the
+#            git_clone_repos role uses https://HOST/ORG/REPO.git
+#
+# COMMON env_branch_map PATTERNS:
+#   Single branch (demo):      dev: main,  tst: main,  npr: main,         prd: main
+#   GitFlow:                   dev: develop, tst: develop, npr: release/npr, prd: main
+#   Environment branches:      dev: env/dev, tst: env/tst, npr: env/npr,   prd: main
+#   Trunk-based (with tags):   dev: main,  tst: main,  npr: main,         prd: main
 
-# Environment-to-branch mapping
-# The dispatcher uses this to clone repos at the correct branch for each target_env
+default_organization: Default
+
 env_branch_map:
-  dev: develop
-  tst: develop
-  npr: release/npr
+  dev: main
+  tst: main
+  npr: main
   prd: main
 
-# Platform-level CasC repos (always included in every apply)
 platform_repos:
   - name: aap-organizations-global
+    scope: platform
+  - name: aap-teams-global
     scope: platform
   - name: gateway-role_definitions-global
     scope: platform
@@ -38,24 +63,17 @@ platform_repos:
     scope: platform
   - name: controller-execution_environments-global
     scope: platform
-  - name: controller-notifications-global
-    scope: platform
   - name: controller-settings-global
     scope: platform
   - name: controller-schedules-platform
     scope: platform
 
-# Tenant CasC repos (included on targeted or full apply)
-# Bootstrap playbook appends to this list when onboarding new tenants
-tenant_repos:
-  # -- TENANT myorg01 --
-  - name: controller-projects-myorg01
-    scope: myorg01
-  - name: controller-credentials-myorg01
-    scope: myorg01
-  - name: controller-inventories-myorg01
-    scope: myorg01
-  - name: controller-job_templates-myorg01
-    scope: myorg01
-  - name: controller-schedules-myorg01
-    scope: myorg01
+# Tenant CasC repos — added automatically by the bootstrap playbook.
+# Do NOT add entries here manually; bootstrap registers them in the registry
+# repo's copy via the SCM API when onboarding new tenants.
+#
+# Example (for reference only):
+#   - name: controller-projects-myorg01
+#     scope: myorg01
+#     org: aap-casc-tenant-alpha-demo
+tenant_repos: []
