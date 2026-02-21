@@ -32,7 +32,7 @@ aap-casc-engine/
 ├── remediate.yml                     # Drift remediation tasks
 ├── genesis.yml                       # Platform genesis playbook
 ├── bootstrap.yml                     # Tenant onboarding playbook
-├── repos-manifest.yml                # Single source of truth: CasC repos + env-branch map
+├── repos-manifest.yml                # Default template (pushed to manifest repo by genesis)
 ├── ansible.cfg                       # Ansible configuration
 ├── inventory/
 │   ├── dev.yml                       # Dev AAP environment
@@ -70,27 +70,35 @@ aap-casc-engine/
 - **`infra.aap_configuration`** collection v2.9.0+ installed in the Execution Environment
 - Python 3.9+ (for local validation)
 
-### 1. Customize the Manifest
+### 1. Review the Manifest Defaults
 
-`repos-manifest.yml` in this engine repo is the **single source of truth** for all CasC repository definitions. After forking, edit it to match your environment:
+`repos-manifest.yml` in this engine repo provides **production-ready defaults** for all CasC repository definitions. Customers do **not** edit this file — the engine fork stays immutable for clean upstream pulls. Day-0 overrides are provided via the genesis JT extra_vars (or survey for simple string fields like `default_organization`):
 
-| Field | What to set | Default |
-|-------|-------------|---------|
-| `default_organization` | Your AAP organization name | `Default` |
-| `env_branch_map` | Your branching strategy (see table below) | All environments map to `main` |
-| `platform_repos` | Add or remove platform repos as needed (genesis auto-derives `casc_key` and `description` for custom entries) | 9 standard repos |
-| `tenant_repos` | Leave empty — bootstrap adds entries automatically | `[]` |
+| Field | Default | How to override |
+|-------|---------|-----------------|
+| `default_organization` | `Default` | Genesis JT extra_var or survey |
+| `env_branch_map` | GitFlow (see below) | Genesis JT extra_var (YAML) |
+| `platform_repos` | 9 standard repos | Rarely changed; edit manifest repo post-genesis if needed |
+| `tenant_repos` | `[]` | Added automatically by bootstrap |
 
-**Common `env_branch_map` patterns:**
+**Default `env_branch_map` (GitFlow):**
 
-| Strategy | dev | tst | npr | prd |
-|----------|-----|-----|-----|-----|
-| Single branch (demo) | main | main | main | main |
-| GitFlow | develop | develop | release/npr | main |
-| Environment branches | env/dev | env/tst | env/npr | main |
-| Trunk-based (with tags) | main | main | main | main |
+| Environment | Branch |
+|-------------|--------|
+| dev | develop |
+| tst | develop |
+| npr | release/npr |
+| prd | main |
 
-This file is consumed by every engine playbook: genesis reads it and pushes it to the manifest repo, the dispatcher and drift-detect load it at runtime, and bootstrap appends tenant entries to the manifest repo's copy.
+**Common override patterns (via genesis JT extra_vars):**
+
+| Strategy | YAML value |
+|----------|------------|
+| Single branch (demo) | `{dev: main, tst: main, npr: main, prd: main}` |
+| Environment branches | `{dev: env/dev, tst: env/tst, npr: env/npr, prd: main}` |
+| Trunk-based (with tags) | `{dev: main, tst: main, npr: main, prd: main}` |
+
+Genesis merges overrides with the defaults and pushes the result to the manifest repo. After genesis, the manifest repo's copy is the operational single source of truth. The dispatcher, drift-detect, and bootstrap load it at runtime.
 
 **Repo naming convention — `-global` suffix:**
 
@@ -107,19 +115,21 @@ export SCM_TOKEN="<your-scm-token>"
 ansible-playbook genesis.yml \
   -e platform_scm_org=<your-platform-org> \
   -e scm_base_url=https://github.com \
-  -e engine_repo=aap-casc-engine
+  -e engine_repo=aap-casc-engine \
+  -e default_organization=MyOrg \
+  -e '{"env_branch_map": {"dev": "main", "tst": "main", "npr": "main", "prd": "main"}}'
 ```
 
-Genesis reads `repos-manifest.yml` from this engine repo and:
+Genesis reads the default `repos-manifest.yml` from this engine repo, merges any JT overrides (`default_organization`, `env_branch_map`), and:
 1. Creates all platform repos listed in `platform_repos` (idempotent — tolerates already-existing repos)
-2. Pushes `repos-manifest.yml` to the manifest repo (default: `aap-organizations-global`, override via `MANIFEST_REPO` env var) on first run only — reruns skip this to preserve `tenant_repos` entries added by bootstrap
+2. Pushes the merged manifest to the manifest repo (default: `aap-organizations-global`, override via `MANIFEST_REPO` env var) on first run only — reruns skip this to preserve `tenant_repos` entries added by bootstrap
 3. Seeds CI/CD thin callers and READMEs in each repo
 
-**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `cred-platform-scm-token`, and set extra vars for `scm_base_url`, `platform_scm_org`, and `engine_repo`. No AAP connection credential is needed — genesis only interacts with the SCM API.
+**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `cred-platform-scm-token`, and set extra vars for `scm_base_url`, `platform_scm_org`, `engine_repo`, and `default_organization`. Optionally add `env_branch_map` as an extra_var to override the GitFlow default. No AAP connection credential is needed — genesis only interacts with the SCM API.
 
 ### Post-Genesis Manifest Changes
 
-After genesis pushes the manifest to the manifest repo, subsequent changes to the manifest (e.g., new branch mappings, additional platform repos) should be made directly in the manifest repo's copy (`<manifest-repo>/repos-manifest.yml` — default: `aap-organizations-global`). The engine's local copy serves as the initial seed and as a CLI fallback when `manifest_repo` is not configured.
+After genesis pushes the manifest to the manifest repo, subsequent changes to the manifest (e.g., new branch mappings, additional platform repos) should be made directly in the manifest repo's copy (`<manifest-repo>/repos-manifest.yml` — default: `aap-organizations-global`). The engine's local copy provides defaults only and should not be edited.
 
 ### 3. Configure Connection
 

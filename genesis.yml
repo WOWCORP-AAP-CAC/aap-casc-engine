@@ -5,10 +5,13 @@
 # customer's SCM organization. Creates repos, seeds CI/CD thin callers,
 # seeds per-repo READMEs, and pushes repos-manifest.yml to the manifest repo.
 #
-# repos-manifest.yml (in this engine repo) is the SINGLE SOURCE OF TRUTH.
-# Genesis reads it at startup to determine which platform repos to create
-# and pushes it to the manifest repo on first run. Customize the manifest
-# in your fork before running genesis.
+# repos-manifest.yml in this engine repo provides production-ready defaults.
+# Customers do NOT edit it — the engine fork stays immutable for clean
+# upstream pulls. Day-0 overrides (default_organization, env_branch_map)
+# are provided via JT extra_vars or survey. Genesis merges overrides with
+# the defaults and pushes the result to the manifest repo on first run.
+# Post-genesis, the manifest repo's copy is the operational single source
+# of truth; changes go there directly.
 #
 # Supports both GitHub and GitLab. Provider is set via SCM_PROVIDER env var
 # (github|gitlab) or auto-detected from scm_base_url.
@@ -16,8 +19,9 @@
 # All operations are idempotent — safe to rerun without side effects.
 #
 # Usage (via AAP Job Template):
-#   JT extra vars: scm_base_url, platform_scm_org, engine_repo
-#   Survey: platform_scm_org, repo_visibility
+#   JT extra vars: scm_base_url, platform_scm_org, engine_repo,
+#                  default_organization, env_branch_map (optional override)
+#   Survey: platform_scm_org, repo_visibility, default_organization
 #   Credential: cred-platform-scm-token (injects SCM_TOKEN)
 
 - name: "Hybrid CasC — Platform Genesis"
@@ -44,6 +48,12 @@
     platform_namespace_id: "{{ lookup('env', 'PLATFORM_NAMESPACE_ID') | default('') }}"
 
     manifest_repo: "{{ lookup('env', 'MANIFEST_REPO') | default('aap-organizations-global', true) }}"
+
+    # Day-0 overrides — provided via JT extra_vars or survey.
+    # When non-empty, these override the corresponding values from
+    # repos-manifest.yml so the engine fork stays immutable.
+    default_organization: "{{ lookup('env', 'DEFAULT_ORGANIZATION') | default('') }}"
+    env_branch_map: {}
 
     # README metadata — genesis-specific, not part of the runtime manifest.
     # Maps repo name to casc_key, description, and registry flag for README seeding.
@@ -78,17 +88,27 @@
         description: "Platform-level schedules (drift detection, reconciliation)"
 
   tasks:
-    # ── Load manifest (single source of truth) ──────────────────────────────
+    # ── Load manifest defaults and apply JT overrides ───────────────────────
 
-    - name: "Load repos-manifest.yml (single source of truth)"
+    - name: "Load repos-manifest.yml (default template)"
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/repos-manifest.yml"
         name: repos_manifest
 
+    - name: "Apply JT overrides to manifest defaults"
+      ansible.builtin.set_fact:
+        _effective_default_org: >-
+          {{ default_organization
+             if default_organization | length > 0
+             else repos_manifest.default_organization | default('Default') }}
+        _effective_env_branch_map: >-
+          {{ env_branch_map
+             if env_branch_map | length > 0
+             else repos_manifest.env_branch_map }}
+
     - name: "Derive platform repos from manifest"
       ansible.builtin.set_fact:
         platform_repos: "{{ repos_manifest.platform_repos }}"
-        default_organization: "{{ repos_manifest.default_organization | default('Default') }}"
 
     # ── Enrich platform_repos with README metadata ──────────────────────────
 
@@ -113,11 +133,16 @@
       ansible.builtin.set_fact:
         platform_repos: "{{ _enriched_repos }}"
 
-    # ── Build manifest seed content (for pushing to registry) ───────────────
+    # ── Build manifest seed content (for pushing to manifest repo) ──────────
 
-    - name: "Build manifest seed content (tenant_repos forced to empty)"
+    - name: "Build manifest seed content (overrides applied, tenant_repos empty)"
       ansible.builtin.set_fact:
-        _genesis_manifest: "{{ repos_manifest | combine({'tenant_repos': []}) | to_nice_yaml(indent=2) }}"
+        _genesis_manifest: >-
+          {{ repos_manifest
+             | combine({'default_organization': _effective_default_org,
+                        'env_branch_map': _effective_env_branch_map,
+                        'tenant_repos': []})
+             | to_nice_yaml(indent=2) }}
 
     # ── Validation ─────────────────────────────────────────────────────────
 
@@ -164,12 +189,12 @@
       ansible.builtin.debug:
         msg: |
           ══════════════════════════════════════════════════════
-          PLATFORM GENESIS (single source: repos-manifest.yml)
+          PLATFORM GENESIS
           ══════════════════════════════════════════════════════
           Provider:       {{ scm_provider }}
           Platform Org:   {{ platform_scm_org }}
           Engine Repo:    {{ engine_repo }}
-          Default Org:    {{ default_organization }}
+          Default Org:    {{ _effective_default_org }}
           Visibility:     {{ repo_visibility }}
           Repos to create: {{ platform_repos | length }}
           {% for r in platform_repos %}
@@ -193,7 +218,7 @@
           Platform Org:    {{ platform_scm_org }}
           Repos Created:   {{ platform_repos | length }}
           Manifest Repo:   {{ manifest_repo }}
-          Manifest Pushed: repos-manifest.yml (from engine repo)
+          Manifest Pushed: repos-manifest.yml (defaults + JT overrides)
           CI/CD Seeded:    {{ '.github/workflows/casc.yml' if scm_provider == 'github' else '.gitlab-ci.yml' }}
           ══════════════════════════════════════════════════════
           Next steps:
