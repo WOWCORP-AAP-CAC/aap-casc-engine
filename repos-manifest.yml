@@ -5,11 +5,11 @@
 # It is consumed by every engine playbook:
 #
 #   - genesis.yml    — reads this file, creates the platform repos listed below,
-#                      and pushes this manifest to the registry repo (first-time only)
-#   - site.yml       — loads the manifest (from registry repo or local fallback)
+#                      and pushes this manifest to the manifest repo (first-time only)
+#   - site.yml       — loads the manifest (from manifest repo or local fallback)
 #                      to determine which repos to clone, process, and apply
 #   - drift-detect   — same as site.yml
-#   - bootstrap.yml  — appends new tenant entries to the registry repo's copy
+#   - bootstrap.yml  — appends new tenant entries to the manifest repo's copy
 #
 # CUSTOMER CUSTOMIZATION:
 #   After forking the engine repo, edit this file to match your environment:
@@ -18,21 +18,21 @@
 #     - platform_repos        — add or remove platform repos as needed
 #     - tenant_repos          — leave empty; bootstrap adds entries automatically
 #   Then run the genesis Job Template. Genesis reads this file and pushes it to
-#   the registry repo. Post-genesis manifest changes (e.g. new branch mappings)
-#   are made directly in the registry repo's copy.
+#   the manifest repo. Post-genesis manifest changes (e.g. new branch mappings)
+#   are made directly in the manifest repo's copy.
 #
-# REGISTRY REPO PATTERN:
-#   In production, the dispatcher and drift-detect clone the registry repo
+# MANIFEST REPO PATTERN:
+#   In production, the dispatcher and drift-detect clone the manifest repo
 #   (typically aap-organizations-global) to load this manifest at runtime.
 #   This local copy serves as the initial genesis seed and as a CLI fallback
-#   when registry_repo is not configured.
+#   when manifest_repo is not configured.
 #
 # FIELD REFERENCE:
-#   scope  — suffix added during processing
-#            platform repos -> scope: platform -> keys like aap_organizations_platform
-#            tenant repos   -> scope: myorg01  -> keys like controller_projects_myorg01
-#   org    — (optional) SCM org/group for cross-org cloning; when set, the
-#            git_clone_repos role uses https://HOST/ORG/REPO.git
+#   aap_scope — suffix added during processing
+#               platform repos -> aap_scope: platform -> keys like aap_organizations_platform
+#               tenant repos   -> aap_scope: myorg01  -> keys like controller_projects_myorg01
+#   scm_org   — (optional) SCM org/group for cross-org cloning; when set, the
+#               git_clone_repos role uses https://HOST/ORG/REPO.git
 #
 # COMMON env_branch_map PATTERNS:
 #   Single branch (demo):      dev: main,  tst: main,  npr: main,         prd: main
@@ -50,23 +50,23 @@ env_branch_map:
 
 platform_repos:
   - name: aap-organizations-global
-    scope: platform
+    aap_scope: platform
   - name: aap-teams-global
-    scope: platform
+    aap_scope: platform
   - name: gateway-role_definitions-global
-    scope: platform
+    aap_scope: platform
   - name: gateway-role_user_assignments-global
-    scope: platform
+    aap_scope: platform
   - name: gateway-role_team_assignments-global
-    scope: platform
+    aap_scope: platform
   - name: controller-credential_types-global
-    scope: platform
+    aap_scope: platform
   - name: controller-execution_environments-global
-    scope: platform
+    aap_scope: platform
   - name: controller-settings-global
-    scope: platform
+    aap_scope: platform
   - name: controller-schedules-platform
-    scope: platform
+    aap_scope: platform
 
 # Tenant CasC repos — added automatically by the bootstrap playbook.
 # Do NOT add entries here manually; bootstrap registers them in the registry
@@ -74,6 +74,6 @@ platform_repos:
 #
 # Example (for reference only):
 #   - name: controller-projects-myorg01
-#     scope: myorg01
-#     org: aap-casc-tenant-alpha-demo
+#     aap_scope: myorg01
+#     scm_org: aap-casc-tenant-alpha-demo
 tenant_repos: []

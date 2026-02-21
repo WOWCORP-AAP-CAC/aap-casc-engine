@@ -8,7 +8,7 @@ The `aap-casc-engine` is the core deliverable of the **Hybrid AAP Configuration-
 
 - **Dispatcher playbook** — Clones CasC repos from Git, processes JSON (env filter, merge, scope suffix), and applies configuration to AAP via the `infra.aap_configuration.dispatch` role
 - **Drift detection** — Compares Git desired state vs AAP live state, generates drift reports, and optionally auto-remediates
-- **Platform genesis** — Automated one-time setup of all platform CasC repos, CI/CD seeding, and manifest push to the registry repo
+- **Platform genesis** — Automated one-time setup of all platform CasC repos, CI/CD seeding, and manifest push to the manifest repo
 - **Bootstrap automation** — Automated tenant onboarding (org creation, RBAC, repo scaffolding)
 - **Pipeline-as-a-Service** — Shared CI/CD templates (GitLab CI + GitHub Actions) for validation and deployment
 - **JSON schema contracts** — Validation schemas for all AAP resource types
@@ -90,7 +90,7 @@ aap-casc-engine/
 | Environment branches | env/dev | env/tst | env/npr | main |
 | Trunk-based (with tags) | main | main | main | main |
 
-This file is consumed by every engine playbook: genesis reads it and pushes it to the registry repo, the dispatcher and drift-detect load it at runtime, and bootstrap appends tenant entries to the registry repo's copy.
+This file is consumed by every engine playbook: genesis reads it and pushes it to the manifest repo, the dispatcher and drift-detect load it at runtime, and bootstrap appends tenant entries to the manifest repo's copy.
 
 **Repo naming convention — `-global` suffix:**
 
@@ -105,21 +105,21 @@ Run the genesis playbook to create all platform CasC repos automatically:
 ```bash
 export SCM_TOKEN="<your-scm-token>"
 ansible-playbook genesis.yml \
-  -e platform_org=<your-platform-org> \
+  -e platform_scm_org=<your-platform-org> \
   -e scm_base_url=https://github.com \
   -e engine_repo=aap-casc-engine
 ```
 
 Genesis reads `repos-manifest.yml` from this engine repo and:
 1. Creates all platform repos listed in `platform_repos` (idempotent — tolerates already-existing repos)
-2. Pushes `repos-manifest.yml` to the registry repo (default: `aap-organizations-global`, override via `REGISTRY_REPO` env var) on first run only — reruns skip this to preserve `tenant_repos` entries added by bootstrap
+2. Pushes `repos-manifest.yml` to the manifest repo (default: `aap-organizations-global`, override via `MANIFEST_REPO` env var) on first run only — reruns skip this to preserve `tenant_repos` entries added by bootstrap
 3. Seeds CI/CD thin callers and READMEs in each repo
 
-**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `cred-platform-scm-token`, and set extra vars for `scm_base_url`, `platform_org`, and `engine_repo`. No AAP connection credential is needed — genesis only interacts with the SCM API.
+**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `cred-platform-scm-token`, and set extra vars for `scm_base_url`, `platform_scm_org`, and `engine_repo`. No AAP connection credential is needed — genesis only interacts with the SCM API.
 
 ### Post-Genesis Manifest Changes
 
-After genesis pushes the manifest to the registry repo, subsequent changes to the manifest (e.g., new branch mappings, additional platform repos) should be made directly in the registry repo's copy (`<registry-repo>/repos-manifest.yml` — default: `aap-organizations-global`). The engine's local copy serves as the initial seed and as a CLI fallback when `registry_repo` is not configured.
+After genesis pushes the manifest to the manifest repo, subsequent changes to the manifest (e.g., new branch mappings, additional platform repos) should be made directly in the manifest repo's copy (`<manifest-repo>/repos-manifest.yml` — default: `aap-organizations-global`). The engine's local copy serves as the initial seed and as a CLI fallback when `manifest_repo` is not configured.
 
 ### 3. Configure Connection
 
@@ -298,7 +298,7 @@ Both `scm_token` (git clone) and `scm_api_token` (bootstrap/genesis SCM API) res
 ### What Stays in extra_vars
 
 Non-sensitive configuration values remain in JT `extra_vars`:
-- `target_env`, `scm_base_url`, `registry_repo`, `registry_repo_org`, `platform_org`, `orgs_repo`, etc.
+- `target_env`, `scm_base_url`, `manifest_repo`, `platform_scm_org`, `orgs_repo`, etc.
 
 ## SCM Token Requirements
 
@@ -309,7 +309,7 @@ The `SCM_TOKEN` credential should belong to a **dedicated service account** (mac
 | `genesis.yml` | **Read-write** in the platform SCM org (repo creation + file writes) |
 | `site.yml` (dispatcher) | **Read** across all CasC repos (platform + tenant orgs) |
 | `drift-detect.yml` | **Read** across all CasC repos (platform + tenant orgs) |
-| `bootstrap.yml` | **Read-write** in the target tenant SCM org + platform registry repo |
+| `bootstrap.yml` | **Read-write** in the target tenant SCM org + platform manifest repo |
 
 A single token with broad access is the simplest model but has a wider blast radius if compromised. For production hardening options (GitHub App, per-org credentials, fine-grained PATs, GitLab Group Access Tokens), see the master design document.
 

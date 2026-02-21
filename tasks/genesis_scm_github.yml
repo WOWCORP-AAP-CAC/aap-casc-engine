@@ -4,16 +4,16 @@
 # Creates all platform repos, pushes repos-manifest.yml (from the engine repo),
 # seeds CI/CD thin callers, and README.md files. All operations are idempotent.
 #
-# Required variables: platform_org, engine_repo, platform_repos, registry_repo,
+# Required variables: platform_scm_org, engine_repo, platform_repos, manifest_repo,
 #   scm_api_token, repo_visibility, _repo_private, _genesis_manifest
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 1: Create all platform repos (tolerates already-exists 422)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Create platform repos in {{ platform_org }}"
+- name: "GH – Create platform repos in {{ platform_scm_org }}"
   ansible.builtin.uri:
-    url: "https://api.github.com/orgs/{{ platform_org }}/repos"
+    url: "https://api.github.com/orgs/{{ platform_scm_org }}/repos"
     method: POST
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -34,12 +34,12 @@
     label: "{{ item.name }}"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 2: Push repos-manifest.yml to registry repo (from engine, first-time only)
+# Step 2: Push repos-manifest.yml to manifest repo (from engine, first-time only)
 # ═══════════════════════════════════════════════════════════════════════════
 
 - name: "GH – Check if repos-manifest.yml already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ registry_repo }}/contents/repos-manifest.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ manifest_repo }}/contents/repos-manifest.yml"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -49,7 +49,7 @@
 
 - name: "GH – Push repos-manifest.yml (first-time only)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ registry_repo }}/contents/repos-manifest.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ manifest_repo }}/contents/repos-manifest.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -63,7 +63,7 @@
 
 - name: "GH – Skip manifest (already exists — preserving tenant entries)"
   ansible.builtin.debug:
-    msg: "repos-manifest.yml already exists in {{ registry_repo }}. Skipping to preserve tenant_repos entries."
+    msg: "repos-manifest.yml already exists in {{ manifest_repo }}. Skipping to preserve tenant_repos entries."
   when: _gh_manifest_check.status == 200
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -72,7 +72,7 @@
 
 - name: "GH – Check if CI/CD workflow already exists in each repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ item.name }}/contents/.github/workflows/casc.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/.github/workflows/casc.yml"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -85,7 +85,7 @@
 
 - name: "GH – Seed CI/CD thin caller in each repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ item.item.name }}/contents/.github/workflows/casc.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.name }}/contents/.github/workflows/casc.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -106,7 +106,7 @@
 
 - name: "GH – Check if README.md already exists in each repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ item.name }}/contents/README.md"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/README.md"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -119,7 +119,7 @@
 
 - name: "GH – Seed README.md in each repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ item.item.name }}/contents/README.md"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.name }}/contents/README.md"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"

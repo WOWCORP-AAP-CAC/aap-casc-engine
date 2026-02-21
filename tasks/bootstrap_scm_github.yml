@@ -8,8 +8,8 @@
 # GET-then-PUT (with SHA when updating existing files). Repo creation
 # tolerates 422 (already exists). Manifest updates skip duplicate entries.
 #
-# Required variables: platform_org, orgs_repo, teams_repo, rbac_user_repo,
-#   rbac_team_repo, registry_repo, tenant_scm_org, scm_api_token, org_id,
+# Required variables: platform_scm_org, orgs_repo, teams_repo, rbac_user_repo,
+#   rbac_team_repo, manifest_repo, tenant_scm_org, scm_api_token, org_id,
 #   _effective_team_group, team_lead, team_lead_username, tenant_repos
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -18,7 +18,7 @@
 
 - name: "GH – Check if org JSON already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ orgs_repo }}/contents/org-{{ org_id }}.json"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ orgs_repo }}/contents/org-{{ org_id }}.json"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -28,7 +28,7 @@
 
 - name: "GH – Push organization JSON to {{ orgs_repo }}"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ orgs_repo }}/contents/org-{{ org_id }}.json"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ orgs_repo }}/contents/org-{{ org_id }}.json"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -46,7 +46,7 @@
 
 - name: "GH – Check if team JSON already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ teams_repo }}/contents/team-{{ org_id }}.json"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ teams_repo }}/contents/team-{{ org_id }}.json"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -56,7 +56,7 @@
 
 - name: "GH – Push team JSON to {{ teams_repo }}"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ teams_repo }}/contents/team-{{ org_id }}.json"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ teams_repo }}/contents/team-{{ org_id }}.json"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -182,12 +182,12 @@
   when: team_lead_username | default('') | length > 0
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 5: Update repos-manifest.yml in registry repo (dedup-safe)
+# Step 5: Update repos-manifest.yml in manifest repo (dedup-safe)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Get current repos-manifest.yml from registry repo"
+- name: "GH – Get current repos-manifest.yml from manifest repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ registry_repo }}/contents/repos-manifest.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ manifest_repo }}/contents/repos-manifest.yml"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -205,13 +205,13 @@
 
 - name: "GH – Build new tenant entries (only missing repos)"
   ansible.builtin.set_fact:
-    _new_entries: "{{ _new_entries | default([]) + [{'name': item, 'scope': org_id, 'org': tenant_scm_org}] }}"
+    _new_entries: "{{ _new_entries | default([]) + [{'name': item, 'aap_scope': org_id, 'scm_org': tenant_scm_org}] }}"
   loop: "{{ tenant_repos }}"
   when: item not in _existing_repo_names
 
 - name: "GH – Update repos-manifest.yml with new tenant entries"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_org }}/{{ registry_repo }}/contents/repos-manifest.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ manifest_repo }}/contents/repos-manifest.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"

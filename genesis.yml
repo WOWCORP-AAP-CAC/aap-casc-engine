@@ -3,11 +3,11 @@
 #
 # One-time automated setup of all platform CasC repositories in the
 # customer's SCM organization. Creates repos, seeds CI/CD thin callers,
-# seeds per-repo READMEs, and pushes repos-manifest.yml to the registry repo.
+# seeds per-repo READMEs, and pushes repos-manifest.yml to the manifest repo.
 #
 # repos-manifest.yml (in this engine repo) is the SINGLE SOURCE OF TRUTH.
 # Genesis reads it at startup to determine which platform repos to create
-# and pushes it to the registry repo on first run. Customize the manifest
+# and pushes it to the manifest repo on first run. Customize the manifest
 # in your fork before running genesis.
 #
 # Supports both GitHub and GitLab. Provider is set via SCM_PROVIDER env var
@@ -16,8 +16,8 @@
 # All operations are idempotent — safe to rerun without side effects.
 #
 # Usage (via AAP Job Template):
-#   JT extra vars: scm_base_url, platform_org, engine_repo
-#   Survey: platform_org, repo_visibility
+#   JT extra vars: scm_base_url, platform_scm_org, engine_repo
+#   Survey: platform_scm_org, repo_visibility
 #   Credential: cred-platform-scm-token (injects SCM_TOKEN)
 
 - name: "Hybrid CasC — Platform Genesis"
@@ -35,7 +35,7 @@
          if _scm_provider_override in ['github', 'gitlab']
          else ('github' if 'github' in scm_base_url else 'gitlab') }}
 
-    platform_org: "{{ lookup('env', 'PLATFORM_ORG') | default('') }}"
+    platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('') }}"
     engine_repo: "{{ lookup('env', 'ENGINE_REPO') | default('aap-casc-engine') }}"
     repo_visibility: "{{ lookup('env', 'REPO_VISIBILITY') | default('public', true) }}"
     _repo_private: "{{ repo_visibility == 'private' }}"
@@ -43,7 +43,7 @@
     # GitLab-specific: numeric namespace ID for the platform group
     platform_namespace_id: "{{ lookup('env', 'PLATFORM_NAMESPACE_ID') | default('') }}"
 
-    registry_repo: "{{ lookup('env', 'REGISTRY_REPO') | default('aap-organizations-global', true) }}"
+    manifest_repo: "{{ lookup('env', 'MANIFEST_REPO') | default('aap-organizations-global', true) }}"
 
     # README metadata — genesis-specific, not part of the runtime manifest.
     # Maps repo name to casc_key, description, and registry flag for README seeding.
@@ -124,11 +124,11 @@
     - name: "Validate required inputs"
       ansible.builtin.assert:
         that:
-          - platform_org | length > 0
+          - platform_scm_org | length > 0
           - scm_api_token | length > 0
         fail_msg: >-
-          platform_org and SCM_TOKEN are required.
-          platform_org='{{ platform_org }}', SCM_TOKEN={{ 'set' if scm_api_token | length > 0 else 'MISSING' }}.
+          platform_scm_org and SCM_TOKEN are required.
+          platform_scm_org='{{ platform_scm_org }}', SCM_TOKEN={{ 'set' if scm_api_token | length > 0 else 'MISSING' }}.
 
     - name: "Validate SCM provider"
       ansible.builtin.assert:
@@ -137,12 +137,12 @@
         fail_msg: >-
           scm_provider must be 'github' or 'gitlab'. Got: '{{ scm_provider }}'.
 
-    - name: "Validate registry repo is in platform_repos"
+    - name: "Validate manifest repo is in platform_repos"
       ansible.builtin.assert:
         that:
-          - registry_repo in (platform_repos | map(attribute='name') | list)
+          - manifest_repo in (platform_repos | map(attribute='name') | list)
         fail_msg: >-
-          registry_repo '{{ registry_repo }}' not found in platform_repos.
+          manifest_repo '{{ manifest_repo }}' not found in platform_repos.
           Available repos: {{ platform_repos | map(attribute='name') | list | join(', ') }}.
 
     - name: "Validate repo visibility"
@@ -167,7 +167,7 @@
           PLATFORM GENESIS (single source: repos-manifest.yml)
           ══════════════════════════════════════════════════════
           Provider:       {{ scm_provider }}
-          Platform Org:   {{ platform_org }}
+          Platform Org:   {{ platform_scm_org }}
           Engine Repo:    {{ engine_repo }}
           Default Org:    {{ default_organization }}
           Visibility:     {{ repo_visibility }}
@@ -190,14 +190,14 @@
           ══════════════════════════════════════════════════════
           PLATFORM GENESIS COMPLETE
           ══════════════════════════════════════════════════════
-          Platform Org:    {{ platform_org }}
+          Platform Org:    {{ platform_scm_org }}
           Repos Created:   {{ platform_repos | length }}
-          Registry Repo:   {{ registry_repo }}
+          Manifest Repo:   {{ manifest_repo }}
           Manifest Pushed: repos-manifest.yml (from engine repo)
           CI/CD Seeded:    {{ '.github/workflows/casc.yml' if scm_provider == 'github' else '.gitlab-ci.yml' }}
           ══════════════════════════════════════════════════════
           Next steps:
-            1. Create AAP Project pointing to {{ platform_org }}/{{ engine_repo }}
+            1. Create AAP Project pointing to {{ platform_scm_org }}/{{ engine_repo }}
             2. Create dispatcher, drift-detection, and bootstrap Job Templates
             3. Run bootstrap to onboard your first tenant
           ══════════════════════════════════════════════════════

@@ -6,7 +6,7 @@
 #   2. Creates tenant CasC repositories in the tenant's SCM org/namespace
 #   3. Seeds repos with CI/CD pipeline include + example JSON files
 #   4. Sets repository permissions (tenant team lead = maintainer)
-#   5. Updates repos-manifest.yml in the registry repo
+#   5. Updates repos-manifest.yml in the manifest repo
 #   6. Pre-checks AAP for existing user/team, renders staging JSON, dispatches
 #
 # Supports both GitHub and GitLab. Provider is set via SCM_PROVIDER env var
@@ -18,7 +18,7 @@
 # Usage (via AAP Job Template with Survey):
 #   Survey provides: org_id, team_name, team_lead, team_lead_email,
 #                    repo_pattern, tenant_scm_org
-#   JT extra vars provide: platform_org, orgs_repo, teams_repo, etc.
+#   JT extra vars provide: platform_scm_org, orgs_repo, teams_repo, etc.
 #
 # GitLab note: tenant_scm_org is the group *path* (used in clone URLs and
 #   manifest entries). tenant_scm_namespace_id is the numeric namespace ID
@@ -42,22 +42,22 @@
          if _scm_provider_override in ['github', 'gitlab']
          else ('github' if 'github' in scm_base_url else 'gitlab') }}
 
-    # Platform org/group — where platform CasC repos live
-    platform_org: "{{ lookup('env', 'PLATFORM_ORG') }}"
+    # Platform SCM org/group — where platform CasC repos live
+    platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('') }}"
 
     # Per-resource-type platform repos (GitHub: names, GitLab: use _id variants)
     orgs_repo: "{{ lookup('env', 'ORGS_REPO') | default('aap-organizations-global') }}"
     teams_repo: "{{ lookup('env', 'TEAMS_REPO') | default('aap-teams-global') }}"
     rbac_user_repo: "{{ lookup('env', 'RBAC_USER_REPO') | default('') }}"
     rbac_team_repo: "{{ lookup('env', 'RBAC_TEAM_REPO') | default('') }}"
-    registry_repo: "{{ lookup('env', 'REGISTRY_REPO') | default(orgs_repo) }}"
+    manifest_repo: "{{ lookup('env', 'MANIFEST_REPO') | default(orgs_repo) }}"
 
     # GitLab-specific numeric project/namespace IDs (ignored for GitHub)
     orgs_repo_id: "{{ lookup('env', 'ORGS_REPO_ID') | default('') }}"
     teams_repo_id: "{{ lookup('env', 'TEAMS_REPO_ID') | default('') }}"
     rbac_user_repo_id: "{{ lookup('env', 'RBAC_USER_REPO_ID') | default('') }}"
     rbac_team_repo_id: "{{ lookup('env', 'RBAC_TEAM_REPO_ID') | default('') }}"
-    registry_repo_id: "{{ lookup('env', 'REGISTRY_REPO_ID') | default(orgs_repo_id) }}"
+    manifest_repo_id: "{{ lookup('env', 'MANIFEST_REPO_ID') | default(orgs_repo_id) }}"
 
     # Tenant-specific (from AAP Survey)
     org_id: "{{ lookup('env', 'ORG_ID') }}"
@@ -73,7 +73,7 @@
     _repo_private: "{{ repo_visibility == 'private' }}"
 
     # tenant_scm_org: string path/slug for the tenant's SCM org or GitLab group.
-    #   Used in manifest 'org' field and by git_clone_repos for URL construction.
+    #   Used in manifest 'scm_org' field and by git_clone_repos for URL construction.
     #   GitHub example: "aap-casc-tenant-alpha-demo"
     #   GitLab example: "tenant-alpha" (the group path, not its numeric ID)
     tenant_scm_org: "{{ lookup('env', 'TENANT_SCM_ORG') }}"
@@ -276,7 +276,7 @@
       block:
         - name: "GH – Check if RBAC user JSON already exists"
           ansible.builtin.uri:
-            url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
+            url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
             method: GET
             headers:
               Authorization: "Bearer {{ scm_api_token }}"
@@ -287,7 +287,7 @@
 
         - name: "GH – Push RBAC user assignments to {{ rbac_user_repo }}"
           ansible.builtin.uri:
-            url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
+            url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ rbac_user_repo }}/contents/rbac-user-{{ org_id }}.json"
             method: PUT
             headers:
               Authorization: "Bearer {{ scm_api_token }}"
@@ -305,7 +305,7 @@
 
         - name: "GH – Check if RBAC team JSON already exists"
           ansible.builtin.uri:
-            url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
+            url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
             method: GET
             headers:
               Authorization: "Bearer {{ scm_api_token }}"
@@ -316,7 +316,7 @@
 
         - name: "GH – Push RBAC team assignments to {{ rbac_team_repo }}"
           ansible.builtin.uri:
-            url: "https://api.github.com/repos/{{ platform_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
+            url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ rbac_team_repo }}/contents/rbac-team-{{ org_id }}.json"
             method: PUT
             headers:
               Authorization: "Bearer {{ scm_api_token }}"

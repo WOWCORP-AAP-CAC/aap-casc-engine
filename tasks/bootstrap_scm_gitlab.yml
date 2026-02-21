@@ -9,13 +9,13 @@
 # tolerates already-exists errors. Manifest updates skip duplicate entries.
 #
 # Required variables:
-#   platform_org          — GitLab group path (for manifest org + clone URLs)
+#   platform_scm_org          — GitLab group path (for manifest scm_org + clone URLs)
 #   orgs_repo_id          — numeric project ID for org definitions repo
 #   teams_repo_id         — numeric project ID for team definitions repo
 #   rbac_user_repo_id     — numeric project ID for user RBAC repo (optional)
 #   rbac_team_repo_id     — numeric project ID for team RBAC repo (optional)
-#   registry_repo_id      — numeric project ID for registry repo (manifest)
-#   tenant_scm_org        — GitLab group *path* (for manifest org + clone URLs)
+#   manifest_repo_id      — numeric project ID for manifest repo
+#   tenant_scm_org        — GitLab group *path* (for manifest scm_org + clone URLs)
 #   tenant_scm_namespace_id — numeric GitLab namespace ID (for Projects API)
 #   scm_api_token, org_id, team_name, _effective_team_group,
 #   team_lead, team_lead_user_id, tenant_repos
@@ -140,7 +140,7 @@
       branch: "main"
       content: |
         include:
-          - project: '{{ platform_org }}/aap-casc-engine'
+          - project: '{{ platform_scm_org }}/aap-casc-engine'
             ref: 'main'
             file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
       commit_message: "Bootstrap: shared pipeline template"
@@ -204,13 +204,13 @@
   when: team_lead_user_id | default('') | length > 0
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 5: Update repos-manifest.yml in registry repo (dedup-safe)
-# Uses tenant_scm_org (group path) for the manifest 'org' field.
+# Step 5: Update repos-manifest.yml in manifest repo (dedup-safe)
+# Uses tenant_scm_org (group path) for the manifest 'scm_org' field.
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GL – Get current repos-manifest.yml from registry repo"
+- name: "GL – Get current repos-manifest.yml from manifest repo"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ registry_repo_id }}/repository/files/repos-manifest.yml?ref=main"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ manifest_repo_id }}/repository/files/repos-manifest.yml?ref=main"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -226,13 +226,13 @@
 
 - name: "GL – Build new tenant entries (only missing repos)"
   ansible.builtin.set_fact:
-    _new_entries: "{{ _new_entries | default([]) + [{'name': item, 'scope': org_id, 'org': tenant_scm_org}] }}"
+    _new_entries: "{{ _new_entries | default([]) + [{'name': item, 'aap_scope': org_id, 'scm_org': tenant_scm_org}] }}"
   loop: "{{ tenant_repos }}"
   when: item not in _existing_repo_names
 
 - name: "GL – Update repos-manifest.yml with new tenant entries"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ registry_repo_id }}/repository/files/repos-manifest.yml"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ manifest_repo_id }}/repository/files/repos-manifest.yml"
     method: PUT
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"

@@ -2,20 +2,20 @@
 # git_clone_repos — Clone CasC repositories from Git
 #
 # Required variables:
-#   repos_to_clone: list of dicts with 'name' key (and optional 'scope', 'org')
+#   repos_to_clone: list of dicts with 'name' key (and optional 'aap_scope', 'scm_org')
 #   clone_base_dir: base directory for cloned repos (e.g., /tmp/casc-repos)
 #   clone_branch:   Git branch to clone (e.g., develop, main)
 #   git_base_url:   SCM base URL (e.g., https://github.com/my-org)
 #   git_token:      SCM API token for authentication
 #
-# Per-repo 'org' field (cross-org cloning):
-#   When a repo entry includes 'org', the clone URL targets that org/namespace
+# Per-repo 'scm_org' field (cross-org cloning):
+#   When a repo entry includes 'scm_org', the clone URL targets that org/namespace
 #   on the SCM host, ignoring the org embedded in git_base_url. This supports
 #   multi-org setups where tenant repos live in different GitHub orgs or
 #   GitLab groups than the platform repos.
 #
-#   Without org: https://HOST/BASE_PATH/REPO.git  (derived from git_base_url)
-#   With org:    https://HOST/ORG/REPO.git         (HOST extracted from git_base_url)
+#   Without scm_org: https://HOST/BASE_PATH/REPO.git  (derived from git_base_url)
+#   With scm_org:    https://HOST/ORG/REPO.git         (HOST extracted from git_base_url)
 
 - name: "Ensure clone base directory exists"
   ansible.builtin.file:
@@ -41,8 +41,9 @@
   vars:
     _scm_host: "{{ git_base_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}"
     _default_path: "{{ git_base_url | regex_replace('^https?://', '') }}/{{ item.name }}.git"
-    _org_path: "{{ _scm_host }}/{{ item.org }}/{{ item.name }}.git"
-    _repo_path: "{{ _org_path if (item.org is defined and item.org | length > 0) else _default_path }}"
+    _resolved_org: "{{ item.scm_org | default('') }}"
+    _org_path: "{{ _scm_host }}/{{ _resolved_org }}/{{ item.name }}.git"
+    _repo_path: "{{ _org_path if (_resolved_org | length > 0) else _default_path }}"
   loop: "{{ repos_to_clone }}"
   loop_control:
     label: "{{ item.name }}"

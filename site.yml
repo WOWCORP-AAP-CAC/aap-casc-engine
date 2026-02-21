@@ -35,13 +35,13 @@
     # Enable production best practices
     aap_configuration_collect_logs: true
 
-    # Registry repo — the platform repo containing repos-manifest.yml.
+    # Manifest repo — the platform repo containing repos-manifest.yml.
     # When set, the dispatcher clones this repo first to load the manifest.
     # When empty, falls back to the local repos-manifest.yml in the engine repo.
-    registry_repo: ""
-    registry_repo_org: ""
-    registry_branch: "main"
-    registry_dir: "/tmp/casc-registry"
+    manifest_repo: ""
+    platform_scm_org: ""
+    manifest_branch: "main"
+    manifest_dir: "/tmp/casc-manifest"
 
     # Git SCM base URL
     scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
@@ -52,30 +52,30 @@
     staging_dir: "/tmp/casc-staging"
 
   pre_tasks:
-    # Phase 0: Load manifest from registry repo or local file
-    - name: "Clone registry repo to load manifest"
+    # Phase 0: Load manifest from manifest repo or local file
+    - name: "Clone manifest repo to load manifest"
       ansible.builtin.include_role:
         name: git_clone_repos
       vars:
         repos_to_clone:
-          - name: "{{ registry_repo }}"
-            org: "{{ registry_repo_org }}"
-            scope: _registry
-        clone_base_dir: "{{ registry_dir }}"
-        clone_branch: "{{ registry_branch }}"
+          - name: "{{ manifest_repo }}"
+            scm_org: "{{ platform_scm_org }}"
+            aap_scope: _registry
+        clone_base_dir: "{{ manifest_dir }}"
+        clone_branch: "{{ manifest_branch }}"
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
-      when: registry_repo | default('') | length > 0
+      when: manifest_repo | default('') | length > 0
 
-    - name: "Load manifest from registry repo"
+    - name: "Load manifest from manifest repo"
       ansible.builtin.set_fact:
-        repos_manifest: "{{ lookup('file', registry_dir + '/' + registry_repo + '/repos-manifest.yml') | from_yaml }}"
-      when: registry_repo | default('') | length > 0
+        repos_manifest: "{{ lookup('file', manifest_dir + '/' + manifest_repo + '/repos-manifest.yml') | from_yaml }}"
+      when: manifest_repo | default('') | length > 0
 
     - name: "Load manifest from local file (fallback)"
       ansible.builtin.set_fact:
         repos_manifest: "{{ lookup('file', playbook_dir + '/repos-manifest.yml') | from_yaml }}"
-      when: registry_repo | default('') | length == 0
+      when: manifest_repo | default('') | length == 0
 
     # Phase 1: Resolve branch from env_branch_map
     - name: "Resolve target branch for {{ target_env }}"
@@ -117,7 +117,7 @@
         name: process_casc_json
       vars:
         repo_clone_dir: "{{ clone_dir }}/{{ item.name }}"
-        repo_scope: "{{ item.scope }}"
+        repo_scope: "{{ item.aap_scope }}"
         output_dir: "{{ staging_dir }}"
         env_filter: "{{ target_env }}"
       loop: "{{ selected_repos }}"
