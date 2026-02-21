@@ -1,0 +1,28 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AAP Gateway Teams Configuration",
+    "type": "object",
+    "properties": {
+        "aap_teams": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["name", "organization"],
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Team name"
+                    },
+                    "description": { "type": "string" },
+                    "organization": {
+                        "type": "string",
+                        "description": "Organization the team belongs to"
+                    }
+                },
+                "additionalProperties": true
+            }
+        }
+    },
+    "required": ["aap_teams"],
+    "additionalProperties": false
+}

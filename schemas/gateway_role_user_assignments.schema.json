@@ -1,0 +1,43 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AAP Gateway Role User Assignments Configuration",
+    "type": "object",
+    "properties": {
+        "gateway_role_user_assignments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["role_definition"],
+                "oneOf": [
+                    { "required": ["user"] },
+                    { "required": ["user_ansible_id"] }
+                ],
+                "properties": {
+                    "user": {
+                        "type": "string",
+                        "description": "Username to assign the role to"
+                    },
+                    "user_ansible_id": {
+                        "type": "integer",
+                        "description": "Numeric user ID (alternative to name-based user)"
+                    },
+                    "role_definition": {
+                        "type": "string",
+                        "description": "Name of the role definition to assign"
+                    },
+                    "object_id": {
+                        "type": "integer",
+                        "description": "ID of the object to assign the role for"
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Content type of the object (e.g., aap.organization)"
+                    }
+                },
+                "additionalProperties": true
+            }
+        }
+    },
+    "required": ["gateway_role_user_assignments"],
+    "additionalProperties": false
+}

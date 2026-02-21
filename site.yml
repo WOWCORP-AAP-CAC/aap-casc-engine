@@ -116,13 +116,14 @@
       ansible.builtin.include_role:
         name: process_casc_json
       vars:
-        repo_clone_dir: "{{ clone_dir }}/{{ item.name }}"
-        repo_scope: "{{ item.aap_scope }}"
+        repo_clone_dir: "{{ clone_dir }}/{{ casc_repo.name }}"
+        repo_scope: "{{ casc_repo.aap_scope }}"
         output_dir: "{{ staging_dir }}"
         env_filter: "{{ target_env }}"
       loop: "{{ selected_repos }}"
       loop_control:
-        label: "{{ item.name }}"
+        loop_var: casc_repo
+        label: "{{ casc_repo.name }}"
 
     # Phase 5: Load processed variables
     - name: "Load processed config (scope-suffixed)"

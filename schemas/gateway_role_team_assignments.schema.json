@@ -1,0 +1,43 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "AAP Gateway Role Team Assignments Configuration",
+    "type": "object",
+    "properties": {
+        "gateway_role_team_assignments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["role_definition"],
+                "oneOf": [
+                    { "required": ["team"] },
+                    { "required": ["team_ansible_id"] }
+                ],
+                "properties": {
+                    "team": {
+                        "type": "string",
+                        "description": "Team name to assign the role to"
+                    },
+                    "team_ansible_id": {
+                        "type": "integer",
+                        "description": "Numeric team ID (alternative to name-based team)"
+                    },
+                    "role_definition": {
+                        "type": "string",
+                        "description": "Name of the role definition to assign"
+                    },
+                    "object_id": {
+                        "type": "integer",
+                        "description": "ID of the object to assign the role for"
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "description": "Content type of the object (e.g., aap.organization)"
+                    }
+                },
+                "additionalProperties": true
+            }
+        }
+    },
+    "required": ["gateway_role_team_assignments"],
+    "additionalProperties": false
+}
