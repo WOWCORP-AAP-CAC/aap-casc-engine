@@ -14,9 +14,9 @@ controller_projects:
   description: "Projects: prj-<org_id>-<use_case>"
 
 controller_credentials:
-  pattern: "^crd-[a-z0-9_]+-[a-z]+-[a-z0-9_]+$"
-  example: "crd-myorg01-cst-db_prod"
-  description: "Credentials: crd-<org_id>-<type_prefix>-<purpose>"
+  pattern: "^crd-[a-z0-9_]+(-[a-z0-9_]+)+$"
+  example: "crd-myorg01-machine_demo"
+  description: "Credentials: crd-<org_id>-<purpose> (segments separated by hyphens, underscores within)"
 
 controller_credential_types:
   pattern: "^ctp-[a-z0-9_]+$"
@@ -35,7 +35,7 @@ controller_templates:
 
 controller_schedules:
   pattern: "^sch-[a-z0-9_]+(-[a-z0-9_]+)*$"
-  example: "sch-demo_alpha-nightly-hello"
+  example: "sch-demo_alpha-nightly_hello"
   description: "Schedules: sch-<org_id>-<purpose>"
 
 controller_workflows:
@@ -44,9 +44,9 @@ controller_workflows:
   description: "Workflow job templates: wfjt-<org_id>-<use_case>"
 
 controller_notifications:
-  pattern: "^ntf-[a-z0-9_]+-[a-z]+-[a-z0-9_]+$"
-  example: "ntf-myorg01-slack-alerts"
-  description: "Notifications: ntf-<org_id>-<type>-<purpose>"
+  pattern: "^ntf-[a-z0-9_]+(-[a-z0-9_]+)+$"
+  example: "ntf-myorg01-slack_alerts"
+  description: "Notifications: ntf-<org_id>-<purpose> (segments separated by hyphens, underscores within)"
 
 controller_execution_environments:
   pattern: "^ee-[a-z0-9]+-[a-z0-9_]+-[a-z]+$"

@@ -137,13 +137,13 @@ Files are included or excluded based on the `target_env` variable (set in the di
 |---------------|--------|---------|
 | Organizations | `org-` | `org-demo_alpha` |
 | Projects | `prj-` | `prj-demo_alpha-hello_world` |
-| Credentials | `crd-` | `crd-demo_alpha-machine-demo` |
+| Credentials | `crd-` | `crd-demo_alpha-machine_demo` |
 | Credential Types | `ctp-` | `ctp-database_credentials` |
-| Inventories | `inv-` | `inv-demo_alpha-dev` |
+| Inventories | `inv-` | `inv-demo_alpha-hello_world-dev` |
 | Job Templates | `jt-` | `jt-demo_alpha-hello_world` |
 | Workflows | `wfjt-` | `wfjt-demo_alpha-deploy_pipeline` |
-| Schedules | `sch-` | `sch-demo_alpha-nightly` |
-| Notifications | `ntf-` | `ntf-demo_alpha-slack-alerts` |
+| Schedules | `sch-` | `sch-demo_alpha-nightly_hello` |
+| Notifications | `ntf-` | `ntf-demo_alpha-slack_alerts` |
 | Execution Environments | `ee-` | `ee-rhel9-ansible218-base` |
 
 ### 2. Run Platform Genesis
@@ -165,7 +165,7 @@ Genesis reads the default `repos-manifest.yml` from this engine repo, merges any
 2. Pushes the merged manifest to the manifest repo (default: `aap-organizations-global`, override via `MANIFEST_REPO` env var) on first run only — reruns skip this to preserve `tenant_repos` entries added by bootstrap
 3. Seeds CI/CD thin callers and READMEs in each repo
 
-**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `crd-platform-scm-token`, and set extra vars for `scm_base_url`, `platform_scm_org`, `engine_repo`, and `default_organization`. Optionally add `env_branch_map` as an extra_var to override the GitFlow default. No AAP connection credential is needed — genesis only interacts with the SCM API.
+**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `crd-platform-scm_token`, and set extra vars for `scm_base_url`, `platform_scm_org`, `engine_repo`, and `default_organization`. Optionally add `env_branch_map` as an extra_var to override the GitFlow default. No AAP connection credential is needed — genesis only interacts with the SCM API.
 
 ### Post-Genesis Manifest Changes
 
@@ -369,7 +369,7 @@ All sensitive connection values are injected at runtime via AAP credentials atta
 
 Injects `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, `CONTROLLER_VERIFY_SSL` as environment variables. The dispatcher, drift-detect, and bootstrap playbooks read these via `lookup('env', ...)`.
 
-- Credential name (demo): `crd-platform-aap-connection`
+- Credential name (demo): `crd-platform-aap_connection`
 - Attach to dispatcher, drift-detection, and bootstrap JTs (not genesis — genesis only uses SCM)
 
 ### Custom: CasC SCM Token
@@ -382,7 +382,7 @@ The built-in GitHub/GitLab PAT credential types have empty injectors -- they can
 
 Both `scm_token` (git clone) and `scm_api_token` (bootstrap/genesis SCM API) resolve from the single `SCM_TOKEN` environment variable.
 
-- Credential name (demo): `crd-platform-scm-token`
+- Credential name (demo): `crd-platform-scm_token`
 - Attach to all 4 Job Templates (genesis, dispatcher, drift-detection, bootstrap)
 
 ### What Stays in extra_vars
