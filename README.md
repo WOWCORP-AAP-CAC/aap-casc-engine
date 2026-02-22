@@ -7,7 +7,7 @@ Hybrid AAP Configuration-as-Code engine combining **JSON-as-Interface** for tena
 The `aap-casc-engine` is the core deliverable of the **Hybrid AAP Configuration-as-Code Framework**. It provides:
 
 - **Dispatcher playbook** — Clones CasC repos from Git, processes JSON (env filter, merge, scope suffix), and applies configuration to AAP via the `infra.aap_configuration.dispatch` role
-- **Drift detection** — Compares Git desired state vs AAP live state, generates drift reports, and optionally auto-remediates
+- **Drift detection** — Compares Git desired state vs AAP live state, generates drift reports (persisted as AAP job artifacts via `set_stats`), and optionally auto-remediates
 - **Platform genesis** — Automated one-time setup of all platform CasC repos, CI/CD seeding, and manifest push to the manifest repo
 - **Bootstrap automation** — Automated tenant onboarding (org creation, RBAC, repo scaffolding)
 - **Pipeline-as-a-Service** — Shared CI/CD templates (GitLab CI + GitHub Actions) for validation and deployment
@@ -213,6 +213,10 @@ ansible-playbook drift-detect.yml -e target_env=dev -e drift_mode=report
 # Remediate mode (detect and auto-fix)
 ansible-playbook drift-detect.yml -e target_env=prd -e drift_mode=remediate
 ```
+
+The drift report is published as an **AAP job artifact** via `set_stats`. Each job run stores its own report in the AAP database — retrievable from the job details page in the UI or via the API at `/api/controller/v2/jobs/<id>/` in the `artifacts` field. Reports are never overwritten; each run creates a new job record with its own artifact, providing a full audit history. A human-readable summary is also printed to the job stdout.
+
+**Understanding "extra in live" drift:** The drift report will show "extra in live" items for platform-managed resources that exist in AAP but are not defined in the CasC config repos — such as the engine project (`prj-platform-casc-engine`), platform job templates (`jt-platform-*`), custom credential types (`CasC SCM Token`), and AAP built-in defaults (`Demo Project`). This is **expected and by design**. The dispatcher is additive/convergent — it creates and updates resources from Git but never deletes resources from AAP that are absent from Git. Investigate "extra in live" items that don't follow known naming patterns, as they may indicate unauthorized manual changes.
 
 ### 6. Bootstrap a New Tenant
 
