@@ -305,8 +305,22 @@ jobs:
     uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
     with:
       dispatcher_jt_name: jt-platform-casc_dispatcher
-    secrets: inherit
+    secrets:
+      AAP_HOST: ${{ secrets.AAP_HOST }}
+      AAP_USERNAME: ${{ secrets.AAP_USERNAME }}
+      AAP_PASSWORD: ${{ secrets.AAP_PASSWORD }}
+      AAP_DEV_HOST: ${{ secrets.AAP_DEV_HOST }}
+      AAP_DEV_TOKEN: ${{ secrets.AAP_DEV_TOKEN }}
+      AAP_TST_HOST: ${{ secrets.AAP_TST_HOST }}
+      AAP_TST_TOKEN: ${{ secrets.AAP_TST_TOKEN }}
+      AAP_NPR_HOST: ${{ secrets.AAP_NPR_HOST }}
+      AAP_NPR_TOKEN: ${{ secrets.AAP_NPR_TOKEN }}
+      AAP_PRD_HOST: ${{ secrets.AAP_PRD_HOST }}
+      AAP_PRD_TOKEN: ${{ secrets.AAP_PRD_TOKEN }}
+      ENGINE_REPO_TOKEN: ${{ secrets.ENGINE_REPO_TOKEN }}
 ```
+
+> **Cross-org limitation:** GitHub Actions `secrets: inherit` does not pass organization-level secrets to reusable workflows in a different GitHub organization. The caller workflow must explicitly pass each secret as shown above. Same-org callers may use `secrets: inherit` for convenience, but explicit passing works universally.
 
 The `workflow_dispatch` event enables manual pipeline runs from the GitHub Actions tab or via `gh workflow run`.
 
