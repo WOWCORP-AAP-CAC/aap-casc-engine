@@ -31,6 +31,8 @@ variables:
   ENGINE_PROJECT_PATH: ""
   SCHEMA_DIR: "${CI_PROJECT_DIR}/.schemas"
   DISPATCHER_JT_NAME: "jt-platform-casc_dispatcher"
+  WAIT_FOR_COMPLETION: "true"
+  POLL_TIMEOUT_MINUTES: "30"
 
 # ── Pre-stage: Fetch schemas from engine repo ────────────────────────────────
 fetch:schemas:
@@ -189,6 +191,14 @@ trigger:dispatcher:
         AUTH_MODE="basic"
         echo "Using basic auth (demo/sandbox mode) for environment: ${TARGET_ENV}"
       else
+        AUTH_MODE="skip"
+        if [ "$CI_PIPELINE_SOURCE" = "push" ] || [ "$CI_PIPELINE_SOURCE" = "web" ]; then
+          echo "ERROR: Dispatcher trigger skipped — no AAP credentials available."
+          echo "Possible causes:"
+          echo "  1. Group-level CI/CD variables AAP_HOST / AAP_USERNAME / AAP_PASSWORD not configured"
+          echo "  2. Per-env variables (AAP_PRD_HOST/TOKEN, etc.) not configured for branch '${CI_COMMIT_BRANCH}'"
+          exit 1
+        fi
         echo "No AAP credentials configured — skipping trigger (validate-only mode)"
         exit 0
       fi
@@ -227,20 +237,20 @@ trigger:dispatcher:
         exit 1
       fi
 
-      # Wait for any running dispatcher to finish before launching
+      # Quick courtesy check — AAP serializes via allow_simultaneous=false
       echo "Checking if dispatcher is already running..."
-      for attempt in $(seq 1 12); do
+      for attempt in $(seq 1 2); do
         RUNNING=$(auth_curl \
           "https://${AAP_HOST}/api/controller/v2/jobs/?job_template=${JT_ID}&status__in=running,pending,waiting&page_size=1" \
           | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))")
         if [ "$RUNNING" = "0" ]; then
           break
         fi
-        echo "  Dispatcher is busy (attempt ${attempt}/12) — waiting 15s..."
+        echo "  Dispatcher is busy (attempt ${attempt}/2) — waiting 15s..."
         sleep 15
       done
       if [ "$RUNNING" != "0" ]; then
-        echo "WARNING: Dispatcher still running after 3 min wait — launching anyway (AAP will queue)"
+        echo "INFO: Dispatcher still busy — launching anyway (AAP will queue via allow_simultaneous=false)"
       fi
 
       # Launch the dispatcher with trigger metadata
@@ -267,20 +277,35 @@ trigger:dispatcher:
         exit 1
       fi
 
-      # Poll for job completion
-      echo "Waiting for job to complete..."
-      for i in $(seq 1 60); do
+      # Fire-and-forget mode: exit immediately after launch
+      if [ "$WAIT_FOR_COMPLETION" = "false" ]; then
+        echo "=== FIRE-AND-FORGET: Dispatcher launched, not waiting for completion ==="
+        exit 0
+      fi
+
+      # Poll for job completion (configurable timeout)
+      POLL_CHECKS=$(( POLL_TIMEOUT_MINUTES * 6 ))
+      echo "Waiting for job to complete (timeout: ${POLL_TIMEOUT_MINUTES} min)..."
+      for i in $(seq 1 $POLL_CHECKS); do
         sleep 10
         STATUS=$(auth_curl \
           "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
           | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
-        echo "  Status: ${STATUS} (check ${i}/60)"
+        echo "  Status: ${STATUS} (check ${i}/${POLL_CHECKS})"
         case "$STATUS" in
           successful) echo "=== DISPATCHER COMPLETED SUCCESSFULLY ===" && exit 0 ;;
           failed|error|canceled) echo "=== DISPATCHER FAILED (status: ${STATUS}) ===" && exit 1 ;;
         esac
       done
-      echo "=== TIMEOUT: Job still running after 10 minutes ==="
+
+      # Graceful timeout — queued/running is not a failure
+      case "$STATUS" in
+        pending|waiting|running)
+          echo "WARNING: Dispatcher job ${JOB_ID} still ${STATUS} after ${POLL_TIMEOUT_MINUTES} min — exiting with success. Check AAP UI for final status."
+          echo "AAP UI: https://${AAP_HOST}/#/jobs/playbook/${JOB_ID}/output"
+          exit 0 ;;
+      esac
+      echo "=== TIMEOUT: Job in unexpected state '${STATUS}' after ${POLL_TIMEOUT_MINUTES} min ==="
       exit 1
   retry: 2
   rules:

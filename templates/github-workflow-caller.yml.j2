@@ -9,6 +9,8 @@ jobs:
     uses: {{ platform_scm_org }}/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
     with:
       dispatcher_jt_name: jt-platform-casc_dispatcher
+      # wait_for_completion: true       # set false for fire-and-forget mode
+      # poll_timeout_minutes: 30        # increase for large deployments
     secrets:
       AAP_HOST: {% raw %}${{ secrets.AAP_HOST }}{% endraw %}
       AAP_USERNAME: {% raw %}${{ secrets.AAP_USERNAME }}{% endraw %}
