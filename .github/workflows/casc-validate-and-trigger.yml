@@ -225,8 +225,18 @@ jobs:
             echo "Using basic auth (demo/sandbox mode) for environment: ${ENV}"
           else
             echo "auth_mode=skip" >> $GITHUB_OUTPUT
-            echo "No AAP credentials configured — skipping trigger (validate-only mode)"
+            echo "::warning::No AAP credentials configured — dispatcher will NOT be triggered. If this is unexpected, check that org/repo secrets (AAP_HOST, AAP_USERNAME, AAP_PASSWORD) are accessible. On GitHub Free plans, org-level secrets require public repo visibility."
           fi
+
+      - name: Fail if trigger was expected but secrets are missing
+        if: steps.auth.outputs.auth_mode == 'skip' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: |
+          echo "::error::Dispatcher trigger skipped — no AAP credentials available."
+          echo "Possible causes:"
+          echo "  1. Org-level secrets not accessible (repo may be private on GitHub Free plan)"
+          echo "  2. Secrets AAP_HOST / AAP_USERNAME / AAP_PASSWORD not configured"
+          echo "  3. Per-env secrets (AAP_PRD_HOST/TOKEN, etc.) not configured for branch '${GITHUB_REF_NAME}'"
+          exit 1
 
       - name: Trigger AAP dispatcher
         if: steps.auth.outputs.auth_mode != 'skip'
