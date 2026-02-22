@@ -159,8 +159,11 @@ jobs:
   trigger:
     name: Trigger Dispatcher
     needs: validate
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    concurrency:
+      group: casc-dispatcher-trigger
+      cancel-in-progress: false
     steps:
       - name: Determine auth mode and target environment
         id: auth
@@ -223,6 +226,29 @@ jobs:
             exit 1
           fi
           echo "Found JT ID: ${JT_ID}"
+
+          # Verify allow_simultaneous is false
+          ALLOW_SIMUL=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0].get('allow_simultaneous', False))")
+          if [ "$ALLOW_SIMUL" = "True" ]; then
+            echo "ERROR: Dispatcher JT '${JT_NAME}' has allow_simultaneous=true — this must be false to prevent concurrent full-sweep runs"
+            exit 1
+          fi
+
+          # Wait for any running dispatcher to finish before launching
+          echo "Checking if dispatcher is already running..."
+          for attempt in $(seq 1 12); do
+            RUNNING=$(curl -sk "${AUTH_ARGS[@]}" \
+              "https://${AAP_HOST}/api/controller/v2/jobs/?job_template=${JT_ID}&status__in=running,pending,waiting&page_size=1" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))")
+            if [ "$RUNNING" = "0" ]; then
+              break
+            fi
+            echo "  Dispatcher is busy (attempt ${attempt}/12) — waiting 15s..."
+            sleep 15
+          done
+          if [ "$RUNNING" != "0" ]; then
+            echo "WARNING: Dispatcher still running after 3 min wait — launching anyway (AAP will queue)"
+          fi
 
           echo "Launching dispatcher..."
           LAUNCH_RESPONSE=$(curl -sk -X POST "${AUTH_ARGS[@]}" \

@@ -26,8 +26,9 @@ stages:
   - trigger
 
 variables:
-  # Override ENGINE_PROJECT_PATH at the GitLab group level to match your platform group
-  ENGINE_PROJECT_PATH: "platform-team/aap-casc-engine"
+  # REQUIRED: Override ENGINE_PROJECT_PATH at the GitLab group level
+  # Set to your platform group's engine repo path, e.g. "my-platform-group/aap-casc-engine"
+  ENGINE_PROJECT_PATH: ""
   SCHEMA_DIR: "${CI_PROJECT_DIR}/.schemas"
   DISPATCHER_JT_NAME: "jt-platform-casc-dispatcher"
 
@@ -39,6 +40,11 @@ fetch:schemas:
     - apk add --no-cache git
   script:
     - |
+      if [ -z "$ENGINE_PROJECT_PATH" ]; then
+        echo "ERROR: ENGINE_PROJECT_PATH is not set."
+        echo "Set it as a CI/CD variable at the GitLab group level, e.g. 'my-platform-group/aap-casc-engine'"
+        exit 1
+      fi
       git clone --depth 1 --branch main \
         "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${ENGINE_PROJECT_PATH}.git" /tmp/engine
       mkdir -p .schemas
@@ -60,7 +66,7 @@ validate:json-schema:
     - |
       echo "=== CasC JSON Validation Pipeline ==="
       ERRORS=0
-      for json_file in $(find . -name "*.json" -not -path "./.schemas/*"); do
+      for json_file in $(find . -name "*.json" -not -path "./.schemas/*" -not -path "./.git/*"); do
         key_count=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1])).keys()))" "$json_file" 2>/dev/null)
         if [ "$key_count" != "1" ]; then
           echo "ERROR: $json_file has $key_count top-level keys (expected exactly 1)"
@@ -122,7 +128,7 @@ validate:policy-compliance:
     - |
       if [ -d ".schemas/policies" ]; then
         echo "=== Checking OPA policy compliance ==="
-        for json_file in $(find . -name "*.json" -not -path "./.schemas/*"); do
+        for json_file in $(find . -name "*.json" -not -path "./.schemas/*" -not -path "./.git/*"); do
           echo "Policy check: $json_file"
           opa eval --data .schemas/policies/ --input "$json_file" "data.casc.deny" --format pretty
         done

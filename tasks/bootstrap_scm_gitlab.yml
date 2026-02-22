@@ -138,11 +138,7 @@
     body_format: json
     body:
       branch: "main"
-      content: |
-        include:
-          - project: '{{ platform_scm_org }}/aap-casc-engine'
-            ref: 'main'
-            file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
+      content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
       commit_message: "Bootstrap: shared pipeline template"
     status_code: [200, 201]
   loop: "{{ _gl_ci_checks.results }}"
