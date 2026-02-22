@@ -13,7 +13,14 @@
 #       uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
 #       with:
 #         dispatcher_jt_name: jt-platform-casc_dispatcher
-#       secrets: inherit
+#       secrets:
+#         AAP_HOST: ${{ secrets.AAP_HOST }}
+#         AAP_USERNAME: ${{ secrets.AAP_USERNAME }}
+#         AAP_PASSWORD: ${{ secrets.AAP_PASSWORD }}
+#         ENGINE_REPO_TOKEN: ${{ secrets.ENGINE_REPO_TOKEN }}
+#
+# NOTE: secrets: inherit only works within the same GitHub organization.
+# Cross-org callers MUST pass secrets explicitly as shown above.
 #
 # Supports two authentication modes:
 #   1. Bearer token (production) — per-environment secrets: AAP_DEV_HOST/TOKEN, etc.
