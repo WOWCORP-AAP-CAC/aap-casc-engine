@@ -331,7 +331,7 @@ The workflow supports **dual authentication**:
 - **Bearer token** (production) — per-environment secrets with branch-to-env routing
 - **Basic auth** (demo/sandbox) — single-host secrets for quick validation setups
 
-If per-env token secrets are set, Bearer token auth with branch routing is used. Otherwise, if `AAP_HOST` + `AAP_USERNAME` + `AAP_PASSWORD` are set, basic auth against a single AAP host is used. If neither is configured, the trigger stage is skipped (validate-only mode).
+If per-env token secrets are set, Bearer token auth with branch routing is used. Otherwise, if `AAP_HOST` + `AAP_USERNAME` + `AAP_PASSWORD` are set, basic auth against a single AAP host is used. If neither is configured and the event is a push or manual trigger, the pipeline **fails with an error** (missing credentials should not silently succeed). On pull request / merge request events, missing credentials are acceptable — the pipeline runs in validate-only mode.
 
 ### Required CI/CD Variables
 

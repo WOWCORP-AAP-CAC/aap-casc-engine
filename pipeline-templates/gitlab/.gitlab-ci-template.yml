@@ -165,7 +165,7 @@ validate:policy-compliance:
 # Supports dual auth: Bearer token (production) or basic auth (demo/sandbox).
 # If per-env token variables are set, Bearer token auth with branch routing is used.
 # Otherwise, if AAP_HOST + AAP_USERNAME + AAP_PASSWORD are set, basic auth is used.
-# If neither is configured, the trigger stage is skipped.
+# If neither is configured: push/manual triggers fail (missing creds); MR events skip (validate-only).
 trigger:dispatcher:
   stage: trigger
   image: python:3.11-slim
@@ -284,6 +284,10 @@ trigger:dispatcher:
       fi
 
       # Poll for job completion (configurable timeout)
+      if ! echo "$POLL_TIMEOUT_MINUTES" | grep -qE '^[0-9]+$' || [ "$POLL_TIMEOUT_MINUTES" -lt 1 ]; then
+        echo "WARNING: Invalid POLL_TIMEOUT_MINUTES '${POLL_TIMEOUT_MINUTES}' — using default 30"
+        POLL_TIMEOUT_MINUTES=30
+      fi
       POLL_CHECKS=$(( POLL_TIMEOUT_MINUTES * 6 ))
       echo "Waiting for job to complete (timeout: ${POLL_TIMEOUT_MINUTES} min)..."
       for i in $(seq 1 $POLL_CHECKS); do

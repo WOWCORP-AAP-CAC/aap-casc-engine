@@ -310,6 +310,10 @@ jobs:
 
           # Poll for job completion (configurable timeout)
           POLL_TIMEOUT=${{ inputs.poll_timeout_minutes }}
+          if ! echo "$POLL_TIMEOUT" | grep -qE '^[0-9]+$' || [ "$POLL_TIMEOUT" -lt 1 ]; then
+            echo "WARNING: Invalid poll_timeout_minutes '${POLL_TIMEOUT}' — using default 30"
+            POLL_TIMEOUT=30
+          fi
           POLL_CHECKS=$(( POLL_TIMEOUT * 6 ))
           echo "Waiting for job to complete (timeout: ${POLL_TIMEOUT} min)..."
           for i in $(seq 1 $POLL_CHECKS); do
