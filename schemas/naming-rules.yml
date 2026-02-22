@@ -9,7 +9,7 @@ aap_organizations:
   description: "Organizations: org-<identifier>"
 
 controller_projects:
-  pattern: "^prj-pbk-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$"
+  pattern: "^prj-pbk-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)*$"
   example: "prj-pbk-myorg01-db_patching"
   description: "Projects: prj-pbk-<org_id>-<use_case>"
 
@@ -24,9 +24,9 @@ controller_credential_types:
   description: "Credential types: ctp-<purpose>"
 
 controller_inventories:
-  pattern: "^inv-[a-z0-9_]+-[a-z]+-[a-z0-9_]+(-[a-z0-9_]+)?$"
-  example: "inv-myorg01-src-prod-servers"
-  description: "Inventories: inv-<org_id>-<source_type>-<scope>-<name>"
+  pattern: "^inv-[a-z0-9_]+(-[a-z0-9_]+)+$"
+  example: "inv-myorg01-dev"
+  description: "Inventories: inv-<org_id>-<env> or inv-<org_id>-<source>-<env>-<name>"
 
 controller_templates:
   pattern: "^jt-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$"
@@ -34,9 +34,9 @@ controller_templates:
   description: "Job templates: jt-<org_id>-<use_case>"
 
 controller_schedules:
-  pattern: "^sch-[a-z0-9_]+(-[a-z]+)?$"
-  example: "sch-platform-drift-detection-dev"
-  description: "Schedules: sch-<purpose>-<env>"
+  pattern: "^sch-[a-z0-9_]+(-[a-z0-9_]+)*$"
+  example: "sch-demo_alpha-nightly-hello"
+  description: "Schedules: sch-<org_id>-<purpose>"
 
 controller_workflows:
   pattern: "^wfjt-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$"
