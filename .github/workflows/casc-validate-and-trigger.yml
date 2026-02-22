@@ -78,11 +78,20 @@ jobs:
       - name: Derive engine repo from workflow context
         id: engine
         run: |
-          # github.workflow_ref = "owner/repo/.github/workflows/file.yml@refs/heads/branch"
-          ENGINE_REPO="${{ github.workflow_ref }}"
-          ENGINE_REPO="${ENGINE_REPO%%/.github/*}"
+          # github.workflow_ref resolves to the CALLER workflow in reusable workflows,
+          # not this reusable workflow. Parse the caller's workflow file instead to
+          # extract the engine repo from its uses: directive.
+          USES_LINE=$(grep -r 'uses:.*casc-validate-and-trigger' .github/workflows/ 2>/dev/null | head -1)
+          if [ -n "$USES_LINE" ]; then
+            ENGINE_REPO=$(echo "$USES_LINE" | sed 's|.*uses:[[:space:]]*||' | sed 's|/.github/.*||')
+            echo "Engine repo (from caller workflow): ${ENGINE_REPO}"
+          else
+            # Fallback for direct invocation (non-reusable context)
+            ENGINE_REPO="${{ github.workflow_ref }}"
+            ENGINE_REPO="${ENGINE_REPO%%/.github/*}"
+            echo "Engine repo (fallback from workflow_ref): ${ENGINE_REPO}"
+          fi
           echo "repo=${ENGINE_REPO}" >> $GITHUB_OUTPUT
-          echo "Engine repo: ${ENGINE_REPO}"
 
       - name: Checkout engine repo (schemas)
         uses: actions/checkout@v4
