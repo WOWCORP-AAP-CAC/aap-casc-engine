@@ -4,7 +4,7 @@
             "name": "jt-myorg01-db_patching",
             "description": "Database patching automation for myorg01",
             "organization": "org-myorg01",
-            "project": "prj-pbk-myorg01-db_patching",
+            "project": "prj-myorg01-db_patching",
             "playbook": "site.yml",
             "inventory": "inv-myorg01-src-prod-servers",
             "credentials": [

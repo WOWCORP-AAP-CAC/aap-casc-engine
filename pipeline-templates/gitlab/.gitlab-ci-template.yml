@@ -30,7 +30,7 @@ variables:
   # Set to your platform group's engine repo path, e.g. "my-platform-group/aap-casc-engine"
   ENGINE_PROJECT_PATH: ""
   SCHEMA_DIR: "${CI_PROJECT_DIR}/.schemas"
-  DISPATCHER_JT_NAME: "jt-platform-casc-dispatcher"
+  DISPATCHER_JT_NAME: "jt-platform-casc_dispatcher"
 
 # ── Pre-stage: Fetch schemas from engine repo ────────────────────────────────
 fetch:schemas:
@@ -51,6 +51,7 @@ fetch:schemas:
       cp /tmp/engine/schemas/*.schema.json .schemas/ 2>/dev/null || true
       [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/ || true
       [ -f /tmp/engine/schemas/naming-rules.yml ] && cp /tmp/engine/schemas/naming-rules.yml .schemas/ || true
+      [ -f /tmp/engine/schemas/check_naming_sync.py ] && cp /tmp/engine/schemas/check_naming_sync.py .schemas/ || true
       [ -d /tmp/engine/schemas/policies ] && cp -r /tmp/engine/schemas/policies .schemas/ || true
   artifacts:
     paths:
@@ -115,6 +116,23 @@ validate:naming-convention:
         echo "=== NAMING CONVENTIONS PASSED ==="
       else
         echo "No naming validation scripts found — skipping."
+      fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+validate:naming-sync:
+  stage: validate
+  image: python:3.11-slim
+  before_script:
+    - pip install pyyaml
+  script:
+    - |
+      if [ -f ".schemas/check_naming_sync.py" ]; then
+        python3 .schemas/check_naming_sync.py
+      else
+        echo "No naming sync check script found — skipping."
       fi
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'

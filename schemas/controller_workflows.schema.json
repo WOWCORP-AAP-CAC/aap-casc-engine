@@ -11,7 +11,7 @@
                 "properties": {
                     "name": {
                         "type": "string",
-                        "pattern": "^wfjt-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$",
+                        "pattern": "^wfjt-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)*$",
                         "description": "Workflow job template name following naming convention: wfjt-<org_id>-<use_case>"
                     },
                     "description": { "type": "string" },

@@ -22,7 +22,7 @@
 #   JT extra vars: scm_base_url, platform_scm_org, engine_repo,
 #                  default_organization, env_branch_map (optional override)
 #   Survey: platform_scm_org, repo_visibility, default_organization
-#   Credential: cred-platform-scm-token (injects SCM_TOKEN)
+#   Credential: crd-platform-scm-token (injects SCM_TOKEN)
 
 - name: "Hybrid CasC — Platform Genesis"
   hosts: localhost
@@ -223,6 +223,6 @@
           ══════════════════════════════════════════════════════
           Next steps:
             1. Create AAP Project pointing to {{ platform_scm_org }}/{{ engine_repo }}
-            2. Create dispatcher, drift-detection, and bootstrap Job Templates
+            2. Create dispatcher, drift_detection, and bootstrap Job Templates
             3. Run bootstrap to onboard your first tenant
           ══════════════════════════════════════════════════════

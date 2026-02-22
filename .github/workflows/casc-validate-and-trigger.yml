@@ -12,7 +12,7 @@
 #     casc:
 #       uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
 #       with:
-#         dispatcher_jt_name: jt-platform-casc-dispatcher
+#         dispatcher_jt_name: jt-platform-casc_dispatcher
 #       secrets: inherit
 #
 # Supports two authentication modes:
@@ -36,7 +36,7 @@ on:
       dispatcher_jt_name:
         description: "Name of the AAP dispatcher Job Template to trigger"
         required: false
-        default: "jt-platform-casc-dispatcher"
+        default: "jt-platform-casc_dispatcher"
         type: string
     secrets:
       # Production — per-environment Bearer token auth
@@ -107,6 +107,7 @@ jobs:
           cp .engine/schemas/*.schema.json .schemas/ 2>/dev/null || true
           [ -f .engine/schemas/validate_naming.py ] && cp .engine/schemas/validate_naming.py .schemas/ || true
           [ -f .engine/schemas/naming-rules.yml ] && cp .engine/schemas/naming-rules.yml .schemas/ || true
+          [ -f .engine/schemas/check_naming_sync.py ] && cp .engine/schemas/check_naming_sync.py .schemas/ || true
           [ -d .engine/schemas/policies ] && cp -r .engine/schemas/policies .schemas/ || true
 
       - name: Set up Python
@@ -161,6 +162,14 @@ jobs:
             echo "=== NAMING CONVENTIONS PASSED ==="
           else
             echo "No naming validation scripts found — skipping."
+          fi
+
+      - name: Check naming rules / schema sync
+        run: |
+          if [ -f ".schemas/check_naming_sync.py" ]; then
+            python3 .schemas/check_naming_sync.py
+          else
+            echo "No naming sync check script found — skipping."
           fi
 
       - name: Check policy compliance (OPA)

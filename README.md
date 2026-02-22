@@ -131,19 +131,19 @@ Files are included or excluded based on the `target_env` variable (set in the di
 
 > **Warning — accidental env-suffix matching:** The engine uses a regex (`-(dev|tst|npr|prd)$` before `.json`) to detect environment-specific files. Any filename ending in `-dev`, `-tst`, `-npr`, or `-prd` (before `.json`) is treated as environment-specific and will be **excluded** when the dispatcher runs for a different environment. For example, a file named `inv-dev.json` would only be included when `target_env=dev` — if this inventory is intended for all environments, name it `inv-development.json` or `inv-alpha-dev-servers.json` instead. Similarly, `crd-prod.json` would not match `prd` (the suffix must be exactly `-prd`), but `crd-prd.json` would.
 
-**AAP resource naming prefixes:**
+**AAP resource naming prefixes (Naming Standard v1):**
 
 | Resource type | Prefix | Example |
 |---------------|--------|---------|
 | Organizations | `org-` | `org-demo_alpha` |
-| Projects | `prj-` | `prj-hello-world` |
-| Credentials | `crd-` | `crd-demo-machine` |
+| Projects | `prj-` | `prj-demo_alpha-hello_world` |
+| Credentials | `crd-` | `crd-demo_alpha-machine-demo` |
 | Credential Types | `ctp-` | `ctp-database_credentials` |
-| Inventories | `inv-` | `inv-alpha-development` |
-| Job Templates | `jt-` | `jt-hello-world` |
-| Workflows | `wfjt-` | `wfjt-deploy-pipeline` |
-| Schedules | `sch-` | `sch-nightly` |
-| Notifications | `ntf-` | `ntf-slack-alerts` |
+| Inventories | `inv-` | `inv-demo_alpha-dev` |
+| Job Templates | `jt-` | `jt-demo_alpha-hello_world` |
+| Workflows | `wfjt-` | `wfjt-demo_alpha-deploy_pipeline` |
+| Schedules | `sch-` | `sch-demo_alpha-nightly` |
+| Notifications | `ntf-` | `ntf-demo_alpha-slack-alerts` |
 | Execution Environments | `ee-` | `ee-rhel9-ansible218-base` |
 
 ### 2. Run Platform Genesis
@@ -165,7 +165,7 @@ Genesis reads the default `repos-manifest.yml` from this engine repo, merges any
 2. Pushes the merged manifest to the manifest repo (default: `aap-organizations-global`, override via `MANIFEST_REPO` env var) on first run only — reruns skip this to preserve `tenant_repos` entries added by bootstrap
 3. Seeds CI/CD thin callers and READMEs in each repo
 
-**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `cred-platform-scm-token`, and set extra vars for `scm_base_url`, `platform_scm_org`, `engine_repo`, and `default_organization`. Optionally add `env_branch_map` as an extra_var to override the GitFlow default. No AAP connection credential is needed — genesis only interacts with the SCM API.
+**Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `crd-platform-scm-token`, and set extra vars for `scm_base_url`, `platform_scm_org`, `engine_repo`, and `default_organization`. Optionally add `env_branch_map` as an extra_var to override the GitFlow default. No AAP connection credential is needed — genesis only interacts with the SCM API.
 
 ### Post-Genesis Manifest Changes
 
@@ -216,7 +216,7 @@ ansible-playbook drift-detect.yml -e target_env=prd -e drift_mode=remediate
 
 The drift report is published as an **AAP job artifact** via `set_stats`. Each job run stores its own report in the AAP database — retrievable from the job details page in the UI or via the API at `/api/controller/v2/jobs/<id>/` in the `artifacts` field. Reports are never overwritten; each run creates a new job record with its own artifact, providing a full audit history. A human-readable summary is also printed to the job stdout.
 
-**Understanding "extra in live" drift:** The drift report will show "extra in live" items for platform-managed resources that exist in AAP but are not defined in the CasC config repos — such as the engine project (`prj-platform-casc-engine`), platform job templates (`jt-platform-*`), custom credential types (`CasC SCM Token`), and AAP built-in defaults (`Demo Project`). This is **expected and by design**. The dispatcher is additive/convergent — it creates and updates resources from Git but never deletes resources from AAP that are absent from Git. Investigate "extra in live" items that don't follow known naming patterns, as they may indicate unauthorized manual changes.
+**Understanding "extra in live" drift:** The drift report will show "extra in live" items for platform-managed resources that exist in AAP but are not defined in the CasC config repos — such as the engine project (`prj-platform-casc_engine`), platform job templates (`jt-platform-*`), custom credential types (`CasC SCM Token`), and AAP built-in defaults (`Demo Project`). This is **expected and by design**. The dispatcher is additive/convergent — it creates and updates resources from Git but never deletes resources from AAP that are absent from Git. Investigate "extra in live" items that don't follow known naming patterns, as they may indicate unauthorized manual changes.
 
 ### 6. Bootstrap a New Tenant
 
@@ -245,6 +245,35 @@ ansible-playbook bootstrap.yml \
 
 ## CI/CD Pipeline Setup
 
+### CI/CD Architecture
+
+The engine ships three CI/CD pipeline implementations:
+
+```mermaid
+flowchart LR
+    subgraph liveGH ["GitHub — Live Reusable Workflow"]
+        A[".github/workflows/casc-validate-and-trigger.yml"]
+    end
+    subgraph standaloneGH ["GitHub — Standalone Copy"]
+        B["pipeline-templates/github/casc-validate-and-trigger.yml"]
+    end
+    subgraph gitlabCI ["GitLab — Shared Template"]
+        C["pipeline-templates/gitlab/.gitlab-ci-template.yml"]
+    end
+    subgraph callers ["Thin Callers (Seeded by Genesis/Bootstrap)"]
+        D["GitHub: .github/workflows/casc.yml"]
+        E["GitLab: .gitlab-ci.yml"]
+    end
+    D -->|"uses:"| A
+    E -->|"include:"| C
+```
+
+- **Live reusable workflow** (`.github/workflows/`) — primary GitHub implementation; thin callers reference via `uses:`.
+- **Standalone GitHub copy** (`pipeline-templates/github/`) — for environments that cannot use reusable workflows. Copy into the repo and set `vars.ENGINE_REPO`.
+- **GitLab shared template** (`pipeline-templates/gitlab/`) — for GitLab environments; thin callers reference via `include:`.
+
+All three have feature parity: 4-stage validation, dual authentication, three-layer concurrency/serialization, manual trigger support, and branch-to-environment routing.
+
 ### GitLab CI
 
 Tenant repos include the shared pipeline template:
@@ -257,7 +286,7 @@ include:
     file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
 ```
 
-> **Note:** Replace `<platform-group>` with the full path to the engine project in your GitLab instance. Override the `ENGINE_PROJECT_PATH` CI/CD variable if the engine project lives at a non-default path.
+> **Note:** Replace `<platform-group>` with the full path to the engine project in your GitLab instance. Set `ENGINE_PROJECT_PATH` as a **group-level CI/CD variable** (e.g., `my-platform-group/aap-casc-engine`). The pipeline fails fast with a clear error if this variable is empty. If tenant repos are in a different GitLab group, add them to the engine project's CI/CD Token Access allowlist (Settings > CI/CD > Token Access) so `CI_JOB_TOKEN` can authenticate the schema fetch.
 
 ### GitHub Actions
 
@@ -275,7 +304,7 @@ jobs:
   casc:
     uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
     with:
-      dispatcher_jt_name: jt-platform-casc-dispatcher
+      dispatcher_jt_name: jt-platform-casc_dispatcher
     secrets: inherit
 ```
 
@@ -311,7 +340,7 @@ If per-env token secrets are set, Bearer token auth with branch routing is used.
 
 | Input | Default | Description |
 |-------|---------|-------------|
-| `dispatcher_jt_name` | `jt-platform-casc-dispatcher` | Name of the dispatcher Job Template to trigger |
+| `dispatcher_jt_name` | `jt-platform-casc_dispatcher` | Name of the dispatcher Job Template to trigger |
 
 **Optional secrets:**
 
@@ -328,9 +357,9 @@ Create these Job Templates in each AAP environment:
 | Job Template | Playbook | Purpose |
 |-------------|----------|---------|
 | `jt-platform-genesis` | `genesis.yml` | One-time platform repo creation (SCM only) |
-| `jt-platform-casc-dispatcher` | `site.yml` | Main dispatcher — apply CasC configuration |
-| `jt-platform-drift-detection` | `drift-detect.yml` | Drift detection and reconciliation |
-| `jt-platform-bootstrap-tenant` | `bootstrap.yml` | Onboard new tenant organizations |
+| `jt-platform-casc_dispatcher` | `site.yml` | Main dispatcher — apply CasC configuration |
+| `jt-platform-drift_detection` | `drift-detect.yml` | Drift detection and reconciliation |
+| `jt-platform-bootstrap_tenant` | `bootstrap.yml` | Onboard new tenant organizations |
 
 ## AAP Credential Types
 
@@ -340,7 +369,7 @@ All sensitive connection values are injected at runtime via AAP credentials atta
 
 Injects `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, `CONTROLLER_VERIFY_SSL` as environment variables. The dispatcher, drift-detect, and bootstrap playbooks read these via `lookup('env', ...)`.
 
-- Credential name (demo): `cred-platform-aap-connection`
+- Credential name (demo): `crd-platform-aap-connection`
 - Attach to dispatcher, drift-detection, and bootstrap JTs (not genesis — genesis only uses SCM)
 
 ### Custom: CasC SCM Token
@@ -353,7 +382,7 @@ The built-in GitHub/GitLab PAT credential types have empty injectors -- they can
 
 Both `scm_token` (git clone) and `scm_api_token` (bootstrap/genesis SCM API) resolve from the single `SCM_TOKEN` environment variable.
 
-- Credential name (demo): `cred-platform-scm-token`
+- Credential name (demo): `crd-platform-scm-token`
 - Attach to all 4 Job Templates (genesis, dispatcher, drift-detection, bootstrap)
 
 ### What Stays in extra_vars
@@ -380,7 +409,7 @@ Bootstrap follows a 4-phase handshake between the platform and tenant teams:
 
 1. **Intake** -- Tenant provides `org_id`, `team_name`, `team_lead`, `tenant_scm_org`, preferred `repo_pattern`
 2. **SCM + CI/CD prerequisite** -- Platform team adds service account to tenant's SCM org and configures CI/CD secrets
-3. **Bootstrap execution** -- Platform team runs `jt-platform-bootstrap-tenant` with tenant survey inputs
+3. **Bootstrap execution** -- Platform team runs `jt-platform-bootstrap_tenant` with tenant survey inputs
 4. **Handover** -- Platform team provides tenant with repo URLs, pipeline usage guide, and first-action path
 
 See the platform team user guide for a detailed checklist.
@@ -409,6 +438,29 @@ The CI/CD pipeline trigger stage authenticates with AAP using secrets stored in 
 | Engine `CI_JOB_TOKEN` allowlist | Always | Add tenant groups to the engine project's Token Access settings |
 
 The AAP user/token used by CI/CD should have **only Execute permission** on the dispatcher JT. Rotate tokens on a schedule and enable AAP activity stream monitoring.
+
+## Runtime Prerequisites
+
+Before pipelines will function correctly, verify these conditions outside the templates:
+
+| Category | Prerequisite | GitHub Actions | GitLab CI |
+|----------|-------------|----------------|-----------|
+| **Engine access** | Pipeline can fetch schemas from this repo | `ENGINE_REPO_TOKEN` org secret (PAT with read access) if private; `github.token` for public | Add tenant projects/groups to engine project's **CI/CD Token Access allowlist** |
+| **Engine path** | Pipeline knows where the engine repo lives | Auto-resolved from caller's `uses:` directive | Set `ENGINE_PROJECT_PATH` as group-level CI/CD variable |
+| **AAP credentials** | Pipeline can authenticate to AAP API | Org-level secrets: Bearer tokens or basic auth | Group-level CI/CD variables: same choices |
+| **Dispatcher JT** | `jt-platform-casc_dispatcher` exists, `allow_simultaneous` = false | Pipeline verifies at runtime; fails if misconfigured | Same AAP API checks |
+| **AAP API reachability** | CI/CD runners can reach AAP over HTTPS | Runner network allows outbound HTTPS | Same requirement |
+
+## Event-Path Testing
+
+After setup, verify each event path works:
+
+| Event | How to test | Expected behavior |
+|-------|------------|-------------------|
+| **Push** | Push a JSON change to `main` | Validation passes, trigger launches dispatcher, AAP job succeeds |
+| **PR / MR** | Open a PR/MR to `main` | Validation runs; trigger stage is **skipped** |
+| **Manual** | GitHub: Actions tab > "Run workflow" (both stages run automatically); GitLab: CI/CD > "Run pipeline" (validation runs automatically; trigger job requires an additional manual click) | Validation passes; dispatcher launches in FULL mode |
+| **Branch routing** | Push to `feature/*`, `develop`, `release/*` | Correct `TARGET_ENV` selected (dev/tst/npr/prd) |
 
 ## Local Validation
 

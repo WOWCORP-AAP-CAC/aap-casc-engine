@@ -11,7 +11,7 @@
                 "properties": {
                     "name": {
                         "type": "string",
-                        "pattern": "^jt-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$",
+                        "pattern": "^jt-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)*$",
                         "description": "Job template name following naming convention: jt-<org_id>-<use_case>"
                     },
                     "description": { "type": "string" },

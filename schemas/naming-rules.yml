@@ -9,9 +9,9 @@ aap_organizations:
   description: "Organizations: org-<identifier>"
 
 controller_projects:
-  pattern: "^prj-pbk-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)*$"
-  example: "prj-pbk-myorg01-db_patching"
-  description: "Projects: prj-pbk-<org_id>-<use_case>"
+  pattern: "^prj-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)*$"
+  example: "prj-myorg01-db_patching"
+  description: "Projects: prj-<org_id>-<use_case>"
 
 controller_credentials:
   pattern: "^crd-[a-z0-9_]+-[a-z]+-[a-z0-9_]+$"
@@ -29,7 +29,7 @@ controller_inventories:
   description: "Inventories: inv-<org_id>-<env> or inv-<org_id>-<source>-<env>-<name>"
 
 controller_templates:
-  pattern: "^jt-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$"
+  pattern: "^jt-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)*$"
   example: "jt-myorg01-db_patching"
   description: "Job templates: jt-<org_id>-<use_case>"
 
@@ -39,7 +39,7 @@ controller_schedules:
   description: "Schedules: sch-<org_id>-<purpose>"
 
 controller_workflows:
-  pattern: "^wfjt-[a-z0-9_]+-[a-z0-9_]+(-[a-z]+)?$"
+  pattern: "^wfjt-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)*$"
   example: "wfjt-myorg01-db_patching_workflow"
   description: "Workflow job templates: wfjt-<org_id>-<use_case>"
 
@@ -52,3 +52,18 @@ controller_execution_environments:
   pattern: "^ee-[a-z0-9]+-[a-z0-9_]+-[a-z]+$"
   example: "ee-rhel9-ansible218-base"
   description: "Execution environments: ee-<os>-<ansible_version>-<purpose>"
+
+# ── Intentionally unconstrained resources (Naming Standard v1) ──────────────
+# The following resource types do NOT have naming rules enforced by validation:
+#
+# aap_teams — Team names come from identity systems (LDAP, SSO, IdP group sync).
+#   Customers use their own organizational conventions; imposing a regex would
+#   conflict with external naming authority.
+#
+# gateway_role_user_assignments / gateway_role_team_assignments — These reference
+#   vendor-owned AAP Gateway role names (e.g., "Organization Admin", "Team Member").
+#   The role names are defined by the AAP product, not by the CasC solution.
+#
+# controller_settings — AAP internal setting keys are product-defined identifiers
+#   (e.g., "AWX_TASK_ENV", "GALAXY_IGNORE_CERTS"). These are not user-configurable
+#   resource names; they must match AAP's expected keys exactly.
