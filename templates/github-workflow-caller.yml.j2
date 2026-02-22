@@ -9,4 +9,16 @@ jobs:
     uses: {{ platform_scm_org }}/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
     with:
       dispatcher_jt_name: jt-platform-casc_dispatcher
-    secrets: inherit
+    secrets:
+      AAP_HOST: {% raw %}${{ secrets.AAP_HOST }}{% endraw %}
+      AAP_USERNAME: {% raw %}${{ secrets.AAP_USERNAME }}{% endraw %}
+      AAP_PASSWORD: {% raw %}${{ secrets.AAP_PASSWORD }}{% endraw %}
+      AAP_DEV_HOST: {% raw %}${{ secrets.AAP_DEV_HOST }}{% endraw %}
+      AAP_DEV_TOKEN: {% raw %}${{ secrets.AAP_DEV_TOKEN }}{% endraw %}
+      AAP_TST_HOST: {% raw %}${{ secrets.AAP_TST_HOST }}{% endraw %}
+      AAP_TST_TOKEN: {% raw %}${{ secrets.AAP_TST_TOKEN }}{% endraw %}
+      AAP_NPR_HOST: {% raw %}${{ secrets.AAP_NPR_HOST }}{% endraw %}
+      AAP_NPR_TOKEN: {% raw %}${{ secrets.AAP_NPR_TOKEN }}{% endraw %}
+      AAP_PRD_HOST: {% raw %}${{ secrets.AAP_PRD_HOST }}{% endraw %}
+      AAP_PRD_TOKEN: {% raw %}${{ secrets.AAP_PRD_TOKEN }}{% endraw %}
+      ENGINE_REPO_TOKEN: {% raw %}${{ secrets.ENGINE_REPO_TOKEN }}{% endraw %}
