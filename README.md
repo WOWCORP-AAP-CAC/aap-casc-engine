@@ -324,7 +324,7 @@ jobs:
 
 The `workflow_dispatch` event enables manual pipeline runs from the GitHub Actions tab or via `gh workflow run`.
 
-**Concurrency and serialization:** Within each repo, the trigger job uses `concurrency: { group: casc-dispatcher-trigger, cancel-in-progress: false }` to queue rapid successive pushes (GitLab equivalent: `resource_group: casc-dispatcher`). Across repos, the trigger script polls the AAP API for running/pending/waiting dispatcher jobs and waits up to 3 minutes before launching — this AAP-level busy-wait is the primary cross-repo serialization mechanism. The dispatcher JT must have `allow_simultaneous` set to **false** (the default) as the ultimate safety net — the pipeline verifies this at runtime and fails immediately if misconfigured. Even if two pipelines pass the busy-wait simultaneously, AAP queues the second launch.
+**Concurrency and serialization:** Within each repo, the trigger job uses `concurrency: { group: casc-dispatcher-trigger, cancel-in-progress: false }` to queue rapid successive pushes (GitLab equivalent: `resource_group: casc-dispatcher`). Across repos, the trigger script performs a quick courtesy check (2 x 15s = 30s) for running/pending/waiting dispatcher jobs before launching — if the dispatcher is busy, it launches anyway and lets AAP handle the queuing via `allow_simultaneous: false`. The dispatcher JT must have `allow_simultaneous` set to **false** (the default) as the ultimate safety net — the pipeline verifies this at runtime and fails immediately if misconfigured. Even if two pipelines launch simultaneously, AAP queues the second launch. After launching, the pipeline polls for job completion (default: 30 min, configurable via `poll_timeout_minutes`). If the job is still pending/running at timeout, the pipeline exits with a **warning and success** — the dispatcher IS going to run, the pipeline just can't wait any longer. For burst scenarios, set `wait_for_completion: false` for fire-and-forget mode (launch and exit immediately).
 
 The workflow supports **dual authentication**:
 
@@ -350,11 +350,13 @@ If per-env token secrets are set, Bearer token auth with branch routing is used.
 | `AAP_USERNAME` | AAP username (least-privilege: execute-only on dispatcher JT) |
 | `AAP_PASSWORD` | AAP password |
 
-**Workflow inputs:**
+**Workflow inputs (GitHub) / CI/CD variables (GitLab):**
 
-| Input | Default | Description |
+| Input / Variable | Default | Description |
 |-------|---------|-------------|
-| `dispatcher_jt_name` | `jt-platform-casc_dispatcher` | Name of the dispatcher Job Template to trigger |
+| `dispatcher_jt_name` / `DISPATCHER_JT_NAME` | `jt-platform-casc_dispatcher` | Name of the dispatcher Job Template to trigger |
+| `wait_for_completion` / `WAIT_FOR_COMPLETION` | `true` | Wait for dispatcher to finish (`false` = fire-and-forget mode) |
+| `poll_timeout_minutes` / `POLL_TIMEOUT_MINUTES` | `30` | Max minutes to poll for job completion (rule of thumb: queue_depth x avg_run_time + 20% buffer) |
 
 **Optional secrets:**
 
