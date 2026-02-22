@@ -11,8 +11,8 @@
                 "properties": {
                     "name": {
                         "type": "string",
-                        "pattern": "^inv-[a-z0-9_]+-[a-z]+-[a-z0-9_]+(-[a-z0-9_]+)?$",
-                        "description": "Inventory name following naming convention: inv-<org_id>-<source_type>-<scope>-<name>"
+                        "pattern": "^inv-[a-z0-9_]+(-[a-z0-9_]+)+$",
+                        "description": "Inventory name following naming convention: inv-<org_id>-<env> or inv-<org_id>-<source>-<env>-<name>"
                     },
                     "description": { "type": "string" },
                     "organization": {

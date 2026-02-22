@@ -11,7 +11,7 @@
                 "properties": {
                     "name": {
                         "type": "string",
-                        "pattern": "^prj-pbk-[a-z0-9]+-[a-z0-9_]+(-[a-z]+)?$",
+                        "pattern": "^prj-pbk-[a-z0-9_]+-[a-z0-9_]+(-[a-z0-9_]+)*$",
                         "description": "Project name following naming convention"
                     },
                     "description": { "type": "string" },

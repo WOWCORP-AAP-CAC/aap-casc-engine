@@ -11,8 +11,8 @@
                 "properties": {
                     "name": {
                         "type": "string",
-                        "pattern": "^sch-[a-z0-9_]+(-[a-z]+)?$",
-                        "description": "Schedule name following naming convention: sch-<purpose>-<env>"
+                        "pattern": "^sch-[a-z0-9_]+(-[a-z0-9_]+)*$",
+                        "description": "Schedule name following naming convention: sch-<org_id>-<purpose>"
                     },
                     "description": { "type": "string" },
                     "unified_job_template": { "type": "string" },
