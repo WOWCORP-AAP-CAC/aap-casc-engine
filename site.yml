@@ -28,8 +28,8 @@
     target_env: "{{ lookup('env', 'TARGET_ENV') | default('dev', true) }}"
 
     # Trigger metadata (passed by CI/CD pipeline or empty for scheduled runs)
-    trigger_commit: "{{ lookup('env', 'TRIGGER_COMMIT') | default(omit, true) }}"
-    triggered_repo: "{{ lookup('env', 'TRIGGERED_REPO') | default(omit, true) }}"
+    trigger_commit: "{{ lookup('env', 'TRIGGER_COMMIT') | default('', true) }}"
+    triggered_repo: "{{ lookup('env', 'TRIGGERED_REPO') | default('', true) }}"
     trigger_source: "{{ lookup('env', 'TRIGGER_SOURCE') | default('scheduled', true) }}"
 
     # Enable production best practices
