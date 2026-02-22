@@ -255,6 +255,11 @@
             Extra in live:   {{ drift_job_templates.extra_in_live | join(', ') | default('none') }}
           ══════════════════════════════════════════════════════
 
+    - name: "Publish drift report as job artifact"
+      ansible.builtin.set_stats:
+        data:
+          drift_report: "{{ drift_report }}"
+
     - name: "Send drift notification"
       ansible.builtin.uri:
         url: "{{ notification_webhook_url }}"
