@@ -44,7 +44,6 @@ def main():
     rules = load_naming_rules(rules_path)
     errors = []
     checked = 0
-    skipped = []
 
     for resource_type, rule_data in rules.items():
         if not isinstance(rule_data, dict) or "pattern" not in rule_data:
@@ -52,7 +51,11 @@ def main():
 
         schema_file = script_dir / f"{resource_type}.schema.json"
         if not schema_file.exists():
-            skipped.append(resource_type)
+            errors.append(
+                f"  {resource_type}: naming rule defines a pattern but "
+                f"{schema_file.name} is missing — create the schema or "
+                f"remove the rule from naming-rules.yml"
+            )
             continue
 
         checked += 1
@@ -81,8 +84,6 @@ def main():
         sys.exit(1)
     else:
         print(f"=== NAMING SYNC CHECK PASSED ({checked} resource types verified) ===")
-        if skipped:
-            print(f"    Note: {len(skipped)} rule(s) have no schema file (OK if intentional): {', '.join(skipped)}")
         sys.exit(0)
 
 
