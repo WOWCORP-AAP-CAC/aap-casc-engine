@@ -12,6 +12,7 @@ Exit 0 if all patterns match; exit 1 with details on any mismatch.
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -21,7 +22,7 @@ def load_naming_rules(rules_path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def extract_schema_name_pattern(schema_path: Path) -> str | None:
+def extract_schema_name_pattern(schema_path: Path) -> Optional[str]:
     with open(schema_path) as f:
         schema = json.load(f)
 
