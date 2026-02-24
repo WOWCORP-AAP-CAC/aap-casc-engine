@@ -56,7 +56,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body:
-      message: "Genesis: initialize repos-manifest.yml registry"
+      message: "Genesis: initialize repos-manifest.yml registry [skip dispatch]"
       content: "{{ _genesis_manifest | b64encode }}"
     status_code: [200, 201]
   when: _gh_manifest_check.status == 404
@@ -92,7 +92,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: add CasC pipeline-as-a-service (thin caller)',
+      {{ {'message': 'Genesis: add CasC pipeline-as-a-service (thin caller) [skip dispatch]',
           'content': lookup('template', 'templates/github-workflow-caller.yml.j2') | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
@@ -126,7 +126,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: add README with repo purpose and usage',
+      {{ {'message': 'Genesis: add README with repo purpose and usage [skip dispatch]',
           'content': lookup('template', 'templates/genesis-readme.md.j2') | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]

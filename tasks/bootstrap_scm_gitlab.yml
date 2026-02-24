@@ -43,7 +43,7 @@
     body:
       branch: "main"
       content: "{{ lookup('template', 'templates/org-template.json.j2') | to_nice_json(indent=4) }}"
-      commit_message: "Bootstrap: {{ 'update' if _gl_org_file.status == 200 else 'add' }} organization org-{{ org_id }}"
+      commit_message: "Bootstrap: {{ 'update' if _gl_org_file.status == 200 else 'add' }} organization org-{{ org_id }} [skip dispatch]"
     status_code: [200, 201]
   vars:
     org_name: "org-{{ org_id }}"
@@ -69,7 +69,7 @@
     body:
       branch: "main"
       content: "{{ lookup('template', 'templates/team-template.json.j2') | to_nice_json(indent=4) }}"
-      commit_message: "Bootstrap: {{ 'update' if _gl_team_file.status == 200 else 'add' }} team for org-{{ org_id }}"
+      commit_message: "Bootstrap: {{ 'update' if _gl_team_file.status == 200 else 'add' }} team for org-{{ org_id }} [skip dispatch]"
     status_code: [200, 201]
 
 # RBAC JSON push is deferred to bootstrap.yml (after org creation in AAP)
@@ -139,7 +139,7 @@
     body:
       branch: "main"
       content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
-      commit_message: "Bootstrap: shared pipeline template"
+      commit_message: "Bootstrap: shared pipeline template [skip dispatch]"
     status_code: [200, 201]
   loop: "{{ _gl_ci_checks.results }}"
   loop_control:
@@ -167,7 +167,7 @@
     body:
       branch: "main"
       content: "{{ _seed_content }}"
-      commit_message: "Bootstrap: example JSON sample (rename to .json to activate)"
+      commit_message: "Bootstrap: example JSON sample (rename to .json to activate) [skip dispatch]"
     status_code: [200, 201]
   vars:
     _repo_basename: "{{ item.item.json.name | regex_replace('-' + org_id + '$', '') }}"
@@ -236,7 +236,7 @@
     body:
       branch: "main"
       content: "{{ _updated_manifest | to_nice_yaml(indent=2) }}"
-      commit_message: "Bootstrap: register tenant {{ org_id }} repos in manifest"
+      commit_message: "Bootstrap: register tenant {{ org_id }} repos in manifest [skip dispatch]"
     status_code: [200, 201]
   vars:
     _updated_manifest: "{{ _current_manifest | combine({'tenant_repos': _current_manifest.tenant_repos + (_new_entries | default([]))}) }}"

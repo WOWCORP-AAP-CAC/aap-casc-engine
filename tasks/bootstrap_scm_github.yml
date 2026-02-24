@@ -35,7 +35,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add organization org-' + org_id,
+      {{ {'message': 'Bootstrap: add organization org-' + org_id + ' [skip dispatch]',
           'content': lookup('template', 'templates/org-template.json.j2') | to_nice_json(indent=4) | b64encode}
          | combine({'sha': _gh_org_file.json.sha} if _gh_org_file.status == 200 else {}) }}
     status_code: [200, 201]
@@ -63,7 +63,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add team for org-' + org_id,
+      {{ {'message': 'Bootstrap: add team for org-' + org_id + ' [skip dispatch]',
           'content': lookup('template', 'templates/team-template.json.j2') | to_nice_json(indent=4) | b64encode}
          | combine({'sha': _gh_team_file.json.sha} if _gh_team_file.status == 200 else {}) }}
     status_code: [200, 201]
@@ -121,7 +121,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add CasC pipeline-as-a-service (thin caller)',
+      {{ {'message': 'Bootstrap: add CasC pipeline-as-a-service (thin caller) [skip dispatch]',
           'content': lookup('template', 'templates/github-workflow-caller.yml.j2') | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
@@ -149,7 +149,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add example JSON sample (rename to .json to activate)',
+      {{ {'message': 'Bootstrap: add example JSON sample (rename to .json to activate) [skip dispatch]',
           'content': _seed_content | to_nice_json(indent=4) | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
@@ -218,7 +218,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body:
-      message: "Bootstrap: register tenant {{ org_id }} repos in manifest"
+      message: "Bootstrap: register tenant {{ org_id }} repos in manifest [skip dispatch]"
       content: "{{ _updated_manifest | to_nice_yaml(indent=2) | b64encode }}"
       sha: "{{ _manifest_sha }}"
     status_code: [200, 201]

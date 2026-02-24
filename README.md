@@ -167,6 +167,10 @@ Genesis reads the default `repos-manifest.yml` from this engine repo, merges any
 
 **Via AAP Job Template:** Create `jt-platform-genesis` with playbook `genesis.yml`, attach `crd-platform-scm_token`, and set extra vars for `scm_base_url`, `platform_scm_org`, `engine_repo`, and `default_organization`. Optionally add `env_branch_map` as an extra_var to override the GitFlow default. No AAP connection credential is needed — genesis only interacts with the SCM API.
 
+**`[skip dispatch]` — Setup commits skip dispatcher, validation still runs:**
+
+All commits made by genesis and bootstrap include `[skip dispatch]` in the commit message. The CI/CD pipeline detects this marker and skips the dispatcher trigger job while still running JSON schema validation, naming convention checks, and policy compliance. This prevents unnecessary dispatcher launches during initial repo scaffolding when AAP resources may not yet be fully configured. Normal tenant JSON pushes (without the marker) trigger both validation and the dispatcher as expected. Manual `workflow_dispatch` / GitLab web triggers are unaffected by the marker.
+
 ### Post-Genesis Manifest Changes
 
 After genesis pushes the manifest to the manifest repo, subsequent changes to the manifest (e.g., new branch mappings, additional platform repos) should be made directly in the manifest repo's copy (`<manifest-repo>/repos-manifest.yml` — default: `aap-organizations-global`). The engine's local copy provides defaults only and should not be edited.

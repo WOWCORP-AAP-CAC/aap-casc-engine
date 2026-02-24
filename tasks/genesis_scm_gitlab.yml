@@ -74,7 +74,7 @@
     body:
       branch: "main"
       content: "{{ _genesis_manifest }}"
-      commit_message: "Genesis: initialize repos-manifest.yml registry"
+      commit_message: "Genesis: initialize repos-manifest.yml registry [skip dispatch]"
     status_code: [200, 201]
   when: _gl_manifest_check.status == 404
 
@@ -109,7 +109,7 @@
     body:
       branch: "main"
       content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
-      commit_message: "Genesis: add shared CasC pipeline template"
+      commit_message: "Genesis: add shared CasC pipeline template [skip dispatch]"
     status_code: [200, 201]
   loop: "{{ _gl_ci_checks.results }}"
   loop_control:
@@ -141,7 +141,7 @@
     body:
       branch: "main"
       content: "{{ lookup('template', 'templates/genesis-readme.md.j2') }}"
-      commit_message: "Genesis: add README with repo purpose and usage"
+      commit_message: "Genesis: add README with repo purpose and usage [skip dispatch]"
     status_code: [200, 201]
   vars:
     repo: "{{ item.item.item }}"
