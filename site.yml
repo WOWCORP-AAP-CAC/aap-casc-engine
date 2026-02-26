@@ -108,7 +108,7 @@
         repos_to_clone: "{{ selected_repos }}"
         clone_base_dir: "{{ clone_dir }}"
         clone_branch: "{{ target_branch }}"
-        git_base_url: "{{ scm_base_url }}"
+        git_base_url: "{{ scm_base_url }}/{{ platform_scm_org }}"
         git_token: "{{ scm_token }}"
 
     # Phase 4: Process JSON (env filter + merge + suffix)
