@@ -32,8 +32,11 @@
 #   aap_scope — suffix added during processing
 #               platform repos -> aap_scope: platform -> keys like aap_organizations_platform
 #               tenant repos   -> aap_scope: myorg01  -> keys like controller_projects_myorg01
-#   scm_org   — (optional) SCM org/group for cross-org cloning; when set, the
-#               git_clone_repos role uses https://HOST/ORG/REPO.git
+#   scm_org   — SCM org/group for clone URL construction; the git_clone_repos
+#               role uses https://HOST/ORG/REPO.git. Platform repos omit
+#               scm_org here because genesis injects platform_scm_org at
+#               runtime when pushing the operational manifest. Tenant repos
+#               are added by bootstrap with scm_org already set.
 #
 # COMMON env_branch_map PATTERNS:
 #   Single branch (demo):      dev: main,  tst: main,  npr: main,         prd: main

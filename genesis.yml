@@ -135,12 +135,20 @@
 
     # ── Build manifest seed content (for pushing to manifest repo) ──────────
 
+    - name: "Inject scm_org into platform repos for manifest consistency"
+      ansible.builtin.set_fact:
+        _platform_repos_with_scm_org: >-
+          {{ repos_manifest.platform_repos
+             | map('combine', {'scm_org': platform_scm_org})
+             | list }}
+
     - name: "Build manifest seed content (overrides applied, tenant_repos empty)"
       ansible.builtin.set_fact:
         _genesis_manifest: >-
           {{ repos_manifest
              | combine({'default_organization': _effective_default_org,
                         'env_branch_map': _effective_env_branch_map,
+                        'platform_repos': _platform_repos_with_scm_org,
                         'tenant_repos': []})
              | to_nice_yaml(indent=2) }}
 
