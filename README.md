@@ -52,8 +52,6 @@ aap-casc-engine/
 ├── templates/                        # Jinja2 templates (YAML seeds, bootstrap resources)
 ├── collections/
 │   └── requirements.yml              # Ansible collection dependencies
-├── execution-environment/
-│   └── execution-environment.yml     # EE build definition
 └── examples/
     └── v2/                           # Example folder-based YAML configs
         ├── platform/                 # Platform repo example
