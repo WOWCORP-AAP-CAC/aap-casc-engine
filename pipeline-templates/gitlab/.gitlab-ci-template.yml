@@ -1,36 +1,23 @@
-# Platform-managed shared pipeline template for tenant CasC repositories
+# Platform-managed shared pipeline template for CasC repositories (v2 — YAML)
 # Lives in: aap-casc-engine/pipeline-templates/gitlab/.gitlab-ci-template.yml
-# Tenant repos include this template — they do NOT define their own pipelines
-#
-# Supports two authentication modes:
-#   1. Bearer token (production) — per-environment CI/CD variables: AAP_DEV_HOST/TOKEN, etc.
-#   2. Basic auth (demo/sandbox) — single-host CI/CD variables: AAP_HOST, AAP_USERNAME, AAP_PASSWORD
+# Tenant/platform repos include this template via .gitlab-ci.yml
 #
 # Tenant repo usage (.gitlab-ci.yml):
 #   include:
 #     - project: '<platform-group>/aap-casc-engine'
 #       ref: 'main'
 #       file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
-#
-# IMPORTANT: AAP_HOST/AAP_USERNAME/AAP_PASSWORD here are CI/CD platform variables
-# (GitLab group-level CI/CD variables) used by the trigger stage curl commands.
-# They are NOT the same as CONTROLLER_HOST/CONTROLLER_USERNAME/CONTROLLER_PASSWORD
-# injected by AAP credential types into Job Templates at runtime.
-#
-# CI_JOB_TOKEN: The engine project must add tenant projects/groups to its
-# CI/CD Job Token allowlist (Settings > CI/CD > Token Access) for the schemas
-# fetch stage to succeed. Without this, git clone will fail the pipeline job.
 
 stages:
   - validate
+  - bootstrap
   - trigger
 
 variables:
-  # REQUIRED: Override ENGINE_PROJECT_PATH at the GitLab group level
-  # Set to your platform group's engine repo path, e.g. "my-platform-group/aap-casc-engine"
   ENGINE_PROJECT_PATH: ""
   SCHEMA_DIR: "${CI_PROJECT_DIR}/.schemas"
   DISPATCHER_JT_NAME: "jt-platform-casc_dispatcher"
+  BOOTSTRAP_JT_NAME: "jt-platform-bootstrap_tenant"
   WAIT_FOR_COMPLETION: "true"
   POLL_TIMEOUT_MINUTES: "30"
 
@@ -44,62 +31,137 @@ fetch:schemas:
     - |
       if [ -z "$ENGINE_PROJECT_PATH" ]; then
         echo "ERROR: ENGINE_PROJECT_PATH is not set."
-        echo "Set it as a CI/CD variable at the GitLab group level, e.g. 'my-platform-group/aap-casc-engine'"
         exit 1
       fi
       git clone --depth 1 --branch main \
         "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${ENGINE_PROJECT_PATH}.git" /tmp/engine
       mkdir -p .schemas
-      cp /tmp/engine/schemas/*.schema.json .schemas/ 2>/dev/null || true
+      [ -f /tmp/engine/schemas/resource-types.yml ] && cp /tmp/engine/schemas/resource-types.yml .schemas/ || true
       [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/ || true
       [ -f /tmp/engine/schemas/naming-rules.yml ] && cp /tmp/engine/schemas/naming-rules.yml .schemas/ || true
-      [ -f /tmp/engine/schemas/check_naming_sync.py ] && cp /tmp/engine/schemas/check_naming_sync.py .schemas/ || true
       [ -d /tmp/engine/schemas/policies ] && cp -r /tmp/engine/schemas/policies .schemas/ || true
+      # Cache allowed_keys from engine defaults
+      if [ -f /tmp/engine/roles/process_casc_config/defaults/main.yml ]; then
+        cp /tmp/engine/roles/process_casc_config/defaults/main.yml .schemas/engine_defaults.yml
+      fi
   artifacts:
     paths:
       - .schemas/
 
 # ── Stage 1: Validate ────────────────────────────────────────────────────────
-validate:json-schema:
+validate:yaml-structure:
   stage: validate
   image: python:3.11-slim
   before_script:
-    - pip install check-jsonschema pyyaml
+    - pip install pyyaml
   script:
     - |
-      echo "=== CasC JSON Validation Pipeline ==="
-      ERRORS=0
-      for json_file in $(find . -name "*.json" -not -path "./.schemas/*" -not -path "./.git/*"); do
-        key_count=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1])).keys()))" "$json_file" 2>/dev/null)
-        if [ "$key_count" != "1" ]; then
-          echo "ERROR: $json_file has $key_count top-level keys (expected exactly 1)"
-          ERRORS=$((ERRORS + 1))
-          continue
-        fi
-        resource_type=$(python3 -c "import json,sys; print(list(json.load(open(sys.argv[1])).keys())[0])" "$json_file" 2>/dev/null)
-        if [ -z "$resource_type" ]; then
-          echo "ERROR: Could not extract resource type from $json_file"
-          ERRORS=$((ERRORS + 1))
-          continue
-        fi
-        schema_file="${SCHEMA_DIR}/${resource_type}.schema.json"
-        if [ -f "$schema_file" ]; then
-          echo "Validating: $json_file against $schema_file (resource: ${resource_type})"
-          if ! check-jsonschema --schemafile "$schema_file" "$json_file"; then
-            ERRORS=$((ERRORS + 1))
-          fi
-        else
-          echo "ERROR: No schema found for resource type '${resource_type}' (expected: $schema_file)"
-          ERRORS=$((ERRORS + 1))
-        fi
-      done
-      echo ""
-      if [ "$ERRORS" -gt 0 ]; then
-        echo "=== VALIDATION FAILED: $ERRORS error(s) ==="
-        exit 1
-      else
-        echo "=== ALL JSON FILES PASSED SCHEMA VALIDATION ==="
-      fi
+      echo "=== CasC YAML Structural Validation ==="
+      python3 -c "
+      import yaml, sys, os
+
+      resource_types = yaml.safe_load(open('.schemas/resource-types.yml')) if os.path.exists('.schemas/resource-types.yml') else {'defaults': {'value_type': 'list', 'identity_field': 'name'}, 'exceptions': {}}
+      defaults = resource_types.get('defaults', {})
+      exceptions = resource_types.get('exceptions', {})
+
+      allowed_keys = None
+      if os.path.exists('.schemas/engine_defaults.yml'):
+          ak = yaml.safe_load(open('.schemas/engine_defaults.yml'))
+          allowed_keys = set(ak.get('casc_allowed_resource_keys', []))
+
+      skip_dirs = {'.schemas', '.engine', '.git'}
+      errors = []
+
+      for search_dir in ['base'] + [d for d in os.listdir('.') if os.path.isdir(d) and d not in skip_dirs and d != 'base']:
+          if not os.path.isdir(search_dir):
+              continue
+          for root, _, files in os.walk(search_dir):
+              for fname in files:
+                  if not fname.endswith(('.yml', '.yaml')) or fname.endswith('.sample'):
+                      continue
+                  fpath = os.path.join(root, fname)
+                  try:
+                      data = yaml.safe_load(open(fpath))
+                  except Exception as e:
+                      errors.append(f'{fpath}: Failed to parse YAML — {e}')
+                      continue
+                  if not isinstance(data, dict):
+                      errors.append(f'{fpath}: Expected a mapping')
+                      continue
+                  keys = list(data.keys())
+                  if len(keys) != 1:
+                      errors.append(f'{fpath}: Expected 1 top-level key, got {len(keys)}: {keys}')
+                      continue
+                  key = keys[0]
+                  if allowed_keys and key not in allowed_keys:
+                      errors.append(f'{fpath}: Unknown resource key \"{key}\" (not in casc_allowed_resource_keys)')
+                      continue
+                  exc = exceptions.get(key, {})
+                  vtype = exc.get('value_type', defaults.get('value_type', 'list'))
+                  id_field = exc.get('identity_field', defaults.get('identity_field', 'name'))
+                  value = data[key]
+                  if vtype == 'list':
+                      if not isinstance(value, list):
+                          errors.append(f'{fpath}: Key \"{key}\" expected list, got {type(value).__name__}')
+                          continue
+                      for i, item in enumerate(value):
+                          if isinstance(item, dict) and id_field not in item:
+                              errors.append(f'{fpath}: Item {i} in \"{key}\" missing \"{id_field}\"')
+
+      if errors:
+          for e in errors: print(f'  ERROR: {e}')
+          sys.exit(1)
+      else:
+          print('=== ALL YAML FILES PASSED STRUCTURAL VALIDATION ===')
+      "
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+validate:control-files:
+  stage: validate
+  image: python:3.11-slim
+  before_script:
+    - pip install pyyaml
+  script:
+    - |
+      echo "=== Control File Validation ==="
+      python3 -c "
+      import yaml, sys, os
+      errors = []
+
+      if os.path.exists('config.yml'):
+          try:
+              cfg = yaml.safe_load(open('config.yml'))
+              for key in ['env_branch_map', 'scm_provider', 'platform_scm_org', 'repo_pattern']:
+                  if key not in cfg:
+                      errors.append(f'config.yml: missing required key \"{key}\"')
+          except Exception as e:
+              errors.append(f'config.yml: Failed to parse — {e}')
+
+      if os.path.exists('tenants.yml'):
+          try:
+              t = yaml.safe_load(open('tenants.yml'))
+              tenants = t.get('tenants', [])
+              if not isinstance(tenants, list):
+                  errors.append('tenants.yml: \"tenants\" must be a list')
+              else:
+                  for i, entry in enumerate(tenants):
+                      for req in ['org_id', 'team_name', 'team_lead', 'tenant_scm_org']:
+                          if req not in entry:
+                              errors.append(f'tenants.yml: tenant {i} missing required field \"{req}\"')
+                      if 'status' in entry and entry['status'] not in ('active', 'inactive'):
+                          errors.append(f'tenants.yml: tenant {i} has invalid status \"{entry[\"status\"]}\"')
+          except Exception as e:
+              errors.append(f'tenants.yml: Failed to parse — {e}')
+
+      if errors:
+          for e in errors: print(f'  ERROR: {e}')
+          sys.exit(1)
+      else:
+          print('=== CONTROL FILES VALID (or not present) ===')
+      "
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -124,33 +186,29 @@ validate:naming-convention:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
-validate:naming-sync:
+validate:policy-compliance:
   stage: validate
   image: python:3.11-slim
   before_script:
     - pip install pyyaml
-  script:
-    - |
-      if [ -f ".schemas/check_naming_sync.py" ]; then
-        python3 .schemas/check_naming_sync.py
-      else
-        echo "No naming sync check script found — skipping."
-      fi
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "web"'
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH'
-
-validate:policy-compliance:
-  stage: validate
-  image: openpolicyagent/opa:latest
+    - curl -sL -o /usr/local/bin/opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static && chmod +x /usr/local/bin/opa
   script:
     - |
       if [ -d ".schemas/policies" ]; then
         echo "=== Checking OPA policy compliance ==="
-        for json_file in $(find . -name "*.json" -not -path "./.schemas/*" -not -path "./.git/*"); do
-          echo "Policy check: $json_file"
-          opa eval --data .schemas/policies/ --input "$json_file" "data.casc.deny" --format pretty
+
+        SCAN_DIRS=""
+        for d in $(ls -d */ 2>/dev/null); do
+          case "$d" in
+            .schemas/|.engine/|.git/) continue ;;
+            *) SCAN_DIRS="$SCAN_DIRS $d" ;;
+          esac
+        done
+
+        for yml_file in $(find $SCAN_DIRS -name "*.yml" -o -name "*.yaml" 2>/dev/null | grep -v '.sample$'); do
+          echo "Policy check: $yml_file"
+          python3 -c "import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), open('/tmp/opa_input.json','w'))" "$yml_file"
+          opa eval --data .schemas/policies/ --input /tmp/opa_input.json "data.casc.deny" --format pretty
         done
         echo "=== OPA POLICY CHECK COMPLETE ==="
       else
@@ -160,12 +218,123 @@ validate:policy-compliance:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
 
-# ── Stage 2: Trigger (lightweight — single curl to correct AAP environment) ──
-# Supports dual auth: Bearer token (production) or basic auth (demo/sandbox).
-# If per-env token variables are set, Bearer token auth with branch routing is used.
-# Otherwise, if AAP_HOST + AAP_USERNAME + AAP_PASSWORD are set, basic auth is used.
-# If neither is configured: push/manual triggers fail (missing creds); MR events skip (validate-only).
+# ── Stage 2: Bootstrap (GitOps tenant onboarding from tenants.yml) ───────────
+bootstrap:tenants:
+  stage: bootstrap
+  image: python:3.11-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git curl > /dev/null
+    - pip install pyyaml
+  script:
+    - |
+      python3 -c "
+      import yaml, json, subprocess, sys, os
+
+      if not os.path.exists('tenants.yml'):
+          print('No tenants.yml — skipping bootstrap')
+          sys.exit(0)
+
+      try:
+          current = yaml.safe_load(open('tenants.yml'))
+      except Exception:
+          print('Invalid tenants.yml — skipping bootstrap')
+          sys.exit(0)
+
+      result = subprocess.run(['git', 'show', 'HEAD~1:tenants.yml'], capture_output=True, text=True)
+      if result.returncode != 0:
+          previous = {'tenants': []}
+      else:
+          previous = yaml.safe_load(result.stdout) or {'tenants': []}
+
+      prev_map = {t['org_id']: t for t in previous.get('tenants', [])}
+      curr_map = {t['org_id']: t for t in current.get('tenants', [])}
+
+      actions = []
+      for oid, tenant in curr_map.items():
+          if tenant.get('status') == 'inactive':
+              continue
+          if oid not in prev_map:
+              actions.append({'action': 'added', 'tenant': tenant})
+          elif tenant != prev_map[oid]:
+              actions.append({'action': 'modified', 'tenant': tenant})
+
+      if not actions:
+          print('No new or modified active tenants — skipping bootstrap')
+          sys.exit(0)
+
+      print(f'Found {len(actions)} tenant(s) to bootstrap:')
+      for a in actions:
+          print(f'  {a[\"action\"]}: {a[\"tenant\"][\"org_id\"]}')
+
+      with open('tenant_actions.json', 'w') as f:
+          json.dump(actions, f)
+      "
+
+      if [ ! -f tenant_actions.json ]; then
+        echo "No tenant actions — skipping AAP trigger"
+        exit 0
+      fi
+
+      # Actionable tenants exist — always write dotenv to block dispatcher
+      echo "BOOTSTRAP_TRIGGERED=true" >> bootstrap.env
+
+      if [ -z "$AAP_HOST" ] || [ -z "$AAP_USERNAME" ] || [ -z "$AAP_PASSWORD" ]; then
+        echo "ERROR: Actionable tenants found but AAP credentials not configured"
+        exit 1
+      fi
+
+      JT_RESPONSE=$(curl -sk -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
+        "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${BOOTSTRAP_JT_NAME}")
+      JT_ID=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0]['id'] if r.get('results') else 'NOT_FOUND')")
+
+      if [ "$JT_ID" = "NOT_FOUND" ] || [ -z "$JT_ID" ]; then
+        echo "ERROR: Bootstrap JT '${BOOTSTRAP_JT_NAME}' not found"
+        exit 1
+      fi
+
+      export LAUNCH_URL="https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/"
+      export AUTH_CREDS="${AAP_USERNAME}:${AAP_PASSWORD}"
+
+      python3 -c "
+      import json, subprocess, sys, os
+      actions = json.load(open('tenant_actions.json'))
+      launch_url = os.environ['LAUNCH_URL']
+      auth_creds = os.environ['AUTH_CREDS']
+      for action in actions:
+          tenant = action['tenant']
+          print(f'Bootstrapping tenant: {tenant[\"org_id\"]} ({action[\"action\"]})')
+          extra_vars = json.dumps({
+              'org_id': tenant['org_id'],
+              'team_name': tenant['team_name'],
+              'team_lead': tenant['team_lead'],
+              'tenant_scm_org': tenant['tenant_scm_org'],
+              'tenant_scm_namespace_id': tenant.get('tenant_scm_namespace_id', ''),
+              'repo_pattern': tenant.get('repo_pattern', 'combined'),
+          })
+          result = subprocess.run([
+              'curl', '-sk', '-X', 'POST',
+              '-u', auth_creds,
+              '-H', 'Content-Type: application/json',
+              '-d', json.dumps({'extra_vars': extra_vars}),
+              launch_url
+          ], capture_output=True, text=True)
+          response = json.loads(result.stdout) if result.stdout else {}
+          job_id = response.get('id', 'UNKNOWN')
+          print(f'  Job launched: ID={job_id}')
+      " 
+  artifacts:
+    reports:
+      dotenv: bootstrap.env
+  rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /\[skip dispatch\]/'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+      changes:
+        - tenants.yml
+
+# ── Stage 3: Trigger ─────────────────────────────────────────────────────────
 trigger:dispatcher:
   stage: trigger
   image: python:3.11-slim
@@ -174,7 +343,12 @@ trigger:dispatcher:
     - apt-get update -qq && apt-get install -y -qq curl > /dev/null
   script:
     - |
-      # Determine auth mode: Bearer token (per-env) or basic auth (single host)
+      # Skip dispatcher if bootstrap was triggered for this push
+      if [ "${BOOTSTRAP_TRIGGERED:-}" = "true" ]; then
+        echo "Bootstrap was triggered — skipping dispatcher (bootstrap handles onboarding)"
+        exit 0
+      fi
+
       case "$CI_COMMIT_BRANCH" in
         feature/*)   TARGET_ENV="dev";  HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
         develop)     TARGET_ENV="tst";  HOST="$AAP_TST_HOST";  TOKEN="$AAP_TST_TOKEN" ;;
@@ -186,24 +360,16 @@ trigger:dispatcher:
       if [ -n "$HOST" ] && [ -n "$TOKEN" ]; then
         AUTH_MODE="bearer"
         AAP_HOST="$HOST"
-        echo "Using Bearer token auth for environment: ${TARGET_ENV}"
       elif [ -n "$AAP_HOST" ] && [ -n "$AAP_USERNAME" ] && [ -n "$AAP_PASSWORD" ]; then
         AUTH_MODE="basic"
-        echo "Using basic auth (demo/sandbox mode) for environment: ${TARGET_ENV}"
       else
-        AUTH_MODE="skip"
         if [ "$CI_PIPELINE_SOURCE" = "push" ] || [ "$CI_PIPELINE_SOURCE" = "web" ]; then
-          echo "ERROR: Dispatcher trigger skipped — no AAP credentials available."
-          echo "Possible causes:"
-          echo "  1. Group-level CI/CD variables AAP_HOST / AAP_USERNAME / AAP_PASSWORD not configured"
-          echo "  2. Per-env variables (AAP_PRD_HOST/TOKEN, etc.) not configured for branch '${CI_COMMIT_BRANCH}'"
+          echo "ERROR: No AAP credentials — cannot trigger dispatcher"
           exit 1
         fi
-        echo "No AAP credentials configured — skipping trigger (validate-only mode)"
         exit 0
       fi
 
-      # Helper function for authenticated curl
       auth_curl() {
         if [ "$AUTH_MODE" = "bearer" ]; then
           curl -sk -H "Authorization: Bearer ${TOKEN}" "$@"
@@ -212,49 +378,20 @@ trigger:dispatcher:
         fi
       }
 
-      echo "=== Triggering CasC Dispatcher on AAP ==="
-      echo "Host: ${AAP_HOST}"
-      echo "Environment: ${TARGET_ENV}"
-      echo "Job Template: ${DISPATCHER_JT_NAME}"
-
-      # Resolve dispatcher JT ID by name
-      echo "Looking up Job Template: ${DISPATCHER_JT_NAME}"
       JT_RESPONSE=$(auth_curl "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}")
-
       JT_ID=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0]['id'] if r.get('results') else 'NOT_FOUND')")
 
       if [ "$JT_ID" = "NOT_FOUND" ] || [ -z "$JT_ID" ]; then
-        echo "ERROR: Job Template '${DISPATCHER_JT_NAME}' not found on ${AAP_HOST}"
-        echo "Response: $JT_RESPONSE"
+        echo "ERROR: JT '${DISPATCHER_JT_NAME}' not found"
         exit 1
       fi
-      echo "Found JT ID: ${JT_ID}"
 
-      # Verify allow_simultaneous is false — this is the safety net against concurrent dispatchers
       ALLOW_SIMUL=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0].get('allow_simultaneous', False))")
       if [ "$ALLOW_SIMUL" = "True" ]; then
-        echo "ERROR: Dispatcher JT '${DISPATCHER_JT_NAME}' has allow_simultaneous=true — this must be false to prevent concurrent full-sweep runs"
+        echo "ERROR: Dispatcher JT has allow_simultaneous=true — must be false"
         exit 1
       fi
 
-      # Quick courtesy check — AAP serializes via allow_simultaneous=false
-      echo "Checking if dispatcher is already running..."
-      for attempt in $(seq 1 2); do
-        RUNNING=$(auth_curl \
-          "https://${AAP_HOST}/api/controller/v2/jobs/?job_template=${JT_ID}&status__in=running,pending,waiting&page_size=1" \
-          | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))")
-        if [ "$RUNNING" = "0" ]; then
-          break
-        fi
-        echo "  Dispatcher is busy (attempt ${attempt}/2) — waiting 15s..."
-        sleep 15
-      done
-      if [ "$RUNNING" != "0" ]; then
-        echo "INFO: Dispatcher still busy — launching anyway (AAP will queue via allow_simultaneous=false)"
-      fi
-
-      # Launch the dispatcher with trigger metadata
-      echo "Launching dispatcher..."
       LAUNCH_RESPONSE=$(auth_curl -X POST \
         -H "Content-Type: application/json" \
         -d "{
@@ -268,49 +405,29 @@ trigger:dispatcher:
         "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/")
 
       JOB_ID=$(echo "$LAUNCH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id', 'UNKNOWN'))")
-      echo "Dispatcher job launched: ID=${JOB_ID}"
-      echo "AAP UI: https://${AAP_HOST}/#/jobs/playbook/${JOB_ID}/output"
+      echo "Dispatcher launched: ID=${JOB_ID}"
 
       if [ "$JOB_ID" = "UNKNOWN" ] || [ -z "$JOB_ID" ]; then
-        echo "ERROR: Failed to launch dispatcher"
-        echo "Response: $LAUNCH_RESPONSE"
+        echo "ERROR: Failed to launch"
         exit 1
       fi
 
-      # Fire-and-forget mode: exit immediately after launch
       if [ "$WAIT_FOR_COMPLETION" = "false" ]; then
-        echo "=== FIRE-AND-FORGET: Dispatcher launched, not waiting for completion ==="
         exit 0
       fi
 
-      # Poll for job completion (configurable timeout)
-      if ! echo "$POLL_TIMEOUT_MINUTES" | grep -qE '^[0-9]+$' || [ "$POLL_TIMEOUT_MINUTES" -lt 1 ]; then
-        echo "WARNING: Invalid POLL_TIMEOUT_MINUTES '${POLL_TIMEOUT_MINUTES}' — using default 30"
-        POLL_TIMEOUT_MINUTES=30
-      fi
       POLL_CHECKS=$(( POLL_TIMEOUT_MINUTES * 6 ))
-      echo "Waiting for job to complete (timeout: ${POLL_TIMEOUT_MINUTES} min)..."
       for i in $(seq 1 $POLL_CHECKS); do
         sleep 10
-        STATUS=$(auth_curl \
-          "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
+        STATUS=$(auth_curl "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
           | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
-        echo "  Status: ${STATUS} (check ${i}/${POLL_CHECKS})"
+        echo "  Status: ${STATUS} (${i}/${POLL_CHECKS})"
         case "$STATUS" in
-          successful) echo "=== DISPATCHER COMPLETED SUCCESSFULLY ===" && exit 0 ;;
-          failed|error|canceled) echo "=== DISPATCHER FAILED (status: ${STATUS}) ===" && exit 1 ;;
+          successful) echo "=== COMPLETED ===" && exit 0 ;;
+          failed|error|canceled) echo "=== FAILED ===" && exit 1 ;;
         esac
       done
-
-      # Graceful timeout — queued/running is not a failure
-      case "$STATUS" in
-        pending|waiting|running)
-          echo "WARNING: Dispatcher job ${JOB_ID} still ${STATUS} after ${POLL_TIMEOUT_MINUTES} min — exiting with success. Check AAP UI for final status."
-          echo "AAP UI: https://${AAP_HOST}/#/jobs/playbook/${JOB_ID}/output"
-          exit 0 ;;
-      esac
-      echo "=== TIMEOUT: Job in unexpected state '${STATUS}' after ${POLL_TIMEOUT_MINUTES} min ==="
-      exit 1
+      exit 0
   retry: 2
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'

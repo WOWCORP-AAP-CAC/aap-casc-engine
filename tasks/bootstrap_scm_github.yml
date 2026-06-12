@@ -1,24 +1,34 @@
 ---
 # bootstrap_scm_github.yml — GitHub-specific SCM operations for tenant bootstrap
 #
-# Steps 1-5: Push platform JSON, create tenant repos, seed, set permissions,
-# update manifest. Called from bootstrap.yml via include_tasks.
+# Steps 1-5: Push platform YAML (org/team to combined platform repo at
+# folder-based paths), create tenant repos, seed with folder structure,
+# set permissions, update tenants.yml. Called from bootstrap.yml.
 #
 # All operations are idempotent — safe to rerun. File writes use
 # GET-then-PUT (with SHA when updating existing files). Repo creation
-# tolerates 422 (already exists). Manifest updates skip duplicate entries.
+# tolerates 422 (already exists). tenants.yml updates skip duplicate entries.
 #
-# Required variables: platform_scm_org, orgs_repo, teams_repo, rbac_user_repo,
-#   rbac_team_repo, manifest_repo, tenant_scm_org, scm_api_token, org_id,
-#   _effective_team_group, team_lead, team_lead_username, tenant_repos
+# Required variables: platform_scm_org, platform_repo, tenant_scm_org,
+#   scm_api_token, org_id, _effective_team_group, team_lead,
+#   team_lead_username, tenant_repos, repo_pattern, engine_repo
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 1a: Push org + team JSON to platform repos (create-or-update)
+# Step 1: Push org + team YAML to platform repo(s) (folder-based paths)
+#   - combined: writes to platform_repo at base/organizations/ and base/teams/
+#   - per-resource-type: writes to aap-organizations-global and aap-teams-global
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Check if org JSON already exists"
+- name: "GH – Compute platform target repos and paths"
+  ansible.builtin.set_fact:
+    _org_target_repo: "{{ 'aap-organizations-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _team_target_repo: "{{ 'aap-teams-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _org_target_path: "{{ 'base/org-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/organizations/org-' + org_id + '.yml' }}"
+    _team_target_path: "{{ 'base/team-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/teams/team-' + org_id + '.yml' }}"
+
+- name: "GH – Check if org YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ orgs_repo }}/contents/org-{{ org_id }}.json"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _org_target_repo }}/contents/{{ _org_target_path }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -26,9 +36,9 @@
     status_code: [200, 404]
   register: _gh_org_file
 
-- name: "GH – Push organization JSON to {{ orgs_repo }}"
+- name: "GH – Push organization YAML to platform"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ orgs_repo }}/contents/org-{{ org_id }}.json"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _org_target_repo }}/contents/{{ _org_target_path }}"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -36,7 +46,7 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add organization org-' + org_id + ' [skip dispatch]',
-          'content': lookup('template', 'templates/org-template.json.j2') | to_nice_json(indent=4) | b64encode}
+          'content': lookup('template', 'templates/org-template.yml.j2') | b64encode}
          | combine({'sha': _gh_org_file.json.sha} if _gh_org_file.status == 200 else {}) }}
     status_code: [200, 201]
   vars:
@@ -44,9 +54,9 @@
     org_description: "{{ team_name }} automation organization"
     org_default_ee: "{{ default_ee }}"
 
-- name: "GH – Check if team JSON already exists"
+- name: "GH – Check if team YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ teams_repo }}/contents/team-{{ org_id }}.json"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _team_target_repo }}/contents/{{ _team_target_path }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -54,9 +64,9 @@
     status_code: [200, 404]
   register: _gh_team_file
 
-- name: "GH – Push team JSON to {{ teams_repo }}"
+- name: "GH – Push team YAML to platform"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ teams_repo }}/contents/team-{{ org_id }}.json"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _team_target_repo }}/contents/{{ _team_target_path }}"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -64,17 +74,9 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add team for org-' + org_id + ' [skip dispatch]',
-          'content': lookup('template', 'templates/team-template.json.j2') | to_nice_json(indent=4) | b64encode}
+          'content': lookup('template', 'templates/team-template.yml.j2') | b64encode}
          | combine({'sha': _gh_team_file.json.sha} if _gh_team_file.status == 200 else {}) }}
     status_code: [200, 201]
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Steps 1b/1c: Push RBAC JSON to RBAC repos (conditional, create-or-update)
-# ═══════════════════════════════════════════════════════════════════════════
-
-# RBAC JSON push is deferred to bootstrap.yml (after org creation in AAP)
-# because the gateway_role_*_assignments module requires the org's numeric
-# object_id, which is only available after the org is created.
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 2: Create tenant CasC repositories (tolerates already-exists)
@@ -94,11 +96,15 @@
       private: "{{ _repo_private | bool }}"
       auto_init: true
     status_code: [200, 201, 422]
+  failed_when: >-
+    _gh_created_repos.status == 422 and
+    'already exists' not in (_gh_created_repos.json.errors | default([]) | map(attribute='message', default='') | join(' '))
+    and 'already exists' not in (_gh_created_repos.json.message | default(''))
   loop: "{{ tenant_repos }}"
   register: _gh_created_repos
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 3: Seed repos with pipeline + example JSON (create-or-update)
+# Step 3: Seed repos with pipeline + example YAML (folder-based structure)
 # ═══════════════════════════════════════════════════════════════════════════
 
 - name: "GH – Check if thin caller workflow already exists"
@@ -129,9 +135,9 @@
   loop_control:
     label: "{{ item.item }}"
 
-- name: "GH – Check if example JSON sample already exists"
+- name: "GH – Check if example YAML sample already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/contents/example.json.sample"
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/contents/base/projects/example.yml.sample"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -140,23 +146,23 @@
   loop: "{{ tenant_repos }}"
   register: _gh_example_checks
 
-- name: "GH – Seed example JSON sample in each tenant repo"
+- name: "GH – Seed example YAML sample in each tenant repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item }}/contents/example.json.sample"
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item }}/contents/base/projects/example.yml.sample"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add example JSON sample (rename to .json to activate) [skip dispatch]',
-          'content': _seed_content | to_nice_json(indent=4) | b64encode}
+      {{ {'message': 'Bootstrap: add example YAML sample (rename to .yml to activate) [skip dispatch]',
+          'content': _seed_content | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
   vars:
     _repo_basename: "{{ item.item | regex_replace('-' + org_id + '$', '') }}"
-    _per_type_template: "templates/seed-{{ _repo_basename }}.json.j2"
-    _combined_template: "templates/seed-combined-tenant.json.j2"
+    _per_type_template: "templates/seed-{{ _repo_basename }}.yml.j2"
+    _combined_template: "templates/seed-combined-tenant.yml.j2"
     _template: "{{ _per_type_template if lookup('first_found', dict(files=[_per_type_template], skip=true)) else _combined_template }}"
     _seed_content: "{{ lookup('template', _template) }}"
   loop: "{{ _gh_example_checks.results }}"
@@ -182,46 +188,51 @@
   when: team_lead_username | default('') | length > 0
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 5: Update repos-manifest.yml in manifest repo (dedup-safe)
+# Step 5: Update tenants.yml in platform home repo (dedup-safe)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Get current repos-manifest.yml from manifest repo"
+- name: "GH – Get current tenants.yml from platform repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ manifest_repo }}/contents/repos-manifest.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/tenants.yml"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
-  register: _gh_manifest_file
+  register: _gh_tenants_file
 
-- name: "GH – Parse current manifest"
+- name: "GH – Parse current tenants.yml"
   ansible.builtin.set_fact:
-    _current_manifest: "{{ (_gh_manifest_file.json.content | b64decode) | from_yaml }}"
-    _manifest_sha: "{{ _gh_manifest_file.json.sha }}"
+    _current_tenants: "{{ (_gh_tenants_file.json.content | b64decode) | from_yaml }}"
+    _tenants_sha: "{{ _gh_tenants_file.json.sha }}"
 
-- name: "GH – Compute tenant entries to add (skip repos already in manifest)"
+- name: "GH – Check if tenant already registered"
   ansible.builtin.set_fact:
-    _existing_repo_names: "{{ _current_manifest.tenant_repos | default([]) | map(attribute='name') | list }}"
+    _existing_org_ids: "{{ _current_tenants.tenants | default([]) | map(attribute='org_id') | list }}"
 
-- name: "GH – Build new tenant entries (only missing repos)"
+- name: "GH – Build new tenant entry"
   ansible.builtin.set_fact:
-    _new_entries: "{{ _new_entries | default([]) + [{'name': item, 'aap_scope': org_id, 'scm_org': tenant_scm_org}] }}"
-  loop: "{{ tenant_repos }}"
-  when: item not in _existing_repo_names
+    _new_tenant_entry:
+      org_id: "{{ org_id }}"
+      team_name: "{{ team_name }}"
+      team_lead: "{{ team_lead }}"
+      tenant_scm_org: "{{ tenant_scm_org }}"
+      repo_pattern: "{{ repo_pattern }}"
+      status: active
+  when: org_id not in _existing_org_ids
 
-- name: "GH – Update repos-manifest.yml with new tenant entries"
+- name: "GH – Update tenants.yml with new tenant"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ manifest_repo }}/contents/repos-manifest.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/tenants.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body:
-      message: "Bootstrap: register tenant {{ org_id }} repos in manifest [skip dispatch]"
-      content: "{{ _updated_manifest | to_nice_yaml(indent=2) | b64encode }}"
-      sha: "{{ _manifest_sha }}"
+      message: "Bootstrap: register tenant {{ org_id }} [skip dispatch]"
+      content: "{{ _updated_tenants | to_nice_yaml(indent=2) | b64encode }}"
+      sha: "{{ _tenants_sha }}"
     status_code: [200, 201]
   vars:
-    _updated_manifest: "{{ _current_manifest | combine({'tenant_repos': _current_manifest.tenant_repos + (_new_entries | default([]))}) }}"
-  when: (_new_entries | default([])) | length > 0
+    _updated_tenants: "{{ _current_tenants | combine({'tenants': _current_tenants.tenants | default([]) + [_new_tenant_entry]}) }}"
+  when: _new_tenant_entry is defined

@@ -1,0 +1,11 @@
+---
+controller_templates:
+  - name: jt-myorg01-db_patching
+    description: Run database patching
+    organization: org-myorg01
+    project: prj-myorg01-db_patching
+    playbook: patch.yml
+    inventory: inv-myorg01-db_servers
+    credentials:
+      - crd-myorg01-machine_demo
+    verbosity: 0

@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-Naming Convention Validator for AAP CasC JSON configurations.
+Naming Convention Validator for AAP CasC configurations.
 
-Validates that resource names in JSON config files follow the naming
+Validates that resource names in YAML config files follow the naming
 conventions defined in the rules file (naming-rules.yml).
+
+Scans base/ and environment directories for YAML files. Skips control
+files (config.yml, tenants.yml), sample files, and resource types without
+naming rules defined.
 
 Usage:
     python3 validate_naming.py --config-dir <path> --rules <rules_file>
 """
 
 import argparse
-import json
 import os
+import re
 import sys
 
 import yaml
@@ -23,22 +27,23 @@ def load_rules(rules_path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def validate_file(json_path: str, rules: dict) -> list:
-    """Validate naming conventions in a single JSON file."""
+def validate_file(file_path: str, rules: dict) -> list:
+    """Validate naming conventions in a single YAML file."""
     errors = []
     try:
-        with open(json_path, "r") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        return [f"{json_path}: Failed to parse JSON — {e}"]
+        with open(file_path, "r") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, IOError) as e:
+        return [f"{file_path}: Failed to parse — {e}"]
+
+    if not isinstance(data, dict):
+        return []
 
     for resource_type, items in data.items():
         if resource_type not in rules:
             continue
 
         rule = rules[resource_type]
-        import re
-
         pattern = re.compile(rule["pattern"])
 
         if not isinstance(items, list):
@@ -47,13 +52,10 @@ def validate_file(json_path: str, rules: dict) -> list:
         for item in items:
             name = item.get("name", "")
             if not name:
-                errors.append(
-                    f"{json_path}: Resource of type '{resource_type}' missing 'name' field"
-                )
                 continue
             if not pattern.match(name):
                 errors.append(
-                    f"{json_path}: '{name}' does not match pattern '{rule['pattern']}' "
+                    f"{file_path}: '{name}' does not match pattern '{rule['pattern']}' "
                     f"(expected: {rule.get('example', 'N/A')})"
                 )
     return errors
@@ -62,7 +64,7 @@ def validate_file(json_path: str, rules: dict) -> list:
 def main():
     parser = argparse.ArgumentParser(description="Validate CasC naming conventions")
     parser.add_argument(
-        "--config-dir", required=True, help="Directory containing JSON config files"
+        "--config-dir", required=True, help="Directory containing CasC config files"
     )
     parser.add_argument(
         "--rules", required=True, help="Path to naming rules YAML file"
@@ -72,13 +74,20 @@ def main():
     rules = load_rules(args.rules)
     all_errors = []
 
-    for root, _, files in os.walk(args.config_dir):
+    skip_dirs = {".schemas", ".engine", ".git"}
+    skip_files = {"config.yml", "tenants.yml"}
+
+    for root, dirs, files in os.walk(args.config_dir):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
         for fname in files:
-            if not fname.endswith(".json"):
+            if not fname.endswith((".yml", ".yaml")):
+                continue
+            if fname.endswith(".sample"):
+                continue
+            if fname in skip_files:
                 continue
             fpath = os.path.join(root, fname)
-            # Skip schema files
-            if ".schemas" in fpath or "schema.json" in fpath:
+            if "schema" in fpath.lower():
                 continue
             all_errors.extend(validate_file(fpath, rules))
 

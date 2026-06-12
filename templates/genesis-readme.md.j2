@@ -2,43 +2,36 @@
 
 {{ repo.description }}
 
-## CasC Key
-
-```
-{{ repo.casc_key }}
-```
-
 ## Usage
 
-Place JSON files in this repository using the `{{ repo.casc_key }}` key.
+Place YAML files in the `base/` directory using the appropriate resource type
+subdirectory (e.g., `base/projects/`, `base/templates/`). Environment-specific
+overrides go in `<env>/` directories (e.g., `dev/`, `prd/`).
+
 The CasC dispatcher will automatically pick up and apply these configurations
 to AAP when the CI/CD pipeline triggers.
 
 ### Example
 
-```json
-{
-    "{{ repo.casc_key }}": [
-        {
-            "name": "example-resource",
-            "description": "Replace with your actual configuration"
-        }
-    ]
-}
+```yaml
+---
+{{ repo.casc_key | default('controller_projects') }}:
+  - name: example-resource
+    description: Replace with your actual configuration
 ```
 
 ## CI/CD Pipeline
 
 This repository includes a thin CI/CD caller that triggers the platform's
 shared CasC pipeline on push and pull request events. The pipeline validates
-JSON files and triggers the dispatcher Job Template in AAP.
-{% if repo.is_registry | default(false) %}
+YAML files and triggers the dispatcher Job Template in AAP.
+{% if repo.is_home | default(false) %}
 
-## Registry
+## Platform Configuration
 
-This repository also contains `repos-manifest.yml`, the central registry of
-all CasC repositories (platform and tenant). The dispatcher reads this manifest
-to determine which repos to clone and process.
+This repository contains the platform control files:
+- `config.yml` — platform settings (env_branch_map, repo_pattern, scm settings)
+- `tenants.yml` — tenant registry (single source of truth for all tenants)
 {% endif %}
 
 ## Part of the Hybrid CasC Solution

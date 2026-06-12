@@ -1,0 +1,5 @@
+---
+controller_settings:
+  - name: AWX_TASK_ENV
+    value:
+      GIT_SSL_NO_VERIFY: "True"

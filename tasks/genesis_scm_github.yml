@@ -1,11 +1,12 @@
 ---
 # genesis_scm_github.yml — GitHub-specific SCM operations for platform genesis
 #
-# Creates all platform repos, pushes repos-manifest.yml (from the engine repo),
+# Creates all platform repos, pushes config.yml + tenants.yml to the home repo,
 # seeds CI/CD thin callers, and README.md files. All operations are idempotent.
 #
-# Required variables: platform_scm_org, engine_repo, platform_repos, manifest_repo,
-#   scm_api_token, repo_visibility, _repo_private, _genesis_manifest
+# Required variables: platform_scm_org, engine_repo, platform_repos, _home_repo,
+#   scm_api_token, repo_visibility, _repo_private, _config_yml_content,
+#   _tenants_yml_content
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 1: Create all platform repos (tolerates already-exists 422)
@@ -34,37 +35,66 @@
     label: "{{ item.name }}"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 2: Push repos-manifest.yml to manifest repo (from engine, first-time only)
+# Step 2: Push config.yml and tenants.yml to home repo (first-time only)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Check if repos-manifest.yml already exists"
+- name: "GH – Check if config.yml already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ manifest_repo }}/contents/repos-manifest.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/config.yml"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
-  register: _gh_manifest_check
+  register: _gh_config_check
 
-- name: "GH – Push repos-manifest.yml (first-time only)"
+- name: "GH – Push config.yml (first-time only)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ manifest_repo }}/contents/repos-manifest.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/config.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body:
-      message: "Genesis: initialize repos-manifest.yml registry [skip dispatch]"
-      content: "{{ _genesis_manifest | b64encode }}"
+      message: "Genesis: initialize config.yml [skip dispatch]"
+      content: "{{ _config_yml_content | b64encode }}"
     status_code: [200, 201]
-  when: _gh_manifest_check.status == 404
+  when: _gh_config_check.status == 404
 
-- name: "GH – Skip manifest (already exists — preserving tenant entries)"
+- name: "GH – Skip config.yml (already exists)"
   ansible.builtin.debug:
-    msg: "repos-manifest.yml already exists in {{ manifest_repo }}. Skipping to preserve tenant_repos entries."
-  when: _gh_manifest_check.status == 200
+    msg: "config.yml already exists in {{ _home_repo }}. Skipping to preserve operational settings."
+  when: _gh_config_check.status == 200
+
+- name: "GH – Check if tenants.yml already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/tenants.yml"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_tenants_check
+
+- name: "GH – Push tenants.yml (first-time only)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/tenants.yml"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      message: "Genesis: initialize tenants.yml [skip dispatch]"
+      content: "{{ _tenants_yml_content | b64encode }}"
+    status_code: [200, 201]
+  when: _gh_tenants_check.status == 404
+
+- name: "GH – Skip tenants.yml (already exists)"
+  ansible.builtin.debug:
+    msg: "tenants.yml already exists in {{ _home_repo }}. Skipping to preserve tenant entries."
+  when: _gh_tenants_check.status == 200
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3: Seed CI/CD thin caller workflow in each repo

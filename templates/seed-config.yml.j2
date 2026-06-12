@@ -1,0 +1,21 @@
+#jinja2: trim_blocks: False
+---
+default_organization: {{ _effective_default_org | default('Default') }}
+scm_provider: {{ scm_provider }}
+platform_scm_org: {{ platform_scm_org }}
+repo_pattern: {{ repo_pattern | default('combined') }}
+
+env_branch_map:
+{{ _effective_env_branch_map | to_nice_yaml(indent=2) | indent(2, false) }}
+{% if repo_pattern | default('combined') == 'per-resource-type' %}
+platform_repos:
+  - name: aap-organizations-global
+  - name: aap-teams-global
+  - name: gateway-role_definitions-global
+  - name: gateway-role_user_assignments-global
+  - name: gateway-role_team_assignments-global
+  - name: controller-credential_types-global
+  - name: controller-execution_environments-global
+  - name: controller-settings-global
+  - name: controller-schedules-platform
+{% endif %}

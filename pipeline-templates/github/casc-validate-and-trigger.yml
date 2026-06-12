@@ -1,100 +1,71 @@
-# Standalone copy of the GitHub Actions CasC pipeline
-# For customers who cannot use reusable workflows (different GitHub org, self-hosted runners, etc.)
+# Standalone copy of the CasC validation and trigger pipeline (v2 — YAML)
+# For repos that cannot use the reusable workflow from the engine repo.
+# Keep in sync with: .github/workflows/casc-validate-and-trigger.yml
 #
-# The live reusable workflow is at: .github/workflows/casc-validate-and-trigger.yml
-# The reusable workflow auto-derives the engine repo from github.workflow_ref.
-# This standalone copy cannot do that, so it requires ENGINE_REPO to be set.
-#
-# To use directly:
-#   1. Copy this file to your tenant repo at .github/workflows/casc.yml
-#   2. Replace the workflow_call trigger with push/pull_request triggers
-#   3. Set ENGINE_REPO as a GitHub Actions repository or org variable (Settings > Variables)
-#
-# Preferred approach: use the reusable workflow via workflow_call (see README.md)
-#
-# IMPORTANT: AAP_HOST/AAP_USERNAME/AAP_PASSWORD here are CI/CD platform secrets
-# (GitHub Actions org/repo secrets) used by the trigger stage curl commands.
-# They are NOT the same as CONTROLLER_HOST/CONTROLLER_USERNAME/CONTROLLER_PASSWORD
-# injected by AAP credential types into Job Templates at runtime.
-#
-# ENGINE_REPO_TOKEN: Required when the engine repo is private and in a different
-# org from the calling repo. Set as an org secret in each tenant GitHub org.
-# Falls back to github.token for public or same-org engine repos.
+# Validation assets are loaded from:
+#   1. ENGINE_REPO secret — if set, the engine repo is checked out to fetch
+#      schemas/ and role defaults (recommended for full parity).
+#   2. Local schemas/ and roles/ — if the repo bundles these assets locally
+#      (e.g., the engine repo itself).
+# Without either source, allowlist/naming/OPA checks will silently skip.
 
-name: CasC Validate and Trigger
+name: CasC Validate and Trigger (Standalone)
 
 on:
-  workflow_call:
-    inputs:
-      dispatcher_jt_name:
-        description: "Name of the AAP dispatcher Job Template to trigger"
-        required: false
-        default: "jt-platform-casc_dispatcher"
-        type: string
-      wait_for_completion:
-        description: "Wait for dispatcher to finish (false = fire-and-forget)"
-        required: false
-        default: true
-        type: boolean
-      poll_timeout_minutes:
-        description: "Max minutes to poll for job completion (rule of thumb: queue_depth x avg_run_time + 20% buffer)"
-        required: false
-        default: 30
-        type: number
-    secrets:
-      # Production — per-environment Bearer token auth
-      AAP_DEV_HOST:
-        required: false
-      AAP_DEV_TOKEN:
-        required: false
-      AAP_TST_HOST:
-        required: false
-      AAP_TST_TOKEN:
-        required: false
-      AAP_NPR_HOST:
-        required: false
-      AAP_NPR_TOKEN:
-        required: false
-      AAP_PRD_HOST:
-        required: false
-      AAP_PRD_TOKEN:
-        required: false
-      # Basic auth fallback — demo/sandbox single-host mode
-      AAP_HOST:
-        required: false
-      AAP_USERNAME:
-        required: false
-      AAP_PASSWORD:
-        required: false
-      # Private engine repo access
-      ENGINE_REPO_TOKEN:
-        required: false
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DISPATCHER_JT_NAME: "jt-platform-casc_dispatcher"
+  BOOTSTRAP_JT_NAME: "jt-platform-bootstrap_tenant"
+  POLL_TIMEOUT_MINUTES: "30"
 
 jobs:
   validate:
-    name: Validate JSON Configs
+    name: Validate YAML Configs
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout tenant repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Checkout engine repo (schemas)
+      - name: Checkout engine repo (optional — for validation assets)
+        if: env.ENGINE_REPO_TOKEN != ''
         uses: actions/checkout@v4
         with:
-          # Set vars.ENGINE_REPO to "<platform-org>/aap-casc-engine" (repo or org variable)
-          repository: ${{ vars.ENGINE_REPO || 'aap-casc-platform-demo/aap-casc-engine' }}
+          repository: ${{ secrets.ENGINE_REPO || '' }}
           path: .engine
-          sparse-checkout: schemas
-          token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
+          sparse-checkout: |
+            schemas
+            roles/process_casc_config/defaults
+          token: ${{ secrets.ENGINE_REPO_TOKEN }}
+        continue-on-error: true
+        env:
+          ENGINE_REPO_TOKEN: ${{ secrets.ENGINE_REPO_TOKEN }}
 
       - name: Setup schemas directory
         run: |
           mkdir -p .schemas
-          cp .engine/schemas/*.schema.json .schemas/ 2>/dev/null || true
-          [ -f .engine/schemas/validate_naming.py ] && cp .engine/schemas/validate_naming.py .schemas/
-          [ -f .engine/schemas/naming-rules.yml ] && cp .engine/schemas/naming-rules.yml .schemas/
-          [ -f .engine/schemas/check_naming_sync.py ] && cp .engine/schemas/check_naming_sync.py .schemas/
-          [ -d .engine/schemas/policies ] && cp -r .engine/schemas/policies .schemas/
+          for src in .engine schemas; do
+            [ -f "${src}/schemas/resource-types.yml" ] && cp "${src}/schemas/resource-types.yml" .schemas/ && break
+            [ -f "${src}/resource-types.yml" ] && cp "${src}/resource-types.yml" .schemas/ && break
+          done
+          for src in .engine schemas; do
+            [ -f "${src}/schemas/validate_naming.py" ] && cp "${src}/schemas/validate_naming.py" .schemas/ && break
+            [ -f "${src}/validate_naming.py" ] && cp "${src}/validate_naming.py" .schemas/ && break
+          done
+          for src in .engine schemas; do
+            [ -f "${src}/schemas/naming-rules.yml" ] && cp "${src}/schemas/naming-rules.yml" .schemas/ && break
+            [ -f "${src}/naming-rules.yml" ] && cp "${src}/naming-rules.yml" .schemas/ && break
+          done
+          for src in .engine schemas; do
+            [ -d "${src}/schemas/policies" ] && cp -r "${src}/schemas/policies" .schemas/ && break
+            [ -d "${src}/policies" ] && cp -r "${src}/policies" .schemas/ && break
+          done
+          # Engine defaults (allowlist)
+          [ -f .engine/roles/process_casc_config/defaults/main.yml ] && cp .engine/roles/process_casc_config/defaults/main.yml .schemas/engine_defaults.yml || true
+          [ -f roles/process_casc_config/defaults/main.yml ] && cp roles/process_casc_config/defaults/main.yml .schemas/engine_defaults.yml || true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -102,43 +73,111 @@ jobs:
           python-version: "3.11"
 
       - name: Install validation tools
-        run: pip install check-jsonschema pyyaml
+        run: pip install pyyaml
 
-      - name: Validate JSON schemas
+      - name: Validate YAML structure
         run: |
-          echo "=== CasC JSON Validation Pipeline ==="
-          ERRORS=0
-          for json_file in $(find . -name "*.json" -not -path "./.schemas/*" -not -path "./.engine/*" -not -path "./.git/*"); do
-            key_count=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1])).keys()))" "$json_file" 2>/dev/null)
-            if [ "$key_count" != "1" ]; then
-              echo "ERROR: $json_file has $key_count top-level keys (expected exactly 1)"
-              ERRORS=$((ERRORS + 1))
-              continue
-            fi
-            resource_type=$(python3 -c "import json,sys; print(list(json.load(open(sys.argv[1])).keys())[0])" "$json_file" 2>/dev/null)
-            if [ -z "$resource_type" ]; then
-              echo "ERROR: Could not extract resource type from $json_file"
-              ERRORS=$((ERRORS + 1))
-              continue
-            fi
-            schema_file=".schemas/${resource_type}.schema.json"
-            if [ -f "$schema_file" ]; then
-              echo "Validating: $json_file against $schema_file (resource: ${resource_type})"
-              if ! check-jsonschema --schemafile "$schema_file" "$json_file"; then
-                ERRORS=$((ERRORS + 1))
-              fi
-            else
-              echo "ERROR: No schema found for resource type '${resource_type}' (expected: $schema_file)"
-              ERRORS=$((ERRORS + 1))
-            fi
-          done
-          echo ""
-          if [ "$ERRORS" -gt 0 ]; then
-            echo "=== VALIDATION FAILED: $ERRORS error(s) ==="
-            exit 1
-          else
-            echo "=== ALL JSON FILES PASSED SCHEMA VALIDATION ==="
-          fi
+          echo "=== CasC YAML Structural Validation ==="
+          python3 -c "
+          import yaml, sys, os
+
+          resource_types = yaml.safe_load(open('.schemas/resource-types.yml')) if os.path.exists('.schemas/resource-types.yml') else {'defaults': {'value_type': 'list', 'identity_field': 'name'}, 'exceptions': {}}
+          defaults = resource_types.get('defaults', {})
+          exceptions = resource_types.get('exceptions', {})
+
+          allowed_keys = None
+          if os.path.exists('.schemas/engine_defaults.yml'):
+              ak = yaml.safe_load(open('.schemas/engine_defaults.yml'))
+              allowed_keys = set(ak.get('casc_allowed_resource_keys', []))
+
+          skip_files = {'config.yml', 'tenants.yml'}
+          skip_dirs = {'.schemas', '.engine', '.git', '.github'}
+          errors = []
+
+          for search_dir in ['base'] + [d for d in os.listdir('.') if os.path.isdir(d) and d not in skip_dirs and d != 'base']:
+              if not os.path.isdir(search_dir):
+                  continue
+              for root, _, files in os.walk(search_dir):
+                  for fname in files:
+                      if not fname.endswith(('.yml', '.yaml')):
+                          continue
+                      if fname.endswith('.sample'):
+                          continue
+                      fpath = os.path.join(root, fname)
+                      try:
+                          data = yaml.safe_load(open(fpath))
+                      except Exception as e:
+                          errors.append(f'{fpath}: Failed to parse YAML — {e}')
+                          continue
+                      if not isinstance(data, dict):
+                          errors.append(f'{fpath}: Expected a mapping, got {type(data).__name__}')
+                          continue
+                      keys = list(data.keys())
+                      if len(keys) != 1:
+                          errors.append(f'{fpath}: Expected exactly 1 top-level key, got {len(keys)}: {keys}')
+                          continue
+                      key = keys[0]
+                      if allowed_keys and key not in allowed_keys:
+                          errors.append(f'{fpath}: Unknown resource key \"{key}\" (not in casc_allowed_resource_keys)')
+                          continue
+                      exc = exceptions.get(key, {})
+                      vtype = exc.get('value_type', defaults.get('value_type', 'list'))
+                      id_field = exc.get('identity_field', defaults.get('identity_field', 'name'))
+                      value = data[key]
+                      if vtype == 'list':
+                          if not isinstance(value, list):
+                              errors.append(f'{fpath}: Key \"{key}\" expected list, got {type(value).__name__}')
+                              continue
+                          for i, item in enumerate(value):
+                              if isinstance(item, dict) and id_field not in item:
+                                  errors.append(f'{fpath}: Item {i} in \"{key}\" missing identity field \"{id_field}\"')
+          if errors:
+              print('Structural validation errors:')
+              for e in errors:
+                  print(f'  ERROR: {e}')
+              sys.exit(1)
+          else:
+              print('=== ALL YAML FILES PASSED STRUCTURAL VALIDATION ===')
+          "
+
+      - name: Validate control files (config.yml / tenants.yml)
+        run: |
+          python3 -c "
+          import yaml, sys, os
+          errors = []
+
+          if os.path.exists('config.yml'):
+              try:
+                  cfg = yaml.safe_load(open('config.yml'))
+                  for key in ['env_branch_map', 'scm_provider', 'platform_scm_org', 'repo_pattern']:
+                      if key not in cfg:
+                          errors.append(f'config.yml: missing required key \"{key}\"')
+              except Exception as e:
+                  errors.append(f'config.yml: Failed to parse — {e}')
+
+          if os.path.exists('tenants.yml'):
+              try:
+                  t = yaml.safe_load(open('tenants.yml'))
+                  tenants = t.get('tenants', [])
+                  if not isinstance(tenants, list):
+                      errors.append('tenants.yml: \"tenants\" must be a list')
+                  else:
+                      for i, entry in enumerate(tenants):
+                          for req in ['org_id', 'team_name', 'team_lead', 'tenant_scm_org']:
+                              if req not in entry:
+                                  errors.append(f'tenants.yml: tenant {i} missing required field \"{req}\"')
+                          if 'status' in entry and entry['status'] not in ('active', 'inactive'):
+                              errors.append(f'tenants.yml: tenant {i} has invalid status \"{entry[\"status\"]}\"')
+              except Exception as e:
+                  errors.append(f'tenants.yml: Failed to parse — {e}')
+
+          if errors:
+              print('Control file validation errors:')
+              for e in errors: print(f'  ERROR: {e}')
+              sys.exit(1)
+          else:
+              print('=== CONTROL FILES VALID (or not present) ===')
+          "
 
       - name: Validate naming conventions
         run: |
@@ -150,14 +189,6 @@ jobs:
             echo "No naming validation scripts found — skipping."
           fi
 
-      - name: Check naming rules / schema sync
-        run: |
-          if [ -f ".schemas/check_naming_sync.py" ]; then
-            python3 .schemas/check_naming_sync.py
-          else
-            echo "No naming sync check script found — skipping."
-          fi
-
       - name: Check policy compliance (OPA)
         if: always()
         continue-on-error: true
@@ -166,123 +197,208 @@ jobs:
             echo "=== Checking OPA policy compliance ==="
             curl -sL -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
             chmod +x opa
-            for json_file in $(find . -name "*.json" -not -path "./.schemas/*" -not -path "./.engine/*" -not -path "./.git/*"); do
-              echo "Policy check: $json_file"
-              ./opa eval --data .schemas/policies/ --input "$json_file" "data.casc.deny" --format pretty
+
+            SCAN_DIRS=""
+            for d in $(ls -d */ 2>/dev/null); do
+              case "$d" in
+                .schemas/|.engine/|.git/|.github/) continue ;;
+                *) SCAN_DIRS="$SCAN_DIRS $d" ;;
+              esac
+            done
+
+            for yml_file in $(find $SCAN_DIRS -name "*.yml" -o -name "*.yaml" 2>/dev/null | grep -v '.sample$'); do
+              echo "Policy check: $yml_file"
+              python3 -c "import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), open('/tmp/opa_input.json','w'))" "$yml_file"
+              ./opa eval --data .schemas/policies/ --input /tmp/opa_input.json "data.casc.deny" --format pretty
             done
             echo "=== OPA POLICY CHECK COMPLETE ==="
           else
             echo "No OPA policies found — skipping."
           fi
 
-  trigger:
-    name: Trigger Dispatcher
+  bootstrap:
+    name: Bootstrap Tenants (GitOps)
+    runs-on: ubuntu-latest
     needs: validate
     if: >-
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      github.event_name == 'push'
+      && contains(toJSON(github.event.commits.*.modified), 'tenants.yml')
+      && !contains(github.event.head_commit.message, '[skip dispatch]')
+    outputs:
+      has_tenants_change: ${{ steps.diff.outputs.has_actions }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pyyaml
+        run: pip install pyyaml
+
+      - name: Diff tenants and determine actions
+        id: diff
+        run: |
+          python3 -c "
+          import yaml, json, subprocess, sys, os
+
+          try:
+              current = yaml.safe_load(open('tenants.yml'))
+          except Exception:
+              print('tenants.yml not found or invalid — skipping bootstrap')
+              sys.exit(0)
+
+          result = subprocess.run(['git', 'show', 'HEAD~1:tenants.yml'], capture_output=True, text=True)
+          if result.returncode != 0:
+              previous = {'tenants': []}
+          else:
+              previous = yaml.safe_load(result.stdout) or {'tenants': []}
+
+          prev_map = {t['org_id']: t for t in previous.get('tenants', [])}
+          curr_map = {t['org_id']: t for t in current.get('tenants', [])}
+
+          actions = []
+          for oid, tenant in curr_map.items():
+              if tenant.get('status') == 'inactive':
+                  continue
+              if oid not in prev_map:
+                  actions.append({'action': 'added', 'tenant': tenant})
+              elif tenant != prev_map[oid]:
+                  actions.append({'action': 'modified', 'tenant': tenant})
+
+          if not actions:
+              print('No new or modified active tenants — skipping bootstrap')
+              sys.exit(0)
+
+          print(f'Found {len(actions)} tenant(s) to bootstrap:')
+          for a in actions:
+              print(f'  {a[\"action\"]}: {a[\"tenant\"][\"org_id\"]}')
+
+          with open('tenant_actions.json', 'w') as f:
+              json.dump(actions, f)
+          "
+
+          if [ -f tenant_actions.json ]; then
+            echo "has_actions=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_actions=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger bootstrap for each tenant
+        if: steps.diff.outputs.has_actions == 'true'
+        run: |
+          AAP_HOST="${{ secrets.AAP_HOST }}"
+          AAP_USERNAME="${{ secrets.AAP_USERNAME }}"
+          AAP_PASSWORD="${{ secrets.AAP_PASSWORD }}"
+          JT_NAME="${BOOTSTRAP_JT_NAME}"
+
+          if [ -z "$AAP_HOST" ] || [ -z "$AAP_USERNAME" ] || [ -z "$AAP_PASSWORD" ]; then
+            echo "::error::Actionable tenants found but AAP credentials not configured"
+            exit 1
+          fi
+
+          JT_RESPONSE=$(curl -sk -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
+            "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${JT_NAME}")
+          JT_ID=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0]['id'] if r.get('results') else 'NOT_FOUND')")
+
+          if [ "$JT_ID" = "NOT_FOUND" ] || [ -z "$JT_ID" ]; then
+            echo "::error::Bootstrap JT '${JT_NAME}' not found"
+            exit 1
+          fi
+
+          python3 -c "
+          import json, subprocess, sys
+          actions = json.load(open('tenant_actions.json'))
+          for action in actions:
+              tenant = action['tenant']
+              print(f'Bootstrapping tenant: {tenant[\"org_id\"]} ({action[\"action\"]})')
+              extra_vars = json.dumps({
+                  'org_id': tenant['org_id'],
+                  'team_name': tenant['team_name'],
+                  'team_lead': tenant['team_lead'],
+                  'tenant_scm_org': tenant['tenant_scm_org'],
+                  'repo_pattern': tenant.get('repo_pattern', 'combined'),
+              })
+              result = subprocess.run([
+                  'curl', '-sk', '-X', 'POST',
+                  '-u', '${AAP_USERNAME}:${AAP_PASSWORD}',
+                  '-H', 'Content-Type: application/json',
+                  '-d', json.dumps({'extra_vars': extra_vars}),
+                  f'https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/'
+              ], capture_output=True, text=True)
+              response = json.loads(result.stdout) if result.stdout else {}
+              job_id = response.get('id', 'UNKNOWN')
+              print(f'  Job launched: ID={job_id}')
+          "
+
+  trigger:
+    name: Trigger Dispatcher
+    needs: [validate, bootstrap]
+    if: >-
+      always()
+      && needs.validate.result == 'success'
+      && (needs.bootstrap.result == 'skipped' || (needs.bootstrap.result == 'success' && needs.bootstrap.outputs.has_tenants_change != 'true'))
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && !(github.event_name == 'push' && contains(github.event.head_commit.message, '[skip dispatch]'))
     runs-on: ubuntu-latest
     concurrency:
       group: casc-dispatcher-trigger
       cancel-in-progress: false
     steps:
-      - name: Determine auth mode and target environment
-        id: auth
+      - name: Trigger AAP dispatcher
         run: |
-          BRANCH="${GITHUB_REF_NAME}"
+          AAP_HOST="${{ secrets.AAP_HOST }}"
+          AAP_USERNAME="${{ secrets.AAP_USERNAME }}"
+          AAP_PASSWORD="${{ secrets.AAP_PASSWORD }}"
+          JT_NAME="${DISPATCHER_JT_NAME}"
 
+          if [ -z "$AAP_HOST" ] || [ -z "$AAP_USERNAME" ] || [ -z "$AAP_PASSWORD" ]; then
+            echo "::error::Dispatcher trigger requires AAP_HOST, AAP_USERNAME, AAP_PASSWORD secrets."
+            exit 1
+          fi
+
+          BRANCH="${GITHUB_REF_NAME}"
           case "$BRANCH" in
-            feature/*)   ENV="dev"; HOST="${{ secrets.AAP_DEV_HOST }}"; TOKEN="${{ secrets.AAP_DEV_TOKEN }}" ;;
-            develop)     ENV="tst"; HOST="${{ secrets.AAP_TST_HOST }}"; TOKEN="${{ secrets.AAP_TST_TOKEN }}" ;;
-            release/*)   ENV="npr"; HOST="${{ secrets.AAP_NPR_HOST }}"; TOKEN="${{ secrets.AAP_NPR_TOKEN }}" ;;
-            main|master) ENV="prd"; HOST="${{ secrets.AAP_PRD_HOST }}"; TOKEN="${{ secrets.AAP_PRD_TOKEN }}" ;;
-            *)           ENV="dev"; HOST="${{ secrets.AAP_DEV_HOST }}"; TOKEN="${{ secrets.AAP_DEV_TOKEN }}" ;;
+            feature/*)   TARGET_ENV="dev" ;;
+            develop)     TARGET_ENV="tst" ;;
+            release/*)   TARGET_ENV="npr" ;;
+            main|master) TARGET_ENV="prd" ;;
+            *)           TARGET_ENV="dev" ;;
           esac
 
-          if [ -n "$HOST" ] && [ -n "$TOKEN" ]; then
-            echo "auth_mode=bearer" >> $GITHUB_OUTPUT
-            echo "aap_host=${HOST}" >> $GITHUB_OUTPUT
-            echo "target_env=${ENV}" >> $GITHUB_OUTPUT
-            echo "auth_header=Authorization: Bearer ${TOKEN}" >> $GITHUB_OUTPUT
-            echo "Using Bearer token auth for environment: ${ENV}"
-          elif [ -n "${{ secrets.AAP_HOST }}" ] && [ -n "${{ secrets.AAP_USERNAME }}" ] && [ -n "${{ secrets.AAP_PASSWORD }}" ]; then
-            echo "auth_mode=basic" >> $GITHUB_OUTPUT
-            echo "aap_host=${{ secrets.AAP_HOST }}" >> $GITHUB_OUTPUT
-            echo "target_env=${ENV}" >> $GITHUB_OUTPUT
-            echo "Using basic auth (demo/sandbox mode) for environment: ${ENV}"
-          else
-            echo "auth_mode=skip" >> $GITHUB_OUTPUT
-            echo "::warning::No AAP credentials configured — dispatcher will NOT be triggered. If this is unexpected, check that org/repo secrets (AAP_HOST, AAP_USERNAME, AAP_PASSWORD) are accessible. On GitHub Free plans, org-level secrets require public repo visibility."
-          fi
-
-      - name: Fail if trigger was expected but secrets are missing
-        if: steps.auth.outputs.auth_mode == 'skip' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        run: |
-          echo "::error::Dispatcher trigger skipped — no AAP credentials available."
-          echo "Possible causes:"
-          echo "  1. Org-level secrets not accessible (repo may be private on GitHub Free plan)"
-          echo "  2. Secrets AAP_HOST / AAP_USERNAME / AAP_PASSWORD not configured"
-          echo "  3. Per-env secrets (AAP_PRD_HOST/TOKEN, etc.) not configured for branch '${GITHUB_REF_NAME}'"
-          exit 1
-
-      - name: Trigger AAP dispatcher
-        if: steps.auth.outputs.auth_mode != 'skip'
-        run: |
-          AAP_HOST="${{ steps.auth.outputs.aap_host }}"
-          AUTH_MODE="${{ steps.auth.outputs.auth_mode }}"
-          TARGET_ENV="${{ steps.auth.outputs.target_env }}"
-          JT_NAME="${{ inputs.dispatcher_jt_name }}"
-
           echo "=== Triggering CasC Dispatcher on AAP ==="
-          echo "Host: ${AAP_HOST}"
-          echo "Environment: ${TARGET_ENV}"
-          echo "Job Template: ${JT_NAME}"
-          echo "Auth mode: ${AUTH_MODE}"
+          echo "Host: ${AAP_HOST} | Env: ${TARGET_ENV} | JT: ${JT_NAME}"
 
-          if [ "$AUTH_MODE" = "bearer" ]; then
-            AUTH_ARGS=(-H "${{ steps.auth.outputs.auth_header }}")
-          else
-            AUTH_ARGS=(-u "${{ secrets.AAP_USERNAME }}:${{ secrets.AAP_PASSWORD }}")
-          fi
-
-          echo "Looking up Job Template: ${JT_NAME}"
-          JT_RESPONSE=$(curl -sk "${AUTH_ARGS[@]}" \
+          JT_RESPONSE=$(curl -sk -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
             "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${JT_NAME}")
-
           JT_ID=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0]['id'] if r.get('results') else 'NOT_FOUND')")
 
           if [ "$JT_ID" = "NOT_FOUND" ] || [ -z "$JT_ID" ]; then
-            echo "ERROR: Job Template '${JT_NAME}' not found on ${AAP_HOST}"
-            echo "Response: $JT_RESPONSE"
+            echo "::error::Job Template '${JT_NAME}' not found on ${AAP_HOST}"
             exit 1
           fi
-          echo "Found JT ID: ${JT_ID}"
 
-          # Verify allow_simultaneous is false
           ALLOW_SIMUL=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0].get('allow_simultaneous', False))")
           if [ "$ALLOW_SIMUL" = "True" ]; then
-            echo "ERROR: Dispatcher JT '${JT_NAME}' has allow_simultaneous=true — this must be false to prevent concurrent full-sweep runs"
+            echo "::error::Dispatcher JT has allow_simultaneous=true — must be false"
             exit 1
           fi
 
-          # Quick courtesy check — AAP serializes via allow_simultaneous=false
-          echo "Checking if dispatcher is already running..."
           for attempt in $(seq 1 2); do
-            RUNNING=$(curl -sk "${AUTH_ARGS[@]}" \
+            RUNNING=$(curl -sk -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
               "https://${AAP_HOST}/api/controller/v2/jobs/?job_template=${JT_ID}&status__in=running,pending,waiting&page_size=1" \
               | python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))")
-            if [ "$RUNNING" = "0" ]; then
-              break
-            fi
-            echo "  Dispatcher is busy (attempt ${attempt}/2) — waiting 15s..."
+            [ "$RUNNING" = "0" ] && break
+            echo "  Dispatcher busy (${attempt}/2) — waiting 15s..."
             sleep 15
           done
-          if [ "$RUNNING" != "0" ]; then
-            echo "INFO: Dispatcher still busy — launching anyway (AAP will queue via allow_simultaneous=false)"
-          fi
 
-          echo "Launching dispatcher..."
-          LAUNCH_RESPONSE=$(curl -sk -X POST "${AUTH_ARGS[@]}" \
+          LAUNCH_RESPONSE=$(curl -sk -X POST \
+            -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
             -H "Content-Type: application/json" \
             -d "{
               \"extra_vars\": {
@@ -295,47 +411,25 @@ jobs:
             "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/")
 
           JOB_ID=$(echo "$LAUNCH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id', 'UNKNOWN'))")
-          echo "Dispatcher job launched: ID=${JOB_ID}"
-          echo "AAP UI: https://${AAP_HOST}/#/jobs/playbook/${JOB_ID}/output"
+          echo "Dispatcher launched: ID=${JOB_ID}"
 
           if [ "$JOB_ID" = "UNKNOWN" ] || [ -z "$JOB_ID" ]; then
-            echo "ERROR: Failed to launch dispatcher"
-            echo "Response: $LAUNCH_RESPONSE"
+            echo "::error::Failed to launch dispatcher"
             exit 1
           fi
 
-          # Fire-and-forget mode: exit immediately after launch
-          if [ "${{ inputs.wait_for_completion }}" = "false" ]; then
-            echo "=== FIRE-AND-FORGET: Dispatcher launched, not waiting for completion ==="
-            exit 0
-          fi
-
-          # Poll for job completion (configurable timeout)
-          POLL_TIMEOUT=${{ inputs.poll_timeout_minutes }}
-          if ! echo "$POLL_TIMEOUT" | grep -qE '^[0-9]+$' || [ "$POLL_TIMEOUT" -lt 1 ]; then
-            echo "WARNING: Invalid poll_timeout_minutes '${POLL_TIMEOUT}' — using default 30"
-            POLL_TIMEOUT=30
-          fi
-          POLL_CHECKS=$(( POLL_TIMEOUT * 6 ))
-          echo "Waiting for job to complete (timeout: ${POLL_TIMEOUT} min)..."
+          POLL_CHECKS=$(( POLL_TIMEOUT_MINUTES * 6 ))
+          echo "Polling for completion (timeout: ${POLL_TIMEOUT_MINUTES} min)..."
           for i in $(seq 1 $POLL_CHECKS); do
             sleep 10
-            STATUS=$(curl -sk "${AUTH_ARGS[@]}" \
+            STATUS=$(curl -sk -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
               "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
               | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
-            echo "  Status: ${STATUS} (check ${i}/${POLL_CHECKS})"
+            echo "  Status: ${STATUS} (${i}/${POLL_CHECKS})"
             case "$STATUS" in
-              successful) echo "=== DISPATCHER COMPLETED SUCCESSFULLY ===" && exit 0 ;;
-              failed|error|canceled) echo "=== DISPATCHER FAILED (status: ${STATUS}) ===" && exit 1 ;;
+              successful) echo "=== COMPLETED ===" && exit 0 ;;
+              failed|error|canceled) echo "=== FAILED (${STATUS}) ===" && exit 1 ;;
             esac
           done
-
-          # Graceful timeout — queued/running is not a failure
-          case "$STATUS" in
-            pending|waiting|running)
-              echo "::warning::Dispatcher job ${JOB_ID} still ${STATUS} after ${POLL_TIMEOUT} min — exiting with success. Check AAP UI for final status."
-              echo "AAP UI: https://${AAP_HOST}/#/jobs/playbook/${JOB_ID}/output"
-              exit 0 ;;
-          esac
-          echo "=== TIMEOUT: Job in unexpected state '${STATUS}' after ${POLL_TIMEOUT} min ==="
-          exit 1
+          echo "::warning::Job ${JOB_ID} still running after ${POLL_TIMEOUT_MINUTES} min"
+          exit 0

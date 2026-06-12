@@ -1,0 +1,7 @@
+---
+controller_inventories:
+  - name: inv-myorg01-db_servers
+    description: "Database servers — PRD environment"
+    variables:
+      env: prd
+      db_host: prd-db.example.com

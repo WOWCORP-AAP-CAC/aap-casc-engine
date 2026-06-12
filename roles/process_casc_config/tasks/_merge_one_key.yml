@@ -1,0 +1,99 @@
+---
+# _merge_one_key.yml — Merge base + env resources for a single resource key
+#
+# Each set_fact uses only {{ }} expressions (no {% %} block tags) to
+# guarantee Ansible preserves native Python types instead of stringifying.
+#
+# Loop expressions use safe guards (e.g. _current_base if ... else [])
+# so Ansible never passes a dict to loop even when the block is skipped.
+#
+# Required variables (from caller):
+#   _merge_key:            the resource key to merge
+#   _base_resources:       dict of base resource data
+#   _env_resources:        dict of env resource data
+#   _resource_types_meta:  resource-types.yml content
+#   merged_resources:      accumulator dict (updated in place)
+
+- name: "{{ _merge_key }} — Resolve inputs"
+  ansible.builtin.set_fact:
+    _current_base: "{{ _base_resources[_merge_key] | default(_empty_fallback) }}"
+    _current_env: "{{ _env_resources[_merge_key] | default(_empty_fallback) }}"
+    _current_id_field: "{{ _type_meta.identity_field | default('name') }}"
+  vars:
+    _type_meta: "{{ _resource_types_meta.exceptions[_merge_key] | default(_resource_types_meta.defaults) }}"
+    _empty_fallback: "{{ {} if _type_meta.value_type | default('list') == 'raw' else [] }}"
+
+- name: "{{ _merge_key }} — Dict-on-dict merge"
+  ansible.builtin.set_fact:
+    _current_merged: "{{ _current_base | combine(_current_env, recursive=true) }}"
+  when: _current_base is mapping and _current_env is mapping
+
+- name: "{{ _merge_key }} — Base dict only (no env or env empty)"
+  ansible.builtin.set_fact:
+    _current_merged: "{{ _current_base }}"
+  when:
+    - _current_base is mapping
+    - not (_current_env is mapping)
+
+- name: "{{ _merge_key }} — Env dict only (no base or base empty)"
+  ansible.builtin.set_fact:
+    _current_merged: "{{ _current_env }}"
+  when:
+    - _current_env is mapping
+    - not (_current_base is mapping)
+
+- name: "{{ _merge_key }} — Base-only list (no env data)"
+  ansible.builtin.set_fact:
+    _current_merged: "{{ _current_base }}"
+  when:
+    - _current_base is not mapping
+    - _current_env is not mapping
+    - _current_env | length == 0
+
+- name: "{{ _merge_key }} — Env-only list (no base data)"
+  ansible.builtin.set_fact:
+    _current_merged: "{{ _current_env }}"
+  when:
+    - _current_base is not mapping
+    - _current_env is not mapping
+    - _current_base | length == 0
+    - _current_env | length > 0
+
+- name: "{{ _merge_key }} — List merge"
+  when:
+    - _current_base is not mapping
+    - _current_env is not mapping
+    - _current_base | length > 0
+    - _current_env | length > 0
+  block:
+    - name: "{{ _merge_key }} — Init merged list"
+      ansible.builtin.set_fact:
+        _merged_list: []
+
+    - name: "{{ _merge_key }} — Merge base items with env overrides"
+      ansible.builtin.set_fact:
+        _merged_list: "{{ _merged_list + [_merged_item] }}"
+      vars:
+        _env_match: "{{ (_current_env | selectattr(_current_id_field, 'equalto', _base_item[_current_id_field]) | list) }}"
+        _merged_item: "{{ _base_item | combine(_env_match | first, recursive=true) if _env_match | length > 0 else _base_item }}"
+      loop: "{{ _current_base if _current_base is not mapping else [] }}"
+      loop_control:
+        loop_var: _base_item
+        label: "{{ _base_item[_current_id_field] | default('item') }}"
+
+    - name: "{{ _merge_key }} — Append env-only items"
+      ansible.builtin.set_fact:
+        _merged_list: "{{ _merged_list + [_env_item] }}"
+      when: (_current_base | selectattr(_current_id_field, 'equalto', _env_item[_current_id_field]) | list | length) == 0
+      loop: "{{ _current_env if _current_env is not mapping else [] }}"
+      loop_control:
+        loop_var: _env_item
+        label: "{{ _env_item[_current_id_field] | default('item') }}"
+
+    - name: "{{ _merge_key }} — Store list merge result"
+      ansible.builtin.set_fact:
+        _current_merged: "{{ _merged_list }}"
+
+- name: "{{ _merge_key }} — Accumulate into merged_resources"
+  ansible.builtin.set_fact:
+    merged_resources: "{{ merged_resources | combine({_merge_key: _current_merged}) }}"

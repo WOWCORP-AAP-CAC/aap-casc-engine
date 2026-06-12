@@ -1,0 +1,7 @@
+---
+controller_inventories:
+  - name: inv-myorg01-db_servers
+    description: "Database servers — DEV environment"
+    variables:
+      env: dev
+      db_host: dev-db.example.com

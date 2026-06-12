@@ -1,12 +1,12 @@
 ---
 # genesis_scm_gitlab.yml — GitLab-specific SCM operations for platform genesis
 #
-# Creates all platform repos, pushes repos-manifest.yml (from the engine repo),
+# Creates all platform repos, pushes config.yml + tenants.yml to the home repo,
 # seeds CI/CD includes, and README.md files. All operations are idempotent.
 #
 # Required variables: platform_scm_org, platform_namespace_id, engine_repo,
-#   platform_repos, manifest_repo, scm_base_url, scm_api_token,
-#   repo_visibility, _genesis_manifest
+#   platform_repos, _home_repo, scm_base_url, scm_api_token,
+#   repo_visibility, _config_yml_content, _tenants_yml_content
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 1: Create all platform repos (tolerates already-exists)
@@ -34,7 +34,6 @@
   loop_control:
     label: "{{ item.name }}"
 
-# Look up project IDs for subsequent file operations
 - name: "GL – Look up project IDs"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ item.name) | urlencode() | replace('/', '%2F') }}"
@@ -47,41 +46,59 @@
   register: _gl_project_lookups
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 2: Push repos-manifest.yml to manifest repo (from engine, first-time only)
+# Step 2: Push config.yml + tenants.yml to home repo (first-time only)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GL – Find registry project ID"
+- name: "GL – Find home repo project ID"
   ansible.builtin.set_fact:
-    _gl_registry_project_id: >-
-      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', manifest_repo) | first).json.id }}
+    _gl_home_project_id: >-
+      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', _home_repo) | first).json.id }}
 
-- name: "GL – Check if repos-manifest.yml already exists"
+- name: "GL – Check if config.yml already exists"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_registry_project_id }}/repository/files/repos-manifest.yml?ref=main"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/config.yml?ref=main"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     status_code: [200, 404]
-  register: _gl_manifest_check
+  register: _gl_config_check
 
-- name: "GL – Push repos-manifest.yml (first-time only)"
+- name: "GL – Push config.yml (first-time only)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_registry_project_id }}/repository/files/repos-manifest.yml"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/config.yml"
     method: POST
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
       branch: "main"
-      content: "{{ _genesis_manifest }}"
-      commit_message: "Genesis: initialize repos-manifest.yml registry [skip dispatch]"
+      content: "{{ _config_yml_content }}"
+      commit_message: "Genesis: initialize config.yml [skip dispatch]"
     status_code: [200, 201]
-  when: _gl_manifest_check.status == 404
+  when: _gl_config_check.status == 404
 
-- name: "GL – Skip manifest (already exists — preserving tenant entries)"
-  ansible.builtin.debug:
-    msg: "repos-manifest.yml already exists in manifest repo. Skipping to preserve tenant_repos entries."
-  when: _gl_manifest_check.status == 200
+- name: "GL – Check if tenants.yml already exists"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/tenants.yml?ref=main"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  register: _gl_tenants_check
+
+- name: "GL – Push tenants.yml (first-time only)"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/tenants.yml"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "main"
+      content: "{{ _tenants_yml_content }}"
+      commit_message: "Genesis: initialize tenants.yml [skip dispatch]"
+    status_code: [200, 201]
+  when: _gl_tenants_check.status == 404
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3: Seed CI/CD include in each repo

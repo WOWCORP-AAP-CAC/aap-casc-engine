@@ -1,17 +1,17 @@
 ---
 # Hybrid CasC Dispatcher — Apply Configuration to AAP
 #
-# Main entry point for the aap-casc-engine. Clones CasC repos from Git,
-# processes JSON (env filter, merge, scope suffix), and applies via the
-# infra.aap_configuration.dispatch role.
+# Main entry point for the aap-casc-engine. Clones the platform repo first
+# to read config.yml + tenants.yml, then clones CasC repos, processes YAML
+# (folder-based env layering), and applies via infra.aap_configuration.dispatch.
 #
 # Supports dual-mode operation:
 #   - Targeted apply: CI/CD trigger passes triggered_repo (single tenant + platform repos)
-#   - Full apply: Scheduled reconciliation processes all repos from the manifest
+#   - Full apply: Scheduled reconciliation processes all repos from tenants.yml
 #
 # Usage:
 #   ansible-playbook site.yml -e target_env=dev
-#   ansible-playbook site.yml -e target_env=dev -e triggered_repo=controller-projects-myorg01
+#   ansible-playbook site.yml -e target_env=dev -e triggered_repo=casc-tenant-myorg01
 
 - name: "Hybrid CasC Dispatcher — Apply Configuration to AAP"
   hosts: localhost
@@ -19,84 +19,115 @@
   gather_facts: true
 
   vars:
-    # AAP Platform connection — injected by AAP credential type
-    # "Red Hat Ansible Automation Platform" (CONTROLLER_* env vars)
     aap_hostname: "{{ lookup('env', 'CONTROLLER_HOST') }}"
     aap_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
     aap_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
     aap_validate_certs: "{{ lookup('env', 'CONTROLLER_VERIFY_SSL') | default(true, true) | bool }}"
     target_env: "{{ lookup('env', 'TARGET_ENV') | default('dev', true) }}"
 
-    # Trigger metadata (passed by CI/CD pipeline or empty for scheduled runs)
     trigger_commit: "{{ lookup('env', 'TRIGGER_COMMIT') | default('', true) }}"
     triggered_repo: "{{ lookup('env', 'TRIGGERED_REPO') | default('', true) }}"
     trigger_source: "{{ lookup('env', 'TRIGGER_SOURCE') | default('scheduled', true) }}"
 
-    # Enable production best practices
     aap_configuration_collect_logs: true
 
-    # Manifest repo — the platform repo containing repos-manifest.yml.
-    # When set, the dispatcher clones this repo first to load the manifest.
-    # When empty, falls back to the local repos-manifest.yml in the engine repo.
-    manifest_repo: ""
-    platform_scm_org: ""
-    manifest_branch: "main"
-    manifest_dir: "/tmp/casc-manifest"
+    # Platform repo — contains config.yml and tenants.yml
+    platform_repo: "{{ lookup('env', 'PLATFORM_REPO') | default('casc-platform-global', true) }}"
+    platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('', true) }}"
+    platform_branch: "main"
+    platform_dir: "/tmp/casc-platform"
 
-    # Git SCM base URL
     scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
     scm_token: "{{ lookup('env', 'SCM_TOKEN') }}"
 
-    # Working directories
     clone_dir: "/tmp/casc-repos"
     staging_dir: "/tmp/casc-staging"
 
   pre_tasks:
-    # Phase 0: Load manifest from manifest repo or local file
-    - name: "Clone manifest repo to load manifest"
+    # Phase 0: Clone platform repo and load config.yml + tenants.yml
+    - name: "Clone platform repo"
       ansible.builtin.include_role:
         name: git_clone_repos
       vars:
         repos_to_clone:
-          - name: "{{ manifest_repo }}"
+          - name: "{{ platform_repo }}"
             scm_org: "{{ platform_scm_org }}"
-            aap_scope: _registry
-        clone_base_dir: "{{ manifest_dir }}"
-        clone_branch: "{{ manifest_branch }}"
+            aap_scope: platform
+        clone_base_dir: "{{ platform_dir }}"
+        clone_branch: "{{ platform_branch }}"
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
-      when: manifest_repo | default('') | length > 0
 
-    - name: "Load manifest from manifest repo"
-      ansible.builtin.set_fact:
-        repos_manifest: "{{ lookup('file', manifest_dir + '/' + manifest_repo + '/repos-manifest.yml') | from_yaml }}"
-      when: manifest_repo | default('') | length > 0
+    - name: "Load config.yml from platform repo"
+      ansible.builtin.include_vars:
+        file: "{{ platform_dir }}/{{ platform_repo }}/config.yml"
+        name: platform_config
 
-    - name: "Load manifest from local file (fallback)"
-      ansible.builtin.set_fact:
-        repos_manifest: "{{ lookup('file', playbook_dir + '/repos-manifest.yml') | from_yaml }}"
-      when: manifest_repo | default('') | length == 0
+    - name: "Load tenants.yml from platform repo"
+      ansible.builtin.include_vars:
+        file: "{{ platform_dir }}/{{ platform_repo }}/tenants.yml"
+        name: tenants_registry
 
     # Phase 1: Resolve branch from env_branch_map
     - name: "Resolve target branch for {{ target_env }}"
       ansible.builtin.set_fact:
-        target_branch: "{{ repos_manifest.env_branch_map[target_env] | default('develop') }}"
+        target_branch: "{{ platform_config.env_branch_map[target_env] | default('develop') }}"
+        _repo_pattern: "{{ platform_config.repo_pattern | default('combined') }}"
 
-    # Phase 2: Select repos (targeted or full apply)
+    # Phase 2: Build selected repos list
+    - name: "Filter active tenants"
+      ansible.builtin.set_fact:
+        _active_tenants: >-
+          {{ tenants_registry.tenants | default([])
+             | rejectattr('status', 'defined')
+             | list
+             + tenants_registry.tenants | default([])
+               | selectattr('status', 'defined')
+               | selectattr('status', 'equalto', 'active')
+               | list }}
+
+    - name: "Build tenant repos list"
+      ansible.builtin.set_fact:
+        _tenant_repos: >-
+          {% set ns = namespace(repos=[]) %}
+          {% for tenant in _active_tenants %}
+          {% if tenant.repo_pattern | default(_repo_pattern) == 'combined' %}
+          {% set ns.repos = ns.repos + [{'name': 'casc-tenant-' + tenant.org_id, 'aap_scope': tenant.org_id, 'scm_org': tenant.tenant_scm_org}] %}
+          {% else %}
+          {% for rtype in ['controller-projects', 'controller-credentials', 'controller-inventories', 'controller-templates', 'controller-workflows', 'controller-schedules', 'controller-notifications'] %}
+          {% set ns.repos = ns.repos + [{'name': rtype + '-' + tenant.org_id, 'aap_scope': tenant.org_id, 'scm_org': tenant.tenant_scm_org}] %}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+          {{ ns.repos }}
+
+    - name: "Build platform repos list"
+      ansible.builtin.set_fact:
+        _platform_repos: >-
+          {% if _repo_pattern == 'combined' %}
+          {{ [{'name': platform_repo, 'aap_scope': 'platform', 'scm_org': platform_scm_org}] }}
+          {% else %}
+          {% set ns = namespace(repos=[]) %}
+          {% for r in platform_config.platform_repos | default([]) %}
+          {% set ns.repos = ns.repos + [{'name': r.name, 'aap_scope': 'platform', 'scm_org': platform_scm_org}] %}
+          {% endfor %}
+          {{ ns.repos }}
+          {% endif %}
+
     - name: "Select repos to process"
       ansible.builtin.set_fact:
         selected_repos: >-
-          {{ repos_manifest.platform_repos +
-             (repos_manifest.tenant_repos | selectattr('name', 'equalto', triggered_repo) | list
-              if triggered_repo is defined and triggered_repo
-              else repos_manifest.tenant_repos) }}
+          {{ _platform_repos +
+             (_tenant_repos | selectattr('name', 'equalto', triggered_repo) | list
+              if triggered_repo is defined and triggered_repo | length > 0
+              else _tenant_repos) }}
 
     - name: "Log apply mode"
       ansible.builtin.debug:
         msg: >-
           Mode: {{ 'TARGETED (' + triggered_repo + ' + platform repos)'
-                   if triggered_repo is defined and triggered_repo
-                   else 'FULL (all repos from manifest)' }}
+                   if triggered_repo is defined and triggered_repo | length > 0
+                   else 'FULL (all repos from tenants.yml)' }}
           | Env: {{ target_env }} | Branch: {{ target_branch }}
           | Repos: {{ selected_repos | length }}
 
@@ -111,10 +142,10 @@
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
-    # Phase 4: Process JSON (env filter + merge + suffix)
-    - name: "Process JSON for each repo"
+    # Phase 4: Process YAML (folder-based env layering + merge + suffix)
+    - name: "Process YAML for each repo"
       ansible.builtin.include_role:
-        name: process_casc_json
+        name: process_casc_config
       vars:
         repo_clone_dir: "{{ clone_dir }}/{{ casc_repo.name }}"
         repo_scope: "{{ casc_repo.aap_scope }}"
@@ -129,20 +160,38 @@
     - name: "Load processed config (scope-suffixed)"
       ansible.builtin.include_vars:
         dir: "{{ staging_dir }}"
-        extensions: [json]
+        extensions: [yml, yaml]
         depth: 1
+
+    # Phase 5b: Engine-side Hub RBAC wildcard merge
+    - name: "Merge scope-suffixed Hub RBAC vars (engine-side)"
+      ansible.builtin.set_fact:
+        "{{ item }}": >-
+          {{ query('ansible.builtin.varnames', '^' + item + '_.*')
+             | reject('match', '.*_secure_logging$')
+             | map('extract', vars) | flatten }}
+      loop: [hub_roles, hub_group_roles]
+      when: query('ansible.builtin.varnames', '^' + item + '_.*') | length > 0
 
   roles:
     # Phase 6: Apply ALL configuration via the built-in dispatch role.
-    # dispatch_include_wildcard_vars merges scope-suffixed vars automatically:
-    #   controller_projects_platform + controller_projects_myorg01 → controller_projects
-    # Requires infra.aap_configuration >= 4.0.0, < 5.0.0 (see collections/requirements.yml).
     - role: infra.aap_configuration.dispatch
       vars:
         dispatch_include_wildcard_vars: true
 
   post_tasks:
-    # Phase 7: Post-apply reporting and error handling
+    # Phase 7: Engine-side Hub RBAC apply (not in collection dispatcher)
+    - name: "Apply Hub RBAC resources (not in default dispatch)"
+      ansible.builtin.include_role:
+        name: "infra.aap_configuration.{{ __hub_extra.role }}"
+      when: vars[__hub_extra.var] is defined
+      loop:
+        - { role: hub_role, var: hub_roles }
+        - { role: hub_group_roles, var: hub_group_roles }
+      loop_control:
+        loop_var: __hub_extra
+
+    # Phase 8: Post-apply reporting and error handling
     - name: "Report any collected errors"
       ansible.builtin.fail:
         msg: >-
@@ -159,7 +208,6 @@
           Mode: {{ trigger_source }} | Env: {{ target_env }} |
           Repos processed: {{ selected_repos | length }}
 
-    # Cleanup
     - name: "Remove temporary directories"
       ansible.builtin.file:
         path: "{{ item }}"
@@ -167,3 +215,4 @@
       loop:
         - "{{ clone_dir }}"
         - "{{ staging_dir }}"
+        - "{{ platform_dir }}"

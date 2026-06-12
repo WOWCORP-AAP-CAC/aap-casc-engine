@@ -1,0 +1,6 @@
+---
+controller_inventories:
+  - name: inv-myorg01-db_servers
+    description: Database servers (base definition)
+    organization: org-myorg01
+    kind: ""

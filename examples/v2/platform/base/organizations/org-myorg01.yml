@@ -1,0 +1,8 @@
+---
+aap_organizations:
+  - name: org-myorg01
+    description: MyOrg01 automation organization
+    max_hosts: 0
+    default_environment: Default execution environment
+    galaxy_credentials:
+      - Ansible Galaxy

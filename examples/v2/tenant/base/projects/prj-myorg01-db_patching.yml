@@ -1,0 +1,8 @@
+---
+controller_projects:
+  - name: prj-myorg01-db_patching
+    description: Database patching automation
+    scm_type: git
+    scm_url: https://github.com/example/db-patching.git
+    scm_branch: main
+    organization: org-myorg01

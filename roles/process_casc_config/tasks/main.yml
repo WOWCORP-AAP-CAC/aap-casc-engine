@@ -1,0 +1,233 @@
+---
+# process_casc_config — Process CasC YAML files from a cloned repository
+#
+# Implements folder-based environment layering:
+#   base/    — resources applied to ALL environments
+#   <env>/   — environment-specific overrides merged on top of base
+#
+# Flat-file mode: if no base/ directory exists, all *.yml at the repo root
+# are read without env filtering (supports simple repos).
+#
+# Merge strategy (driven by schemas/resource-types.yml):
+#   - list resources: items matched by identity_field, recursively merged
+#   - raw/dict resources: recursively merged with env keys winning
+#
+# Required variables:
+#   repo_clone_dir: path to the cloned repo
+#   repo_scope:     scope suffix (e.g., platform, myorg01)
+#   output_dir:     directory to write processed YAML files
+#   env_filter:     target environment (e.g., dev, prd) — ignored in flat-file mode
+
+- name: "Ensure output directory exists"
+  ansible.builtin.file:
+    path: "{{ output_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: "Load resource-types metadata"
+  ansible.builtin.include_vars:
+    file: "{{ casc_resource_types_file }}"
+    name: _resource_types_meta
+
+- name: "Detect repo layout (folder-based vs flat-file)"
+  ansible.builtin.stat:
+    path: "{{ repo_clone_dir }}/base"
+  register: _base_dir
+
+- name: "Process with folder-based layout"
+  when: _base_dir.stat.exists and _base_dir.stat.isdir
+  block:
+    - name: "Find base YAML files"
+      ansible.builtin.find:
+        paths: "{{ repo_clone_dir }}/base"
+        patterns: "*.yml,*.yaml"
+        recurse: true
+      register: _base_files
+
+    - name: "Find env-specific YAML files"
+      ansible.builtin.find:
+        paths: "{{ repo_clone_dir }}/{{ env_filter }}"
+        patterns: "*.yml,*.yaml"
+        recurse: true
+      register: _env_files
+      when: env_filter is defined and env_filter | length > 0
+
+    - name: "Read base YAML files"
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ _base_files.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _base_contents
+
+    - name: "Read env YAML files"
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ (_env_files.files | default([])) if (_env_files is defined and _env_files is not skipped) else [] }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _env_contents
+
+    - name: "Validate base files have exactly one recognized top-level key"
+      ansible.builtin.assert:
+        that:
+          - (_parsed_data | dict2items | length) == 1
+          - (_parsed_data | dict2items | first).key in casc_allowed_resource_keys
+        fail_msg: >-
+          INVALID: {{ item.source | basename }} —
+          {% if (_parsed_data | dict2items | length) != 1 %}
+          has {{ _parsed_data | dict2items | length }} top-level keys.
+          {% else %}
+          uses unknown key "{{ (_parsed_data | dict2items | first).key }}".
+          {% endif %}
+        quiet: true
+      vars:
+        _parsed_data: "{{ item.content | b64decode | from_yaml }}"
+      loop: "{{ _base_contents.results | default([]) }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+
+    - name: "Validate env files have exactly one recognized top-level key"
+      ansible.builtin.assert:
+        that:
+          - (_parsed_data | dict2items | length) == 1
+          - (_parsed_data | dict2items | first).key in casc_allowed_resource_keys
+        fail_msg: >-
+          INVALID: {{ item.source | basename }} —
+          {% if (_parsed_data | dict2items | length) != 1 %}
+          has {{ _parsed_data | dict2items | length }} top-level keys.
+          {% else %}
+          uses unknown key "{{ (_parsed_data | dict2items | first).key }}".
+          {% endif %}
+        quiet: true
+      vars:
+        _parsed_data: "{{ item.content | b64decode | from_yaml }}"
+      loop: "{{ (_env_contents.results | default([])) if (_env_contents.results is defined) else [] }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+      when: _env_contents.results is defined and _env_contents.results | length > 0
+
+    - name: "Initialize base resources"
+      ansible.builtin.set_fact:
+        _base_resources: {}
+
+    - name: "Parse base files into resource map"
+      ansible.builtin.set_fact:
+        _base_resources: "{{ _base_resources | combine({_resource_key: _aggregated}) }}"
+      vars:
+        _file_data: "{{ item.content | b64decode | from_yaml }}"
+        _resource_key: "{{ (_file_data | dict2items | first).key }}"
+        _resource_value: "{{ (_file_data | dict2items | first).value }}"
+        _aggregated: "{{ (_base_resources[_resource_key] | default({})) | combine(_resource_value, recursive=true) if _resource_value is mapping else (_base_resources[_resource_key] | default([])) + _resource_value }}"
+      loop: "{{ _base_contents.results | default([]) }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+
+    - name: "Initialize env resources"
+      ansible.builtin.set_fact:
+        _env_resources: {}
+
+    - name: "Parse env files into resource map"
+      ansible.builtin.set_fact:
+        _env_resources: "{{ _env_resources | combine({_resource_key: _aggregated}) }}"
+      vars:
+        _file_data: "{{ item.content | b64decode | from_yaml }}"
+        _resource_key: "{{ (_file_data | dict2items | first).key }}"
+        _resource_value: "{{ (_file_data | dict2items | first).value }}"
+        _aggregated: "{{ (_env_resources[_resource_key] | default({})) | combine(_resource_value, recursive=true) if _resource_value is mapping else (_env_resources[_resource_key] | default([])) + _resource_value }}"
+      loop: "{{ _env_contents.results | default([]) }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+      when:
+        - _env_contents.results is defined
+        - _env_contents.results | length > 0
+
+    - name: "Initialize merged resources"
+      ansible.builtin.set_fact:
+        merged_resources: {}
+
+    - name: "Merge base and env resources per type"
+      ansible.builtin.include_tasks: _merge_one_key.yml
+      vars:
+        _merge_key: "{{ _resource_entry.key }}"
+      loop: "{{ (_base_resources | combine(_env_resources, recursive=false)) | dict2items }}"
+      loop_control:
+        loop_var: _resource_entry
+        label: "{{ _resource_entry.key }}"
+
+- name: "Process with flat-file layout (no base/ directory)"
+  when: not (_base_dir.stat.exists and _base_dir.stat.isdir)
+  block:
+    - name: "Find all YAML config files at repo root"
+      ansible.builtin.find:
+        paths: "{{ repo_clone_dir }}"
+        patterns: "*.yml,*.yaml"
+        recurse: false
+        excludes:
+          - ".github"
+          - ".gitlab-ci*"
+      register: _flat_files
+
+    - name: "Read flat YAML files"
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ _flat_files.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _flat_contents
+      when: _flat_files.files | default([]) | length > 0
+
+    - name: "Validate flat files have exactly one recognized top-level key"
+      ansible.builtin.assert:
+        that:
+          - (_parsed_data | dict2items | length) == 1
+          - (_parsed_data | dict2items | first).key in casc_allowed_resource_keys
+        fail_msg: >-
+          INVALID: {{ item.source | basename }} —
+          {% if (_parsed_data | dict2items | length) != 1 %}
+          has {{ _parsed_data | dict2items | length }} top-level keys.
+          {% else %}
+          uses unknown key "{{ (_parsed_data | dict2items | first).key }}".
+          {% endif %}
+          Allowed: {{ casc_allowed_resource_keys | join(', ') }}.
+        quiet: true
+      vars:
+        _parsed_data: "{{ item.content | b64decode | from_yaml }}"
+      loop: "{{ _flat_contents.results | default([]) }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+
+    - name: "Initialize merged resources for flat mode"
+      ansible.builtin.set_fact:
+        merged_resources: {}
+
+    - name: "Aggregate flat YAML into resource map"
+      ansible.builtin.set_fact:
+        merged_resources: "{{ merged_resources | combine({_resource_key: _aggregated}) }}"
+      vars:
+        _file_data: "{{ item.content | b64decode | from_yaml }}"
+        _resource_key: "{{ (_file_data | dict2items | first).key }}"
+        _resource_value: "{{ (_file_data | dict2items | first).value }}"
+        _aggregated: "{{ (merged_resources[_resource_key] | default({})) | combine(_resource_value, recursive=true) if _resource_value is mapping else (merged_resources[_resource_key] | default([])) + _resource_value }}"
+      loop: "{{ _flat_contents.results | default([]) }}"
+      loop_control:
+        label: "{{ item.source | basename }}"
+
+- name: "Write scope-suffixed YAML files to output directory"
+  ansible.builtin.copy:
+    content: "{{ {item.key + '_' + repo_scope: item.value} | to_nice_yaml(indent=2) }}"
+    dest: "{{ output_dir }}/{{ item.key }}_{{ repo_scope }}.yml"
+    mode: "0644"
+  loop: "{{ merged_resources | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}_{{ repo_scope }}"
+  when: merged_resources is defined and merged_resources | length > 0
+
+- name: "Report processing results"
+  ansible.builtin.debug:
+    msg: >-
+      Processed {{ repo_clone_dir | basename }}
+      → layout: {{ 'folder-based' if (_base_dir.stat.exists and _base_dir.stat.isdir) else 'flat-file' }}
+      → scope: {{ repo_scope }}
+      {{ '→ env: ' + env_filter if (_base_dir.stat.exists and _base_dir.stat.isdir) and env_filter is defined else '' }}
+      → {{ merged_resources | default({}) | length }} resource types written to {{ output_dir }}

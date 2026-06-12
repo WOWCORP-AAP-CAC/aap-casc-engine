@@ -1,0 +1,27 @@
+---
+# Per-resource-type validation and merge configuration.
+#
+# defaults: applied to every resource key unless overridden in exceptions.
+#   value_type:     "list" (array of items) or "raw" (dict or list of name/value pairs)
+#   identity_field: field used to match items during base/env merge (list types only)
+#
+# exceptions: keyed by dispatch variable name. Override any default.
+#
+# Usage:
+#   - CI structural validation: checks value_type + identity_field presence
+#   - process_casc_config role: drives base/env merge strategy
+
+defaults:
+  value_type: list
+  identity_field: name
+
+exceptions:
+  controller_settings:
+    value_type: raw
+    identity_field: name
+  gateway_settings:
+    value_type: raw
+    identity_field: name
+  hub_group_roles:
+    value_type: list
+    identity_field: groups
