@@ -48,9 +48,13 @@
     default_organization: "{{ lookup('env', 'DEFAULT_ORGANIZATION') | default('Default') }}"
     env_branch_map:
       dev: develop
-      tst: develop
+      tst: release/tst
       npr: release/npr
       prd: main
+
+    platform_branch: "{{ lookup('env', 'PLATFORM_BRANCH') | default('main', true) }}"
+    create_missing_env_branches: "{{ lookup('env', 'CREATE_MISSING_ENV_BRANCHES') | default(true, true) | bool }}"
+    bootstrap_dispatch_fanout: "{{ lookup('env', 'BOOTSTRAP_DISPATCH_FANOUT') | default(true, true) | bool }}"
 
     # Combined pattern: single platform repo name
     _combined_platform_repo: casc-platform-global
@@ -91,6 +95,7 @@
       ansible.builtin.set_fact:
         _effective_default_org: "{{ default_organization }}"
         _effective_env_branch_map: "{{ env_branch_map }}"
+        _effective_platform_branch: "{{ platform_branch }}"
 
     - name: "Determine platform repos based on repo_pattern"
       ansible.builtin.set_fact:
@@ -157,6 +162,43 @@
         fail_msg: >-
           platform_namespace_id is required for GitLab.
       when: scm_provider == 'gitlab'
+
+    - name: "Validate env_branch_map structure"
+      ansible.builtin.assert:
+        that:
+          - env_branch_map is mapping
+          - env_branch_map | length > 0
+        fail_msg: >-
+          env_branch_map must be a non-empty dict.
+          Got: {{ env_branch_map }}
+
+    - name: "Derive invalid env_branch_map entries"
+      ansible.builtin.set_fact:
+        _ebm_items: "{{ env_branch_map | dict2items }}"
+        _ebm_non_string_keys: "{{ (env_branch_map | dict2items) | rejectattr('key', 'string') | map(attribute='key') | list }}"
+        _ebm_empty_keys: "{{ (env_branch_map | dict2items) | selectattr('key', 'string') | selectattr('key', 'equalto', '') | map(attribute='key') | list }}"
+        _ebm_bad_env_names: "{{ (env_branch_map | dict2items) | selectattr('key', 'string') | rejectattr('key', 'match', '^[a-z0-9_]+$') | map(attribute='key') | list }}"
+        _ebm_non_string_values: "{{ (env_branch_map | dict2items) | rejectattr('value', 'string') | map(attribute='key') | list }}"
+        _ebm_empty_values: "{{ (env_branch_map | dict2items) | selectattr('value', 'string') | selectattr('value', 'match', '^\\s*$') | map(attribute='key') | list }}"
+
+    - name: "Validate env_branch_map keys and values"
+      ansible.builtin.assert:
+        that:
+          - _ebm_non_string_keys | length == 0
+          - _ebm_empty_keys | length == 0
+          - _ebm_bad_env_names | length == 0
+          - _ebm_non_string_values | length == 0
+          - _ebm_empty_values | length == 0
+          - env_branch_map.values() | list | length == env_branch_map.values() | list | unique | length
+        fail_msg: >-
+          env_branch_map validation failed.
+          Non-string keys: {{ _ebm_non_string_keys }}.
+          Empty keys: {{ _ebm_empty_keys }}.
+          Invalid env names (must match ^[a-z0-9_]+$): {{ _ebm_bad_env_names }}.
+          Non-string branch values: {{ _ebm_non_string_values }}.
+          Empty/whitespace branch values: {{ _ebm_empty_values }}.
+          Branch values must be unique: {{ env_branch_map.values() | list }}.
+        success_msg: "env_branch_map is valid: {{ env_branch_map }}"
 
     - name: "Log genesis parameters"
       ansible.builtin.debug:

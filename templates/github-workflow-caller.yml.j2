@@ -8,21 +8,45 @@ on:
   workflow_dispatch:
 jobs:
   casc:
-    uses: {{ platform_scm_org }}/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
+    uses: {{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine') }}/.github/workflows/casc-validate-and-trigger.yml@{{ engine_ref | default('main', true) }}
     with:
       dispatcher_jt_name: jt-platform-casc_dispatcher
-      # wait_for_completion: true       # set false for fire-and-forget mode
-      # poll_timeout_minutes: 30        # increase for large deployments
+      platform_scm_org: {{ platform_scm_org }}
+      platform_home_repo: {{ platform_repo | default('casc-platform-global') }}
+      platform_branch: {{ platform_branch | default('main') }}
     secrets:
+      AAP_ENGINE_HOST: {% raw %}${{ secrets.AAP_ENGINE_HOST }}{% endraw %}
+      AAP_ENGINE_TOKEN: {% raw %}${{ secrets.AAP_ENGINE_TOKEN }}{% endraw %}
+      AAP_ENGINE_USERNAME: {% raw %}${{ secrets.AAP_ENGINE_USERNAME }}{% endraw %}
+      AAP_ENGINE_PASSWORD: {% raw %}${{ secrets.AAP_ENGINE_PASSWORD }}{% endraw %}
+      AAP_ENV_TARGETS_JSON: {% raw %}${{ secrets.AAP_ENV_TARGETS_JSON }}{% endraw %}
+      AAP_FANOUT_ALLOW_BASIC: {% raw %}${{ secrets.AAP_FANOUT_ALLOW_BASIC }}{% endraw %}
       AAP_HOST: {% raw %}${{ secrets.AAP_HOST }}{% endraw %}
       AAP_USERNAME: {% raw %}${{ secrets.AAP_USERNAME }}{% endraw %}
       AAP_PASSWORD: {% raw %}${{ secrets.AAP_PASSWORD }}{% endraw %}
       AAP_DEV_HOST: {% raw %}${{ secrets.AAP_DEV_HOST }}{% endraw %}
       AAP_DEV_TOKEN: {% raw %}${{ secrets.AAP_DEV_TOKEN }}{% endraw %}
+      AAP_DEV_USERNAME: {% raw %}${{ secrets.AAP_DEV_USERNAME }}{% endraw %}
+      AAP_DEV_PASSWORD: {% raw %}${{ secrets.AAP_DEV_PASSWORD }}{% endraw %}
       AAP_TST_HOST: {% raw %}${{ secrets.AAP_TST_HOST }}{% endraw %}
       AAP_TST_TOKEN: {% raw %}${{ secrets.AAP_TST_TOKEN }}{% endraw %}
+      AAP_TST_USERNAME: {% raw %}${{ secrets.AAP_TST_USERNAME }}{% endraw %}
+      AAP_TST_PASSWORD: {% raw %}${{ secrets.AAP_TST_PASSWORD }}{% endraw %}
       AAP_NPR_HOST: {% raw %}${{ secrets.AAP_NPR_HOST }}{% endraw %}
       AAP_NPR_TOKEN: {% raw %}${{ secrets.AAP_NPR_TOKEN }}{% endraw %}
+      AAP_NPR_USERNAME: {% raw %}${{ secrets.AAP_NPR_USERNAME }}{% endraw %}
+      AAP_NPR_PASSWORD: {% raw %}${{ secrets.AAP_NPR_PASSWORD }}{% endraw %}
       AAP_PRD_HOST: {% raw %}${{ secrets.AAP_PRD_HOST }}{% endraw %}
       AAP_PRD_TOKEN: {% raw %}${{ secrets.AAP_PRD_TOKEN }}{% endraw %}
+      AAP_PRD_USERNAME: {% raw %}${{ secrets.AAP_PRD_USERNAME }}{% endraw %}
+      AAP_PRD_PASSWORD: {% raw %}${{ secrets.AAP_PRD_PASSWORD }}{% endraw %}
+      AAP_LAB_HOST: {% raw %}${{ secrets.AAP_LAB_HOST }}{% endraw %}
+      AAP_LAB_TOKEN: {% raw %}${{ secrets.AAP_LAB_TOKEN }}{% endraw %}
+      AAP_LAB_USERNAME: {% raw %}${{ secrets.AAP_LAB_USERNAME }}{% endraw %}
+      AAP_LAB_PASSWORD: {% raw %}${{ secrets.AAP_LAB_PASSWORD }}{% endraw %}
+      AAP_PROD_HOST: {% raw %}${{ secrets.AAP_PROD_HOST }}{% endraw %}
+      AAP_PROD_TOKEN: {% raw %}${{ secrets.AAP_PROD_TOKEN }}{% endraw %}
+      AAP_PROD_USERNAME: {% raw %}${{ secrets.AAP_PROD_USERNAME }}{% endraw %}
+      AAP_PROD_PASSWORD: {% raw %}${{ secrets.AAP_PROD_PASSWORD }}{% endraw %}
       ENGINE_REPO_TOKEN: {% raw %}${{ secrets.ENGINE_REPO_TOKEN }}{% endraw %}
+      PLATFORM_REPO_TOKEN: {% raw %}${{ secrets.PLATFORM_REPO_TOKEN }}{% endraw %}

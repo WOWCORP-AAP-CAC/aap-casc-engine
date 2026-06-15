@@ -1,4 +1,4 @@
-# Platform-managed shared pipeline template for CasC repositories (v2 — YAML)
+# Platform-managed shared pipeline template for CasC repositories (v3 — multi-env fan-out)
 # Lives in: aap-casc-engine/pipeline-templates/gitlab/.gitlab-ci-template.yml
 # Tenant/platform repos include this template via .gitlab-ci.yml
 #
@@ -11,6 +11,7 @@
 stages:
   - validate
   - bootstrap
+  - fanout
   - trigger
 
 variables:
@@ -20,6 +21,10 @@ variables:
   BOOTSTRAP_JT_NAME: "jt-platform-bootstrap_tenant"
   WAIT_FOR_COMPLETION: "true"
   POLL_TIMEOUT_MINUTES: "30"
+  BOOTSTRAP_POLL_TIMEOUT_MINUTES: "15"
+  PLATFORM_SCM_ORG: ""
+  PLATFORM_HOME_REPO: "casc-platform-global"
+  PLATFORM_BRANCH: "main"
 
 # ── Pre-stage: Fetch schemas from engine repo ────────────────────────────────
 fetch:schemas:
@@ -40,7 +45,6 @@ fetch:schemas:
       [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/ || true
       [ -f /tmp/engine/schemas/naming-rules.yml ] && cp /tmp/engine/schemas/naming-rules.yml .schemas/ || true
       [ -d /tmp/engine/schemas/policies ] && cp -r /tmp/engine/schemas/policies .schemas/ || true
-      # Cache allowed_keys from engine defaults
       if [ -f /tmp/engine/roles/process_casc_config/defaults/main.yml ]; then
         cp /tmp/engine/roles/process_casc_config/defaults/main.yml .schemas/engine_defaults.yml
       fi
@@ -128,8 +132,10 @@ validate:control-files:
     - |
       echo "=== Control File Validation ==="
       python3 -c "
-      import yaml, sys, os
+      import yaml, sys, os, re
       errors = []
+
+      ENV_NAME_RE = re.compile(r'^[a-z0-9_]+$')
 
       if os.path.exists('config.yml'):
           try:
@@ -137,6 +143,28 @@ validate:control-files:
               for key in ['env_branch_map', 'scm_provider', 'platform_scm_org', 'repo_pattern']:
                   if key not in cfg:
                       errors.append(f'config.yml: missing required key \"{key}\"')
+              if 'platform_branch' in cfg and not isinstance(cfg['platform_branch'], str):
+                  errors.append('config.yml: platform_branch must be a string')
+              if 'create_missing_env_branches' in cfg and not isinstance(cfg['create_missing_env_branches'], bool):
+                  errors.append('config.yml: create_missing_env_branches must be a boolean')
+              if 'bootstrap_dispatch_fanout' in cfg and not isinstance(cfg['bootstrap_dispatch_fanout'], bool):
+                  errors.append('config.yml: bootstrap_dispatch_fanout must be a boolean')
+              if 'env_branch_map' in cfg:
+                  ebm = cfg['env_branch_map']
+                  if not isinstance(ebm, dict) or not ebm:
+                      errors.append('config.yml: env_branch_map must be a non-empty mapping')
+                  else:
+                      for env, branch in ebm.items():
+                          if not isinstance(env, str) or not env.strip():
+                              errors.append('config.yml: env_branch_map contains an empty or non-string key')
+                          elif not ENV_NAME_RE.match(env):
+                              errors.append(f'config.yml: env_branch_map key \"{env}\" must match ^[a-z0-9_]+$')
+                          if not isinstance(branch, str) or not branch.strip():
+                              errors.append(f'config.yml: env_branch_map[{env}] must be a non-empty branch string')
+                      branches = list(ebm.values())
+                      if len(branches) != len(set(branches)):
+                          dupes = [b for b in set(branches) if branches.count(b) > 1]
+                          errors.append(f'config.yml: env_branch_map branch values must be unique. Duplicates: {dupes}')
           except Exception as e:
               errors.append(f'config.yml: Failed to parse — {e}')
 
@@ -272,21 +300,54 @@ bootstrap:tenants:
           json.dump(actions, f)
       "
 
+      # tenants.yml changed — always block normal dispatcher
+      echo "BOOTSTRAP_BLOCK_DISPATCH=true" >> bootstrap.env
+
       if [ ! -f tenant_actions.json ]; then
-        echo "No tenant actions — skipping AAP trigger"
+        echo "No actionable tenant bootstrap; normal dispatcher remains blocked for this tenants.yml change."
+        echo "BOOTSTRAP_ACTIONABLE=false" >> bootstrap.env
         exit 0
       fi
 
-      # Actionable tenants exist — always write dotenv to block dispatcher
-      echo "BOOTSTRAP_TRIGGERED=true" >> bootstrap.env
+      echo "BOOTSTRAP_ACTIONABLE=true" >> bootstrap.env
 
-      if [ -z "$AAP_HOST" ] || [ -z "$AAP_USERNAME" ] || [ -z "$AAP_PASSWORD" ]; then
-        echo "ERROR: Actionable tenants found but AAP credentials not configured"
+      # Engine credential resolution with host normalization
+      normalize_aap_host() {
+        local raw="$1"
+        raw="${raw%/}"
+        if [[ "$raw" == http://* || "$raw" == https://* ]]; then
+          echo "$raw"
+        else
+          echo "https://${raw}"
+        fi
+      }
+
+      if [ -n "${AAP_ENGINE_HOST:-}" ] && [ -n "${AAP_ENGINE_TOKEN:-}" ]; then
+        ENGINE_HOST=$(normalize_aap_host "$AAP_ENGINE_HOST")
+        AUTH_MODE="bearer"
+        AUTH_HEADER="Authorization: Bearer ${AAP_ENGINE_TOKEN}"
+      elif [ -n "${AAP_ENGINE_HOST:-}" ] && [ -n "${AAP_ENGINE_USERNAME:-}" ] && [ -n "${AAP_ENGINE_PASSWORD:-}" ]; then
+        ENGINE_HOST=$(normalize_aap_host "$AAP_ENGINE_HOST")
+        AUTH_MODE="basic"
+        AUTH_CREDS="${AAP_ENGINE_USERNAME}:${AAP_ENGINE_PASSWORD}"
+      elif [ -n "${AAP_HOST:-}" ] && [ -n "${AAP_USERNAME:-}" ] && [ -n "${AAP_PASSWORD:-}" ]; then
+        ENGINE_HOST=$(normalize_aap_host "$AAP_HOST")
+        AUTH_MODE="basic"
+        AUTH_CREDS="${AAP_USERNAME}:${AAP_PASSWORD}"
+      else
+        echo "ERROR: Actionable tenants found but no engine credentials configured"
         exit 1
       fi
 
-      JT_RESPONSE=$(curl -sk -u "${AAP_USERNAME}:${AAP_PASSWORD}" \
-        "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${BOOTSTRAP_JT_NAME}")
+      engine_curl() {
+        if [ "$AUTH_MODE" = "bearer" ]; then
+          curl -sk -H "${AUTH_HEADER}" "$@"
+        else
+          curl -sk -u "${AUTH_CREDS}" "$@"
+        fi
+      }
+
+      JT_RESPONSE=$(engine_curl "${ENGINE_HOST}/api/controller/v2/job_templates/?name=${BOOTSTRAP_JT_NAME}")
       JT_ID=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0]['id'] if r.get('results') else 'NOT_FOUND')")
 
       if [ "$JT_ID" = "NOT_FOUND" ] || [ -z "$JT_ID" ]; then
@@ -294,36 +355,82 @@ bootstrap:tenants:
         exit 1
       fi
 
-      export LAUNCH_URL="https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/"
-      export AUTH_CREDS="${AAP_USERNAME}:${AAP_PASSWORD}"
+      POLL_TIMEOUT="${BOOTSTRAP_POLL_TIMEOUT_MINUTES:-15}"
 
-      python3 -c "
-      import json, subprocess, sys, os
+      export ENGINE_HOST JT_ID AUTH_MODE POLL_TIMEOUT
+      [ "$AUTH_MODE" = "bearer" ] && export AUTH_HEADER || export AUTH_CREDS
+
+      python3 <<'BOOTSTRAP_PY'
+      import json, subprocess, sys, os, time
+
       actions = json.load(open('tenant_actions.json'))
-      launch_url = os.environ['LAUNCH_URL']
-      auth_creds = os.environ['AUTH_CREDS']
+      jt_id = os.environ['JT_ID']
+      engine_host = os.environ['ENGINE_HOST']
+      auth_mode = os.environ['AUTH_MODE']
+      poll_timeout = int(os.environ.get('POLL_TIMEOUT', '15'))
+      poll_interval = 10
+      max_polls = (poll_timeout * 60) // poll_interval
+
+      def engine_curl_args():
+          if auth_mode == 'bearer':
+              return ['-H', os.environ['AUTH_HEADER']]
+          else:
+              return ['-u', os.environ['AUTH_CREDS']]
+
       for action in actions:
           tenant = action['tenant']
-          print(f'Bootstrapping tenant: {tenant[\"org_id\"]} ({action[\"action\"]})')
+          org_id = tenant['org_id']
+          print(f'Bootstrapping tenant: {org_id} ({action["action"]})')
+
           extra_vars = json.dumps({
-              'org_id': tenant['org_id'],
+              'org_id': org_id,
               'team_name': tenant['team_name'],
               'team_lead': tenant['team_lead'],
               'tenant_scm_org': tenant['tenant_scm_org'],
               'tenant_scm_namespace_id': tenant.get('tenant_scm_namespace_id', ''),
               'repo_pattern': tenant.get('repo_pattern', 'combined'),
           })
-          result = subprocess.run([
-              'curl', '-sk', '-X', 'POST',
-              '-u', auth_creds,
-              '-H', 'Content-Type: application/json',
+
+          launch_cmd = ['curl', '-sk'] + engine_curl_args() + [
+              '-X', 'POST', '-H', 'Content-Type: application/json',
               '-d', json.dumps({'extra_vars': extra_vars}),
-              launch_url
-          ], capture_output=True, text=True)
-          response = json.loads(result.stdout) if result.stdout else {}
-          job_id = response.get('id', 'UNKNOWN')
+              f'{engine_host}/api/controller/v2/job_templates/{jt_id}/launch/'
+          ]
+          result = subprocess.run(launch_cmd, capture_output=True, text=True)
+          try:
+              response = json.loads(result.stdout)
+          except Exception:
+              print(f'  ERROR: Failed to parse launch response')
+              sys.exit(1)
+
+          job_id = response.get('id')
+          if not job_id:
+              print(f'  ERROR: Failed to launch bootstrap JT for {org_id}')
+              sys.exit(1)
+
           print(f'  Job launched: ID={job_id}')
-      " 
+          print(f'  Polling for completion (timeout: {poll_timeout}min)...')
+
+          for i in range(1, max_polls + 1):
+              time.sleep(poll_interval)
+              status_cmd = ['curl', '-sk'] + engine_curl_args() + [f'{engine_host}/api/controller/v2/jobs/{job_id}/']
+              status_result = subprocess.run(status_cmd, capture_output=True, text=True)
+              try:
+                  status = json.loads(status_result.stdout).get('status', 'unknown')
+              except Exception:
+                  status = 'unknown'
+              print(f'    Status: {status} ({i}/{max_polls})')
+              if status == 'successful':
+                  print(f'  Bootstrap JT for {org_id} completed successfully.')
+                  break
+              elif status in ('failed', 'error', 'canceled'):
+                  print(f'  ERROR: Bootstrap JT job {job_id} for tenant {org_id} {status}.')
+                  sys.exit(1)
+          else:
+              print(f'  ERROR: Bootstrap JT job {job_id} for tenant \'{org_id}\' did not complete within {poll_timeout} minutes.')
+              sys.exit(1)
+      print('All bootstrap JTs completed successfully.')
+      BOOTSTRAP_PY
   artifacts:
     reports:
       dotenv: bootstrap.env
@@ -334,105 +441,303 @@ bootstrap:tenants:
       changes:
         - tenants.yml
 
-# ── Stage 3: Trigger ─────────────────────────────────────────────────────────
+# ── Stage 3: Fan-out ─────────────────────────────────────────────────────────
+fanout:dispatcher:
+  stage: fanout
+  image: python:3.11-slim
+  needs:
+    - job: "bootstrap:tenants"
+      artifacts: true
+      optional: true
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl > /dev/null
+    - pip install pyyaml
+  script:
+    - |
+      # Guard: only fan-out when bootstrap actually onboarded tenants
+      if [ "${BOOTSTRAP_ACTIONABLE:-false}" != "true" ]; then
+        echo "No actionable tenant bootstrap; skipping fan-out."
+        exit 0
+      fi
+
+      # Fetch config.yml from platform home repo if not local
+      if [ ! -f "config.yml" ]; then
+        echo "Fetching config.yml from platform home repo..."
+        PLATFORM_PROJECT=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${PLATFORM_SCM_ORG}/${PLATFORM_HOME_REPO:-casc-platform-global}', safe=''))")
+        PLATFORM_BRANCH_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${PLATFORM_BRANCH:-main}', safe=''))")
+
+        if [ -n "${PLATFORM_REPO_TOKEN:-}" ]; then
+          AUTH_HEADER="PRIVATE-TOKEN: ${PLATFORM_REPO_TOKEN}"
+        else
+          AUTH_HEADER="JOB-TOKEN: ${CI_JOB_TOKEN}"
+        fi
+
+        curl -sf \
+          --header "${AUTH_HEADER}" \
+          "${CI_API_V4_URL}/projects/${PLATFORM_PROJECT}/repository/files/config.yml/raw?ref=${PLATFORM_BRANCH_ENC}" \
+          -o config.yml
+
+        if [ ! -f "config.yml" ]; then
+          echo "ERROR: Could not fetch config.yml"
+          exit 1
+        fi
+      fi
+
+      python3 <<'FANOUT_PY'
+      import os, json, sys, subprocess, time, yaml
+
+      def normalize_host(raw):
+          raw = raw.rstrip('/')
+          return raw if raw.startswith('http://') or raw.startswith('https://') else f'https://{raw}'
+
+      def resolve_env_creds(env_key):
+          uk = env_key.upper()
+          targets = os.environ.get('AAP_ENV_TARGETS_JSON', '')
+          if targets:
+              try:
+                  t = json.loads(targets)
+                  entry = t.get(env_key, {})
+                  if entry.get('host') and entry.get('token'):
+                      return normalize_host(entry['host']), ['-H', f'Authorization: Bearer {entry["token"]}']
+                  if entry.get('host') and entry.get('username') and entry.get('password'):
+                      return normalize_host(entry['host']), ['-u', f'{entry["username"]}:{entry["password"]}']
+              except json.JSONDecodeError:
+                  pass
+          env_host = os.environ.get(f'AAP_{uk}_HOST', '')
+          env_token = os.environ.get(f'AAP_{uk}_TOKEN', '')
+          if env_host and env_token:
+              return normalize_host(env_host), ['-H', f'Authorization: Bearer {env_token}']
+          env_user = os.environ.get(f'AAP_{uk}_USERNAME', '')
+          env_pass = os.environ.get(f'AAP_{uk}_PASSWORD', '')
+          if env_host and env_user and env_pass:
+              return normalize_host(env_host), ['-u', f'{env_user}:{env_pass}']
+          allow_basic = os.environ.get('AAP_FANOUT_ALLOW_BASIC', 'false').lower() == 'true'
+          aap_host = os.environ.get('AAP_HOST', '')
+          aap_user = os.environ.get('AAP_USERNAME', '')
+          aap_pass = os.environ.get('AAP_PASSWORD', '')
+          if allow_basic and aap_host and aap_user and aap_pass:
+              return normalize_host(aap_host), ['-u', f'{aap_user}:{aap_pass}']
+          return None
+
+      cfg = yaml.safe_load(open('config.yml'))
+      fanout_enabled = cfg.get('bootstrap_dispatch_fanout', True)
+      if not fanout_enabled:
+          print('Fan-out disabled by bootstrap_dispatch_fanout=false.')
+          sys.exit(0)
+
+      environments = list(cfg.get('env_branch_map', {}).keys())
+      jt_name = os.environ.get('DISPATCHER_JT_NAME', 'jt-platform-casc_dispatcher')
+
+      if not environments:
+          print('No environments in env_branch_map.')
+          sys.exit(0)
+
+      resolved = {}
+      errors = []
+      for env in environments:
+          result = resolve_env_creds(env)
+          if result is None:
+              errors.append(f"ERROR: bootstrap_dispatch_fanout=true but no dispatcher credentials were found for env '{env}'.")
+          else:
+              resolved[env] = result
+      if errors:
+          for e in errors: print(e)
+          sys.exit(1)
+
+      print(f'Credentials resolved for {len(environments)} environments. Dispatching...')
+      for env in environments:
+          host, auth_args = resolved[env]
+          print(f'\n=== Dispatching env={env} on {host} ===')
+          jt_cmd = ['curl', '-sk'] + auth_args + [f'{host}/api/controller/v2/job_templates/?name={jt_name}']
+          jt_result = subprocess.run(jt_cmd, capture_output=True, text=True)
+          try:
+              jt_data = json.loads(jt_result.stdout)
+              jt_id = jt_data['results'][0]['id']
+          except (json.JSONDecodeError, KeyError, IndexError):
+              print(f"ERROR: JT '{jt_name}' not found on {host}")
+              sys.exit(1)
+
+          extra_vars = json.dumps({'target_env': env, 'trigger_commit': os.environ.get('CI_COMMIT_SHA', ''), 'triggered_repo': os.environ.get('CI_PROJECT_NAME', ''), 'trigger_source': 'ci-cd-fanout'})
+          launch_cmd = ['curl', '-sk', '-X', 'POST'] + auth_args + ['-H', 'Content-Type: application/json', '-d', json.dumps({'extra_vars': extra_vars}), f'{host}/api/controller/v2/job_templates/{jt_id}/launch/']
+          launch_result = subprocess.run(launch_cmd, capture_output=True, text=True)
+          try:
+              job_id = json.loads(launch_result.stdout).get('id')
+          except Exception:
+              job_id = None
+          if not job_id:
+              print(f'ERROR: Failed to launch dispatcher for env={env}')
+              sys.exit(1)
+          print(f'  Dispatcher launched: job_id={job_id}')
+      print('\n=== Fan-out complete ===')
+      FANOUT_PY
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+      when: on_success
+
+# ── Stage 4: Trigger ─────────────────────────────────────────────────────────
 trigger:dispatcher:
   stage: trigger
   image: python:3.11-slim
   resource_group: casc-dispatcher
+  needs:
+    - job: "bootstrap:tenants"
+      artifacts: true
+      optional: true
   before_script:
     - apt-get update -qq && apt-get install -y -qq curl > /dev/null
+    - pip install pyyaml
   script:
     - |
-      # Skip dispatcher if bootstrap was triggered for this push
-      if [ "${BOOTSTRAP_TRIGGERED:-}" = "true" ]; then
-        echo "Bootstrap was triggered — skipping dispatcher (bootstrap handles onboarding)"
+      # Guard: skip if bootstrap path ran (tenants.yml changed)
+      if [ "${BOOTSTRAP_BLOCK_DISPATCH:-false}" = "true" ]; then
+        echo "tenants.yml bootstrap path ran for this pipeline; skipping normal dispatcher."
         exit 0
       fi
 
-      case "$CI_COMMIT_BRANCH" in
-        feature/*)   TARGET_ENV="dev";  HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
-        develop)     TARGET_ENV="tst";  HOST="$AAP_TST_HOST";  TOKEN="$AAP_TST_TOKEN" ;;
-        release/*)   TARGET_ENV="npr";  HOST="$AAP_NPR_HOST";  TOKEN="$AAP_NPR_TOKEN" ;;
-        master|main) TARGET_ENV="prd";  HOST="$AAP_PRD_HOST";  TOKEN="$AAP_PRD_TOKEN" ;;
-        *)           TARGET_ENV="dev";  HOST="$AAP_DEV_HOST";  TOKEN="$AAP_DEV_TOKEN" ;;
-      esac
+      # Fetch config.yml from platform home repo if not local
+      if [ ! -f "config.yml" ]; then
+        echo "Fetching config.yml from platform home repo..."
+        PLATFORM_PROJECT=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${PLATFORM_SCM_ORG}/${PLATFORM_HOME_REPO:-casc-platform-global}', safe=''))")
+        PLATFORM_BRANCH_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${PLATFORM_BRANCH:-main}', safe=''))")
 
-      if [ -n "$HOST" ] && [ -n "$TOKEN" ]; then
-        AUTH_MODE="bearer"
-        AAP_HOST="$HOST"
-      elif [ -n "$AAP_HOST" ] && [ -n "$AAP_USERNAME" ] && [ -n "$AAP_PASSWORD" ]; then
-        AUTH_MODE="basic"
-      else
-        if [ "$CI_PIPELINE_SOURCE" = "push" ] || [ "$CI_PIPELINE_SOURCE" = "web" ]; then
-          echo "ERROR: No AAP credentials — cannot trigger dispatcher"
+        if [ -n "${PLATFORM_REPO_TOKEN:-}" ]; then
+          AUTH_HEADER="PRIVATE-TOKEN: ${PLATFORM_REPO_TOKEN}"
+        else
+          AUTH_HEADER="JOB-TOKEN: ${CI_JOB_TOKEN}"
+        fi
+
+        curl -sf \
+          --header "${AUTH_HEADER}" \
+          "${CI_API_V4_URL}/projects/${PLATFORM_PROJECT}/repository/files/config.yml/raw?ref=${PLATFORM_BRANCH_ENC}" \
+          -o config.yml
+
+        if [ ! -f "config.yml" ]; then
+          echo "ERROR: Could not fetch config.yml"
           exit 1
         fi
+      fi
+
+      # Config-driven env resolution
+      export BRANCH="${CI_COMMIT_BRANCH}"
+      TARGET_ENV=$(python3 <<'PY'
+      import os, yaml, sys
+      cfg = yaml.safe_load(open('config.yml')) or {}
+      env_map = cfg.get('env_branch_map', {})
+      branch = os.environ['BRANCH']
+      matching_envs = [env for env, br in env_map.items() if br == branch]
+      if not matching_envs:
+          print(f'No env_branch_map entry maps branch {branch} to an environment. Skipping dispatch.', file=sys.stderr)
+          print('')
+      else:
+          print(matching_envs[0])
+      PY
+      )
+
+      if [ -z "$TARGET_ENV" ]; then
+        echo "No matching environment for branch ${BRANCH}. Skipping dispatch."
         exit 0
       fi
 
-      auth_curl() {
-        if [ "$AUTH_MODE" = "bearer" ]; then
-          curl -sk -H "Authorization: Bearer ${TOKEN}" "$@"
-        else
-          curl -sk -u "${AAP_USERNAME}:${AAP_PASSWORD}" "$@"
-        fi
-      }
+      python3 <<TRIGGER_PY
+      import os, json, sys, subprocess, time
 
-      JT_RESPONSE=$(auth_curl "https://${AAP_HOST}/api/controller/v2/job_templates/?name=${DISPATCHER_JT_NAME}")
-      JT_ID=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0]['id'] if r.get('results') else 'NOT_FOUND')")
+      def normalize_host(raw):
+          raw = raw.rstrip('/')
+          return raw if raw.startswith('http://') or raw.startswith('https://') else f'https://{raw}'
 
-      if [ "$JT_ID" = "NOT_FOUND" ] || [ -z "$JT_ID" ]; then
-        echo "ERROR: JT '${DISPATCHER_JT_NAME}' not found"
-        exit 1
-      fi
+      def resolve_env_creds(env_key):
+          uk = env_key.upper()
+          targets = os.environ.get('AAP_ENV_TARGETS_JSON', '')
+          if targets:
+              try:
+                  t = json.loads(targets)
+                  entry = t.get(env_key, {})
+                  if entry.get('host') and entry.get('token'):
+                      return normalize_host(entry['host']), ['-H', f'Authorization: Bearer {entry["token"]}']
+                  if entry.get('host') and entry.get('username') and entry.get('password'):
+                      return normalize_host(entry['host']), ['-u', f'{entry["username"]}:{entry["password"]}']
+              except json.JSONDecodeError:
+                  pass
+          env_host = os.environ.get(f'AAP_{uk}_HOST', '')
+          env_token = os.environ.get(f'AAP_{uk}_TOKEN', '')
+          if env_host and env_token:
+              return normalize_host(env_host), ['-H', f'Authorization: Bearer {env_token}']
+          env_user = os.environ.get(f'AAP_{uk}_USERNAME', '')
+          env_pass = os.environ.get(f'AAP_{uk}_PASSWORD', '')
+          if env_host and env_user and env_pass:
+              return normalize_host(env_host), ['-u', f'{env_user}:{env_pass}']
+          allow_basic = os.environ.get('AAP_FANOUT_ALLOW_BASIC', 'false').lower() == 'true'
+          aap_host = os.environ.get('AAP_HOST', '')
+          aap_user = os.environ.get('AAP_USERNAME', '')
+          aap_pass = os.environ.get('AAP_PASSWORD', '')
+          if allow_basic and aap_host and aap_user and aap_pass:
+              return normalize_host(aap_host), ['-u', f'{aap_user}:{aap_pass}']
+          return None
 
-      ALLOW_SIMUL=$(echo "$JT_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['results'][0].get('allow_simultaneous', False))")
-      if [ "$ALLOW_SIMUL" = "True" ]; then
-        echo "ERROR: Dispatcher JT has allow_simultaneous=true — must be false"
-        exit 1
-      fi
+      target_env = "${TARGET_ENV}"
+      jt_name = os.environ.get('DISPATCHER_JT_NAME', 'jt-platform-casc_dispatcher')
+      wait = os.environ.get('WAIT_FOR_COMPLETION', 'true') == 'true'
+      poll_timeout = int(os.environ.get('POLL_TIMEOUT_MINUTES', '30'))
 
-      LAUNCH_RESPONSE=$(auth_curl -X POST \
-        -H "Content-Type: application/json" \
-        -d "{
-          \"extra_vars\": {
-            \"target_env\": \"${TARGET_ENV}\",
-            \"trigger_commit\": \"${CI_COMMIT_SHA}\",
-            \"triggered_repo\": \"${CI_PROJECT_NAME}\",
-            \"trigger_source\": \"ci-cd-pipeline\"
-          }
-        }" \
-        "https://${AAP_HOST}/api/controller/v2/job_templates/${JT_ID}/launch/")
+      creds = resolve_env_creds(target_env)
+      if creds is None:
+          print(f'ERROR: No credentials for env={target_env}')
+          sys.exit(1)
+      host, auth_args = creds
 
-      JOB_ID=$(echo "$LAUNCH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id', 'UNKNOWN'))")
-      echo "Dispatcher launched: ID=${JOB_ID}"
+      print(f'=== Triggering dispatcher | Host: {host} | Env: {target_env} | JT: {jt_name} ===')
+      jt_cmd = ['curl', '-sk'] + auth_args + [f'{host}/api/controller/v2/job_templates/?name={jt_name}']
+      jt_result = subprocess.run(jt_cmd, capture_output=True, text=True)
+      try:
+          jt_data = json.loads(jt_result.stdout)
+          jt_id = jt_data['results'][0]['id']
+      except (json.JSONDecodeError, KeyError, IndexError):
+          print(f"ERROR: JT '{jt_name}' not found")
+          sys.exit(1)
 
-      if [ "$JOB_ID" = "UNKNOWN" ] || [ -z "$JOB_ID" ]; then
-        echo "ERROR: Failed to launch"
-        exit 1
-      fi
+      allow_simul = jt_data['results'][0].get('allow_simultaneous', False)
+      if allow_simul:
+          print('ERROR: Dispatcher JT has allow_simultaneous=true — must be false')
+          sys.exit(1)
 
-      if [ "$WAIT_FOR_COMPLETION" = "false" ]; then
-        exit 0
-      fi
+      extra_vars = json.dumps({'target_env': target_env, 'trigger_commit': os.environ.get('CI_COMMIT_SHA', ''), 'triggered_repo': os.environ.get('CI_PROJECT_NAME', ''), 'trigger_source': 'ci-cd-pipeline'})
+      launch_cmd = ['curl', '-sk', '-X', 'POST'] + auth_args + ['-H', 'Content-Type: application/json', '-d', json.dumps({'extra_vars': extra_vars}), f'{host}/api/controller/v2/job_templates/{jt_id}/launch/']
+      launch_result = subprocess.run(launch_cmd, capture_output=True, text=True)
+      try:
+          job_id = json.loads(launch_result.stdout).get('id')
+      except Exception:
+          job_id = None
+      if not job_id:
+          print('ERROR: Failed to launch dispatcher')
+          sys.exit(1)
+      print(f'Dispatcher launched: ID={job_id}')
 
-      POLL_CHECKS=$(( POLL_TIMEOUT_MINUTES * 6 ))
-      for i in $(seq 1 $POLL_CHECKS); do
-        sleep 10
-        STATUS=$(auth_curl "https://${AAP_HOST}/api/controller/v2/jobs/${JOB_ID}/" \
-          | python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'unknown'))")
-        echo "  Status: ${STATUS} (${i}/${POLL_CHECKS})"
-        case "$STATUS" in
-          successful) echo "=== COMPLETED ===" && exit 0 ;;
-          failed|error|canceled) echo "=== FAILED ===" && exit 1 ;;
-        esac
-      done
-      exit 0
+      if not wait:
+          sys.exit(0)
+
+      poll_checks = (poll_timeout * 60) // 10
+      for i in range(1, poll_checks + 1):
+          time.sleep(10)
+          status_cmd = ['curl', '-sk'] + auth_args + [f'{host}/api/controller/v2/jobs/{job_id}/']
+          status_result = subprocess.run(status_cmd, capture_output=True, text=True)
+          try:
+              status = json.loads(status_result.stdout).get('status', 'unknown')
+          except Exception:
+              status = 'unknown'
+          print(f'  Status: {status} ({i}/{poll_checks})')
+          if status == 'successful':
+              print('=== COMPLETED ===')
+              sys.exit(0)
+          elif status in ('failed', 'error', 'canceled'):
+              print(f'=== FAILED ({status}) ===')
+              sys.exit(1)
+      sys.exit(0)
+      TRIGGER_PY
   retry: 2
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
       when: manual
     - if: '$CI_COMMIT_MESSAGE =~ /\[skip dispatch\]/'
       when: never
-    - if: '$CI_COMMIT_BRANCH =~ /^(feature\/|develop|release\/|master|main)/'
+    - if: '$CI_COMMIT_BRANCH'
       when: on_success

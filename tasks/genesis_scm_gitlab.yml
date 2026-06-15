@@ -54,9 +54,39 @@
     _gl_home_project_id: >-
       {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', _home_repo) | first).json.id }}
 
+- name: "GL – Store home repo default branch"
+  ansible.builtin.set_fact:
+    _gl_home_default_branch: >-
+      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', _home_repo) | first).json.default_branch | default('main') }}
+
+- name: "GL – Create platform branch if not default"
+  when: platform_branch != _gl_home_default_branch
+  block:
+    - name: "GL – Check if platform branch already exists"
+      ansible.builtin.uri:
+        url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/branches/{{ platform_branch | urlencode | replace('/', '%2F') }}"
+        method: GET
+        headers:
+          PRIVATE-TOKEN: "{{ scm_api_token }}"
+        status_code: [200, 404]
+      register: _gl_platform_branch_check
+
+    - name: "GL – Create platform branch from default branch"
+      ansible.builtin.uri:
+        url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/branches"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ scm_api_token }}"
+        body_format: json
+        body:
+          branch: "{{ platform_branch }}"
+          ref: "{{ _gl_home_default_branch }}"
+        status_code: [200, 201]
+      when: _gl_platform_branch_check.status == 404
+
 - name: "GL – Check if config.yml already exists"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/config.yml?ref=main"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/config.yml?ref={{ platform_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -71,7 +101,7 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "main"
+      branch: "{{ platform_branch }}"
       content: "{{ _config_yml_content }}"
       commit_message: "Genesis: initialize config.yml [skip dispatch]"
     status_code: [200, 201]
@@ -79,7 +109,7 @@
 
 - name: "GL – Check if tenants.yml already exists"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/tenants.yml?ref=main"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/tenants.yml?ref={{ platform_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -94,7 +124,7 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "main"
+      branch: "{{ platform_branch }}"
       content: "{{ _tenants_yml_content }}"
       commit_message: "Genesis: initialize tenants.yml [skip dispatch]"
     status_code: [200, 201]
@@ -104,9 +134,39 @@
 # Step 3: Seed CI/CD include in each repo
 # ═══════════════════════════════════════════════════════════════════════════
 
+- name: "GL – Create platform branch in non-home repos (if not default)"
+  when: platform_branch != _gl_home_default_branch
+  block:
+    - name: "GL – Check if platform branch exists in each repo"
+      ansible.builtin.uri:
+        url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/branches/{{ platform_branch | urlencode | replace('/', '%2F') }}"
+        method: GET
+        headers:
+          PRIVATE-TOKEN: "{{ scm_api_token }}"
+        status_code: [200, 404]
+      loop: "{{ _gl_project_lookups.results | rejectattr('item.name', 'equalto', _home_repo) | list }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      register: _gl_repo_branch_checks
+
+    - name: "GL – Create platform branch from default in repos where missing"
+      ansible.builtin.uri:
+        url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/branches"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ scm_api_token }}"
+        body_format: json
+        body:
+          branch: "{{ platform_branch }}"
+          ref: "{{ item.item.json.default_branch | default(_gl_home_default_branch) }}"
+        status_code: [200, 201]
+      loop: "{{ _gl_repo_branch_checks.results | selectattr('status', 'equalto', 404) | list }}"
+      loop_control:
+        label: "{{ item.item.item.name }}"
+
 - name: "GL – Check if .gitlab-ci.yml already exists in each repo"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/.gitlab-ci.yml?ref=main"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/.gitlab-ci.yml?ref={{ platform_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -124,7 +184,7 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "main"
+      branch: "{{ platform_branch }}"
       content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
       commit_message: "Genesis: add shared CasC pipeline template [skip dispatch]"
     status_code: [200, 201]
@@ -138,7 +198,7 @@
 
 - name: "GL – Check if README.md already exists in each repo"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/README.md?ref=main"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/README.md?ref={{ platform_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -156,7 +216,7 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "main"
+      branch: "{{ platform_branch }}"
       content: "{{ lookup('template', 'templates/genesis-readme.md.j2') }}"
       commit_message: "Genesis: add README with repo purpose and usage [skip dispatch]"
     status_code: [200, 201]

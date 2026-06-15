@@ -1,9 +1,10 @@
 ---
 # bootstrap_scm_github.yml — GitHub-specific SCM operations for tenant bootstrap
 #
-# Steps 1-5: Push platform YAML (org/team to combined platform repo at
+# Steps 1-6: Push platform YAML (org/team/RBAC to platform repo(s) at
 # folder-based paths), create tenant repos, seed with folder structure,
-# set permissions, update tenants.yml. Called from bootstrap.yml.
+# set permissions, update tenants.yml, push RBAC. Called from bootstrap.yml.
+# All platform writes target _effective_platform_branch.
 #
 # All operations are idempotent — safe to rerun. File writes use
 # GET-then-PUT (with SHA when updating existing files). Repo creation
@@ -28,7 +29,7 @@
 
 - name: "GH – Check if org YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _org_target_repo }}/contents/{{ _org_target_path }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _org_target_repo }}/contents/{{ _org_target_path }}?ref={{ _effective_platform_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -46,6 +47,7 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add organization org-' + org_id + ' [skip dispatch]',
+          'branch': _effective_platform_branch,
           'content': lookup('template', 'templates/org-template.yml.j2') | b64encode}
          | combine({'sha': _gh_org_file.json.sha} if _gh_org_file.status == 200 else {}) }}
     status_code: [200, 201]
@@ -56,7 +58,7 @@
 
 - name: "GH – Check if team YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _team_target_repo }}/contents/{{ _team_target_path }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _team_target_repo }}/contents/{{ _team_target_path }}?ref={{ _effective_platform_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -74,6 +76,7 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add team for org-' + org_id + ' [skip dispatch]',
+          'branch': _effective_platform_branch,
           'content': lookup('template', 'templates/team-template.yml.j2') | b64encode}
          | combine({'sha': _gh_team_file.json.sha} if _gh_team_file.status == 200 else {}) }}
     status_code: [200, 201]
@@ -105,6 +108,7 @@
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3: Seed repos with pipeline + example YAML (folder-based structure)
+#   Seeding BEFORE env branch creation ensures branches inherit these files.
 # ═══════════════════════════════════════════════════════════════════════════
 
 - name: "GH – Check if thin caller workflow already exists"
@@ -170,6 +174,57 @@
     label: "{{ item.item }}"
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Step 3b: Create environment branches in each tenant repo (if enabled)
+#   Done AFTER seeding so branches inherit CI caller + example YAML.
+#   Re-fetches default branch HEAD SHA to include seeded commits.
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Get default branch info for each tenant repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+  loop: "{{ tenant_repos }}"
+  register: _gh_repo_info
+  when: _create_missing_env_branches | bool
+
+- name: "GH – Get default branch HEAD SHA for each tenant repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ item.json.default_branch }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+  loop: "{{ _gh_repo_info.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+  register: _gh_default_refs
+  when: _create_missing_env_branches | bool
+
+- name: "GH – Create environment branches in tenant repos"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.0.item.json.name }}/git/refs"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      ref: "refs/heads/{{ item.1.value }}"
+      sha: "{{ item.0.json.object.sha }}"
+    status_code: [200, 201, 422]
+  failed_when: >-
+    _gh_env_branch_result.status == 422 and
+    'Reference already exists' not in (_gh_env_branch_result.json.message | default(''))
+  loop: "{{ _gh_default_refs.results | product(_env_branch_map | dict2items) | list }}"
+  loop_control:
+    label: "{{ item.0.item.json.name }}:{{ item.1.value }}"
+  register: _gh_env_branch_result
+  when: _create_missing_env_branches | bool
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Step 4: Set repository permissions (idempotent — PUT is naturally so)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -193,7 +248,7 @@
 
 - name: "GH – Get current tenants.yml from platform repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/tenants.yml"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/tenants.yml?ref={{ _effective_platform_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -230,9 +285,76 @@
     body_format: json
     body:
       message: "Bootstrap: register tenant {{ org_id }} [skip dispatch]"
+      branch: "{{ _effective_platform_branch }}"
       content: "{{ _updated_tenants | to_nice_yaml(indent=2) | b64encode }}"
       sha: "{{ _tenants_sha }}"
     status_code: [200, 201]
   vars:
     _updated_tenants: "{{ _current_tenants | combine({'tenants': _current_tenants.tenants | default([]) + [_new_tenant_entry]}) }}"
   when: _new_tenant_entry is defined
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 6: Push RBAC YAML to platform repo(s) on _effective_platform_branch
+#   Uses name-based assignment (no AAP API lookup needed).
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Compute RBAC target repos and paths"
+  ansible.builtin.set_fact:
+    _rbac_user_repo: "{{ 'gateway-role_user_assignments-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _rbac_team_repo: "{{ 'gateway-role_team_assignments-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _rbac_user_path: "{{ 'base/rbac-user-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/rbac_user_assignments/rbac-user-' + org_id + '.yml' }}"
+    _rbac_team_path: "{{ 'base/rbac-team-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/rbac_team_assignments/rbac-team-' + org_id + '.yml' }}"
+
+- name: "GH – Check if RBAC user YAML already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _rbac_user_repo }}/contents/{{ _rbac_user_path }}?ref={{ _effective_platform_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_rbac_user_file
+
+- name: "GH – Push RBAC user assignments"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _rbac_user_repo }}/contents/{{ _rbac_user_path }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: add RBAC user assignments for org-' + org_id + ' [skip dispatch]',
+          'branch': _effective_platform_branch,
+          'content': lookup('template', 'templates/rbac-user-template.yml.j2') | b64encode}
+         | combine({'sha': _gh_rbac_user_file.json.sha} if _gh_rbac_user_file.status == 200 else {}) }}
+    status_code: [200, 201]
+  vars:
+    admin_user: "{{ team_lead }}"
+
+- name: "GH – Check if RBAC team YAML already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _rbac_team_repo }}/contents/{{ _rbac_team_path }}?ref={{ _effective_platform_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_rbac_team_file
+
+- name: "GH – Push RBAC team assignments"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _rbac_team_repo }}/contents/{{ _rbac_team_path }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: add RBAC team assignments for org-' + org_id + ' [skip dispatch]',
+          'branch': _effective_platform_branch,
+          'content': lookup('template', 'templates/rbac-team-template.yml.j2') | b64encode}
+         | combine({'sha': _gh_rbac_team_file.json.sha} if _gh_rbac_team_file.status == 200 else {}) }}
+    status_code: [200, 201]
+  vars:
+    dev_team: "{{ _effective_team_group }}"

@@ -9,9 +9,10 @@ The `aap-casc-engine` is the core deliverable of the **Hybrid AAP Configuration-
 - **Dispatcher playbook** — Clones the platform repo to read `config.yml` + `tenants.yml`, clones CasC repos, processes YAML (folder-based environment layering with base/env merge), and applies configuration to AAP via the `infra.aap_configuration.dispatch` role
 - **Drift detection** — Compares Git desired state vs AAP live state, generates drift reports (persisted as AAP job artifacts via `set_stats`), and optionally auto-remediates
 - **Platform genesis** — Automated one-time setup of platform CasC repos (combined or per-resource-type), CI/CD seeding, and `config.yml` + `tenants.yml` generation
-- **Bootstrap automation** — Automated tenant onboarding (org creation, RBAC, repo scaffolding, `tenants.yml` registration)
+- **Bootstrap automation** — SCM-only tenant onboarding (repo creation, RBAC YAML push, environment branch creation, `tenants.yml` registration). Bootstrap runs as an AAP JT but uses only SCM credentials — the dispatcher is the sole mechanism for applying desired state to AAP
 - **Pipeline-as-a-Service** — Shared CI/CD templates (GitLab CI + GitHub Actions) for validation and deployment
 - **Governance policies** — OPA policies and naming convention enforcement
+- **Multi-environment model** — `env_branch_map` defines a strict 1:1 mapping from environment to Git branch. Platform repos are read from `platform_branch`; tenant repos from the env-specific branch. CI/CD fan-out dispatches across all environments after bootstrap (default enabled via `bootstrap_dispatch_fanout: true`)
 - **GitOps lifecycle** — Genesis is imperative (Day 0); all subsequent operations are commit-driven (Day 1+)
 
 ## Two-Persona Architecture
@@ -163,7 +164,7 @@ ansible-playbook bootstrap.yml \
   -e repo_pattern=combined
 ```
 
-Bootstrap creates the tenant repo, seeds it with CI/CD and example files, creates the AAP org/team/user/RBAC, and registers the tenant in `tenants.yml`.
+Bootstrap is SCM-only: it creates the tenant repo, seeds it with CI/CD and example files, pushes RBAC YAML to the platform repo, creates environment branches (per `env_branch_map`), and registers the tenant in `tenants.yml`. AAP resource creation (org, team, user, RBAC) is handled by the dispatcher when it processes the pushed YAML files.
 
 ### 5. Run Drift Detection
 
@@ -201,12 +202,17 @@ default_organization: Default
 scm_provider: github
 platform_scm_org: my-platform-org
 repo_pattern: combined
+platform_branch: main
+create_missing_env_branches: true
+bootstrap_dispatch_fanout: true
 env_branch_map:
   dev: develop
-  tst: develop
+  tst: release/tst
   npr: release/npr
   prd: main
 ```
+
+`env_branch_map` enforces a strict 1:1 mapping — each branch value must be unique (one branch per environment). Environment names must match `^[a-z0-9_]+$`. `platform_branch` specifies which branch platform repos are read from. `create_missing_env_branches` controls whether bootstrap creates env branches in new tenant repos. `bootstrap_dispatch_fanout` (default `true`) enables Day-0 multi-environment dispatch after tenant onboarding.
 
 **`tenants.yml`** — Tenant registry:
 
