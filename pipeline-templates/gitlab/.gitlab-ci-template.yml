@@ -252,6 +252,8 @@ validate:policy-compliance:
 bootstrap:tenants:
   stage: bootstrap
   image: python:3.11-slim
+  variables:
+    GIT_DEPTH: 0
   before_script:
     - apt-get update -qq && apt-get install -y -qq git curl > /dev/null
     - pip install pyyaml
@@ -270,11 +272,17 @@ bootstrap:tenants:
           print('Invalid tenants.yml — skipping bootstrap')
           sys.exit(0)
 
-      result = subprocess.run(['git', 'show', 'HEAD~1:tenants.yml'], capture_output=True, text=True)
-      if result.returncode != 0:
+      NULL_SHA = '0000000000000000000000000000000000000000'
+      before = os.environ.get('CI_COMMIT_BEFORE_SHA', '')
+
+      if not before or before == NULL_SHA:
           previous = {'tenants': []}
       else:
-          previous = yaml.safe_load(result.stdout) or {'tenants': []}
+          result = subprocess.run(['git', 'show', f'{before}:tenants.yml'], capture_output=True, text=True)
+          if result.returncode != 0:
+              previous = {'tenants': []}
+          else:
+              previous = yaml.safe_load(result.stdout) or {'tenants': []}
 
       prev_map = {t['org_id']: t for t in previous.get('tenants', [])}
       curr_map = {t['org_id']: t for t in current.get('tenants', [])}
