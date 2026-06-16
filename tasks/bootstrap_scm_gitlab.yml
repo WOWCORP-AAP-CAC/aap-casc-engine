@@ -361,12 +361,14 @@
 #   Uses name-based assignment (no AAP API lookup needed).
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GL – Compute RBAC target repos and paths"
+- name: "GL – Compute RBAC and user target repos and paths"
   ansible.builtin.set_fact:
     _rbac_user_repo: "{{ 'gateway-role_user_assignments-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
     _rbac_team_repo: "{{ 'gateway-role_team_assignments-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _user_account_repo: "{{ 'aap-users-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
     _rbac_user_path: "{{ 'base/rbac-user-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/rbac_user_assignments/rbac-user-' + org_id + '.yml' }}"
     _rbac_team_path: "{{ 'base/rbac-team-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/rbac_team_assignments/rbac-team-' + org_id + '.yml' }}"
+    _user_account_path: "{{ 'base/user-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/users/user-' + org_id + '.yml' }}"
 
 - name: "GL – Resolve RBAC user target project ID"
   ansible.builtin.uri:
@@ -438,3 +440,44 @@
     status_code: [200, 201]
   vars:
     dev_team: "{{ _effective_team_group }}"
+
+- name: "GL – Resolve user account target project ID"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ _user_account_repo) | urlencode() | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  register: _gl_user_account_project
+  when: platform_repo_pattern == 'per-resource-type'
+
+- name: "GL – Set effective user account project ID"
+  ansible.builtin.set_fact:
+    _user_account_project_id: "{{ _gl_user_account_project.json.id if platform_repo_pattern == 'per-resource-type' else _effective_platform_id }}"
+
+- name: "GL – Check if user account YAML already exists"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _user_account_project_id }}/repository/files/{{ _user_account_path | urlencode() | replace('/', '%2F') }}?ref={{ _effective_platform_branch | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  register: _gl_user_account_file
+
+- name: "GL – Push user account YAML"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _user_account_project_id }}/repository/files/{{ _user_account_path | urlencode() | replace('/', '%2F') }}"
+    method: "{{ 'PUT' if _gl_user_account_file.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ _effective_platform_branch }}"
+      content: "{{ lookup('template', 'templates/user-template.yml.j2') }}"
+      commit_message: "Bootstrap: user account for {{ team_lead }} in org-{{ org_id }} [skip dispatch]"
+    status_code: [200, 201]
+  vars:
+    admin_user: "{{ team_lead }}"
+    admin_password: "{{ team_lead_password }}"
+    admin_email: "{{ team_lead_email }}"
+    admin_first_name: "{{ team_lead_first_name }}"
+    admin_last_name: "{{ team_lead_last_name }}"

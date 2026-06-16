@@ -1,8 +1,9 @@
 ---
 aap_user_accounts:
-  - username: "{{ team_lead }}"
-    first_name: "{{ team_lead_first_name | default('') }}"
-    last_name: "{{ team_lead_last_name | default('') }}"
-    email: "{{ team_lead_email | default('') }}"
-    password: "{{ team_lead_password | default('change_me') }}"
+  - username: "{{ admin_user }}"
+    password: "{{ admin_password | default('change_me') }}"
+    email: "{{ admin_email | default(omit) }}"
+    first_name: "{{ admin_first_name | default(omit) }}"
+    last_name: "{{ admin_last_name | default(omit) }}"
     is_superuser: false
+    organization: "org-{{ org_id }}"
