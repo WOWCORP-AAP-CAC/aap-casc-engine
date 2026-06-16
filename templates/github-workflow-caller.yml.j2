@@ -15,14 +15,12 @@ jobs:
       platform_home_repo: {{ platform_repo | default('casc-platform-global') }}
       platform_branch: {{ platform_branch | default('main') }}
     secrets:
+{% if caller_role | default('tenant') == 'platform_home' %}
       AAP_ENGINE_HOST: {% raw %}${{ secrets.AAP_ENGINE_HOST }}{% endraw %}
       AAP_ENGINE_TOKEN: {% raw %}${{ secrets.AAP_ENGINE_TOKEN }}{% endraw %}
       AAP_ENGINE_USERNAME: {% raw %}${{ secrets.AAP_ENGINE_USERNAME }}{% endraw %}
       AAP_ENGINE_PASSWORD: {% raw %}${{ secrets.AAP_ENGINE_PASSWORD }}{% endraw %}
+{% endif %}
       AAP_ENV_TARGETS_JSON: {% raw %}${{ secrets.AAP_ENV_TARGETS_JSON }}{% endraw %}
-      AAP_FANOUT_ALLOW_BASIC: {% raw %}${{ secrets.AAP_FANOUT_ALLOW_BASIC }}{% endraw %}
-      AAP_HOST: {% raw %}${{ secrets.AAP_HOST }}{% endraw %}
-      AAP_USERNAME: {% raw %}${{ secrets.AAP_USERNAME }}{% endraw %}
-      AAP_PASSWORD: {% raw %}${{ secrets.AAP_PASSWORD }}{% endraw %}
       ENGINE_REPO_TOKEN: {% raw %}${{ secrets.ENGINE_REPO_TOKEN }}{% endraw %}
       PLATFORM_REPO_TOKEN: {% raw %}${{ secrets.PLATFORM_REPO_TOKEN }}{% endraw %}

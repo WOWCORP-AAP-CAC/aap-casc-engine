@@ -493,7 +493,10 @@ jobs:
       - name: Resolve credentials and trigger dispatcher per environment
         if: steps.config.outputs.fanout_enabled == 'true'
         env:
+          # Canonical dispatcher credential model (recommended)
           AAP_ENV_TARGETS_JSON: ${{ secrets.AAP_ENV_TARGETS_JSON }}
+          # DEPRECATED: per-env secrets — use AAP_ENV_TARGETS_JSON instead.
+          # Kept for backward compatibility with manually customized callers.
           AAP_DEV_HOST: ${{ secrets.AAP_DEV_HOST }}
           AAP_DEV_TOKEN: ${{ secrets.AAP_DEV_TOKEN }}
           AAP_DEV_USERNAME: ${{ secrets.AAP_DEV_USERNAME }}
@@ -518,6 +521,7 @@ jobs:
           AAP_PROD_TOKEN: ${{ secrets.AAP_PROD_TOKEN }}
           AAP_PROD_USERNAME: ${{ secrets.AAP_PROD_USERNAME }}
           AAP_PROD_PASSWORD: ${{ secrets.AAP_PROD_PASSWORD }}
+          # Legacy single-env fallback (requires AAP_FANOUT_ALLOW_BASIC=true)
           AAP_HOST: ${{ secrets.AAP_HOST }}
           AAP_USERNAME: ${{ secrets.AAP_USERNAME }}
           AAP_PASSWORD: ${{ secrets.AAP_PASSWORD }}
@@ -661,7 +665,9 @@ jobs:
         if: steps.resolve.outputs.target_env != ''
         env:
           TARGET_ENV: ${{ steps.resolve.outputs.target_env }}
+          # Canonical dispatcher credential model (recommended)
           AAP_ENV_TARGETS_JSON: ${{ secrets.AAP_ENV_TARGETS_JSON }}
+          # DEPRECATED: per-env secrets — use AAP_ENV_TARGETS_JSON instead.
           AAP_DEV_HOST: ${{ secrets.AAP_DEV_HOST }}
           AAP_DEV_TOKEN: ${{ secrets.AAP_DEV_TOKEN }}
           AAP_DEV_USERNAME: ${{ secrets.AAP_DEV_USERNAME }}
@@ -686,6 +692,7 @@ jobs:
           AAP_PROD_TOKEN: ${{ secrets.AAP_PROD_TOKEN }}
           AAP_PROD_USERNAME: ${{ secrets.AAP_PROD_USERNAME }}
           AAP_PROD_PASSWORD: ${{ secrets.AAP_PROD_PASSWORD }}
+          # Legacy single-env fallback (requires AAP_FANOUT_ALLOW_BASIC=true)
           AAP_HOST: ${{ secrets.AAP_HOST }}
           AAP_USERNAME: ${{ secrets.AAP_USERNAME }}
           AAP_PASSWORD: ${{ secrets.AAP_PASSWORD }}

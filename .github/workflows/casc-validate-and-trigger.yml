@@ -1,31 +1,30 @@
 # Production-grade reusable workflow for CasC repositories (v3 — multi-env fan-out)
 # Lives at: aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml
 #
-# Tenant/platform repo usage (.github/workflows/casc.yml):
-#   jobs:
-#     casc:
-#       uses: <org>/aap-casc-engine/.github/workflows/casc-validate-and-trigger.yml@main
-#       with:
-#         dispatcher_jt_name: jt-platform-casc_dispatcher
-#         platform_scm_org: aap-casc-platform-demo
-#         platform_home_repo: casc-platform-global
-#         platform_branch: main
-#       secrets:
-#         AAP_ENGINE_HOST: ${{ secrets.AAP_ENGINE_HOST }}
-#         AAP_ENGINE_TOKEN: ${{ secrets.AAP_ENGINE_TOKEN }}
-#         AAP_ENGINE_USERNAME: ${{ secrets.AAP_ENGINE_USERNAME }}
-#         AAP_ENGINE_PASSWORD: ${{ secrets.AAP_ENGINE_PASSWORD }}
-#         AAP_ENV_TARGETS_JSON: ${{ secrets.AAP_ENV_TARGETS_JSON }}
-#         AAP_FANOUT_ALLOW_BASIC: ${{ secrets.AAP_FANOUT_ALLOW_BASIC }}
-#         AAP_HOST: ${{ secrets.AAP_HOST }}
-#         AAP_USERNAME: ${{ secrets.AAP_USERNAME }}
-#         AAP_PASSWORD: ${{ secrets.AAP_PASSWORD }}
-#         ENGINE_REPO_TOKEN: ${{ secrets.ENGINE_REPO_TOKEN }}
-#         PLATFORM_REPO_TOKEN: ${{ secrets.PLATFORM_REPO_TOKEN }}
-#         # Per-env secrets as needed (AAP_DEV_HOST, AAP_DEV_TOKEN, etc.)
+# Generated caller usage (seeded by genesis/bootstrap via caller_role):
+#
+#   Platform home repo (caller_role=platform_home):
+#     secrets:
+#       AAP_ENGINE_HOST: ${{ secrets.AAP_ENGINE_HOST }}
+#       AAP_ENGINE_TOKEN: ${{ secrets.AAP_ENGINE_TOKEN }}
+#       AAP_ENGINE_USERNAME: ${{ secrets.AAP_ENGINE_USERNAME }}
+#       AAP_ENGINE_PASSWORD: ${{ secrets.AAP_ENGINE_PASSWORD }}
+#       AAP_ENV_TARGETS_JSON: ${{ secrets.AAP_ENV_TARGETS_JSON }}
+#       ENGINE_REPO_TOKEN: ${{ secrets.ENGINE_REPO_TOKEN }}
+#       PLATFORM_REPO_TOKEN: ${{ secrets.PLATFORM_REPO_TOKEN }}
+#
+#   Tenant / non-home platform repos (caller_role=tenant or platform_nonhome):
+#     secrets:
+#       AAP_ENV_TARGETS_JSON: ${{ secrets.AAP_ENV_TARGETS_JSON }}
+#       ENGINE_REPO_TOKEN: ${{ secrets.ENGINE_REPO_TOKEN }}
+#       PLATFORM_REPO_TOKEN: ${{ secrets.PLATFORM_REPO_TOKEN }}
+#
+# The workflow also accepts deprecated per-env secrets (AAP_DEV_HOST, etc.)
+# and legacy basic-auth fallback (AAP_HOST/USERNAME/PASSWORD) for manually
+# customized callers — see secret declarations below.
 #
 # NOTE: secrets: inherit only works within the same GitHub organization.
-# Cross-org callers MUST pass secrets explicitly as shown above.
+# Cross-org callers MUST pass secrets explicitly.
 
 name: CasC Validate and Trigger
 
@@ -76,12 +75,14 @@ on:
         required: false
       AAP_ENGINE_PASSWORD:
         required: false
-      # Environment targets (JSON blob or per-env)
+      # Dispatcher credentials — canonical model (recommended)
       AAP_ENV_TARGETS_JSON:
         required: false
       AAP_FANOUT_ALLOW_BASIC:
         required: false
-      # Per-env bearer
+      # DEPRECATED: per-env bearer — use AAP_ENV_TARGETS_JSON instead.
+      # Kept for backward compatibility with manually customized callers.
+      # The generated caller template no longer passes these secrets.
       AAP_DEV_HOST:
         required: false
       AAP_DEV_TOKEN:
@@ -106,7 +107,8 @@ on:
         required: false
       AAP_PROD_TOKEN:
         required: false
-      # Per-env basic auth
+      # DEPRECATED: per-env basic auth — use AAP_ENV_TARGETS_JSON instead.
+      # Kept for backward compatibility with manually customized callers.
       AAP_DEV_USERNAME:
         required: false
       AAP_DEV_PASSWORD:
@@ -131,7 +133,7 @@ on:
         required: false
       AAP_PROD_PASSWORD:
         required: false
-      # Legacy fallback
+      # Legacy single-env fallback (requires AAP_FANOUT_ALLOW_BASIC=true)
       AAP_HOST:
         required: false
       AAP_USERNAME:

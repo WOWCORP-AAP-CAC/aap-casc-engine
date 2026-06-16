@@ -1,4 +1,7 @@
 ---
+# Example notifications configuration — rename to .yml to activate.
+# This file belongs in base/notifications/ and applies to ALL environments.
+# For environment-specific overrides, place a .yml file in <env>/notifications/.
 controller_notifications:
   - name: ntf-{{ org_id }}-example-email
     description: "Example email notification — replace with your integration"

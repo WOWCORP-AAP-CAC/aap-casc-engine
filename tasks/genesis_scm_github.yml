@@ -185,6 +185,8 @@
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
+  vars:
+    caller_role: "{{ 'platform_home' if item.item.is_home | default(false) else 'platform_nonhome' }}"
   loop: "{{ _gh_workflow_checks.results }}"
   loop_control:
     label: "{{ item.item.name }}"

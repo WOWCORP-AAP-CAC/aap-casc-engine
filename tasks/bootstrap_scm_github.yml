@@ -135,6 +135,8 @@
           'content': lookup('template', 'templates/github-workflow-caller.yml.j2') | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
+  vars:
+    caller_role: tenant
   loop: "{{ _gh_workflow_checks.results }}"
   loop_control:
     label: "{{ item.item }}"
