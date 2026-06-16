@@ -34,3 +34,15 @@ exceptions:
   gateway_role_team_assignments:
     value_type: list
     identity_field: team
+  gateway_users:
+    value_type: list
+    identity_field: username
+  controller_instances:
+    value_type: list
+    identity_field: hostname
+  controller_roles:
+    value_type: list
+    identity_field: role
+  controller_credential_input_sources:
+    value_type: list
+    identity_field: input_field_name
