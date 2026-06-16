@@ -259,6 +259,35 @@ bootstrap:tenants:
     - pip install pyyaml
   script:
     - |
+      NULL_SHA="0000000000000000000000000000000000000000"
+
+      # Guard 1: non-push pipelines (manual/web/scheduled/MR) — skip bootstrap
+      if [ "${CI_PIPELINE_SOURCE}" != "push" ]; then
+        echo "BOOTSTRAP_BLOCK_DISPATCH=false" >> bootstrap.env
+        echo "BOOTSTRAP_ACTIONABLE=false" >> bootstrap.env
+        echo "Non-push pipeline (${CI_PIPELINE_SOURCE}); skipping bootstrap."
+        exit 0
+      fi
+
+      # Guard 2: exact tenants.yml change detection via git diff
+      if [ -z "${CI_COMMIT_BEFORE_SHA:-}" ] || [ "$CI_COMMIT_BEFORE_SHA" = "$NULL_SHA" ]; then
+        git diff-tree --root --no-commit-id --name-only -r "$CI_COMMIT_SHA" > /tmp/changed_files
+      else
+        if ! git diff --name-only "$CI_COMMIT_BEFORE_SHA" "$CI_COMMIT_SHA" > /tmp/changed_files; then
+          echo "ERROR: Could not diff ${CI_COMMIT_BEFORE_SHA}..${CI_COMMIT_SHA}; refusing to silently skip bootstrap"
+          exit 1
+        fi
+      fi
+
+      if ! grep -Fxq "tenants.yml" /tmp/changed_files; then
+        echo "BOOTSTRAP_BLOCK_DISPATCH=false" >> bootstrap.env
+        echo "BOOTSTRAP_ACTIONABLE=false" >> bootstrap.env
+        echo "tenants.yml was not changed in this push; skipping bootstrap."
+        exit 0
+      fi
+
+      echo "tenants.yml was modified — running tenant diff..."
+
       python3 -c "
       import yaml, json, subprocess, sys, os
 
@@ -308,15 +337,14 @@ bootstrap:tenants:
           json.dump(actions, f)
       "
 
-      # tenants.yml changed — always block normal dispatcher
-      echo "BOOTSTRAP_BLOCK_DISPATCH=true" >> bootstrap.env
-
       if [ ! -f tenant_actions.json ]; then
-        echo "No actionable tenant bootstrap; normal dispatcher remains blocked for this tenants.yml change."
+        echo "No actionable tenant bootstrap; normal dispatcher may proceed."
+        echo "BOOTSTRAP_BLOCK_DISPATCH=false" >> bootstrap.env
         echo "BOOTSTRAP_ACTIONABLE=false" >> bootstrap.env
         exit 0
       fi
 
+      echo "BOOTSTRAP_BLOCK_DISPATCH=true" >> bootstrap.env
       echo "BOOTSTRAP_ACTIONABLE=true" >> bootstrap.env
 
       # Engine credential resolution with host normalization
@@ -445,9 +473,10 @@ bootstrap:tenants:
   rules:
     - if: '$CI_COMMIT_MESSAGE =~ /\[skip dispatch\]/'
       when: never
-    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_PROJECT_NAME == $PLATFORM_HOME_REPO'
       changes:
         - tenants.yml
+    - when: never
 
 # ── Stage 3: Fan-out ─────────────────────────────────────────────────────────
 fanout:dispatcher:
@@ -565,6 +594,23 @@ fanout:dispatcher:
               print(f"ERROR: JT '{jt_name}' not found on {host}")
               sys.exit(1)
 
+          allow_simul = jt_data['results'][0].get('allow_simultaneous', False)
+          if allow_simul:
+              print(f'ERROR: Dispatcher JT has allow_simultaneous=true — must be false')
+              sys.exit(1)
+
+          for attempt in range(1, 3):
+              busy_cmd = ['curl', '-sk'] + auth_args + [f'{host}/api/controller/v2/jobs/?job_template={jt_id}&status__in=running,pending,waiting&page_size=1']
+              busy_result = subprocess.run(busy_cmd, capture_output=True, text=True)
+              try:
+                  running = json.loads(busy_result.stdout).get('count', 0)
+              except Exception:
+                  running = 0
+              if running == 0:
+                  break
+              print(f'  Dispatcher busy ({attempt}/2) — waiting 15s...')
+              time.sleep(15)
+
           extra_vars = json.dumps({'target_env': env, 'trigger_commit': os.environ.get('CI_COMMIT_SHA', ''), 'triggered_repo': os.environ.get('CI_PROJECT_NAME', ''), 'trigger_source': 'ci-cd-fanout'})
           launch_cmd = ['curl', '-sk', '-X', 'POST'] + auth_args + ['-H', 'Content-Type: application/json', '-d', json.dumps({'extra_vars': extra_vars}), f'{host}/api/controller/v2/job_templates/{jt_id}/launch/']
           launch_result = subprocess.run(launch_cmd, capture_output=True, text=True)
@@ -579,8 +625,10 @@ fanout:dispatcher:
       print('\n=== Fan-out complete ===')
       FANOUT_PY
   rules:
-    - if: '$CI_COMMIT_BRANCH'
-      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_PROJECT_NAME == $PLATFORM_HOME_REPO'
+      changes:
+        - tenants.yml
+    - when: never
 
 # ── Stage 4: Trigger ─────────────────────────────────────────────────────────
 trigger:dispatcher:
@@ -707,6 +755,18 @@ trigger:dispatcher:
       if allow_simul:
           print('ERROR: Dispatcher JT has allow_simultaneous=true — must be false')
           sys.exit(1)
+
+      for attempt in range(1, 3):
+          busy_cmd = ['curl', '-sk'] + auth_args + [f'{host}/api/controller/v2/jobs/?job_template={jt_id}&status__in=running,pending,waiting&page_size=1']
+          busy_result = subprocess.run(busy_cmd, capture_output=True, text=True)
+          try:
+              running = json.loads(busy_result.stdout).get('count', 0)
+          except Exception:
+              running = 0
+          if running == 0:
+              break
+          print(f'  Dispatcher busy ({attempt}/2) — waiting 15s...')
+          time.sleep(15)
 
       extra_vars = json.dumps({'target_env': target_env, 'trigger_commit': os.environ.get('CI_COMMIT_SHA', ''), 'triggered_repo': os.environ.get('CI_PROJECT_NAME', ''), 'trigger_source': 'ci-cd-pipeline'})
       launch_cmd = ['curl', '-sk', '-X', 'POST'] + auth_args + ['-H', 'Content-Type: application/json', '-d', json.dumps({'extra_vars': extra_vars}), f'{host}/api/controller/v2/job_templates/{jt_id}/launch/']
