@@ -5,8 +5,8 @@ scm_provider: {{ scm_provider }}
 platform_scm_org: {{ platform_scm_org }}
 repo_pattern: {{ repo_pattern | default('combined') }}
 platform_branch: {{ platform_branch | default('main', true) }}
-create_missing_env_branches: {{ create_missing_env_branches | default(true, true) | bool | lower }}
-bootstrap_dispatch_fanout: {{ bootstrap_dispatch_fanout | default(true, true) | bool | lower }}
+create_missing_env_branches: {{ create_missing_env_branches | default(true) | bool | lower }}
+bootstrap_dispatch_fanout: {{ bootstrap_dispatch_fanout | default(true) | bool | lower }}
 
 env_branch_map:
 {{ _effective_env_branch_map | to_nice_yaml(indent=2) | indent(2, true) }}
