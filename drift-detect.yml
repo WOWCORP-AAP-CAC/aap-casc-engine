@@ -18,6 +18,7 @@
     aap_hostname: "{{ lookup('env', 'CONTROLLER_HOST') }}"
     aap_username: "{{ lookup('env', 'CONTROLLER_USERNAME') }}"
     aap_password: "{{ lookup('env', 'CONTROLLER_PASSWORD') }}"
+    aap_oauth_token: "{{ lookup('env', 'CONTROLLER_OAUTH_TOKEN') }}"
     aap_validate_certs: "{{ lookup('env', 'CONTROLLER_VERIFY_SSL') | default(true, true) | bool }}"
     target_env: "{{ lookup('env', 'TARGET_ENV') }}"
     drift_mode: "{{ lookup('env', 'DRIFT_MODE') | default('report', true) }}"
@@ -189,44 +190,56 @@
           schedules: "{{ controller_schedules | default([]) }}"
 
     # ── Phase 2: Export live state from AAP platform ────────────────────
+    - name: "Build common auth headers for AAP API"
+      ansible.builtin.set_fact:
+        _aap_auth_headers: >-
+          {{ {'Authorization': 'Bearer ' + aap_oauth_token}
+             if aap_oauth_token | default('') | length > 0
+             else {} }}
+        _aap_use_basic: "{{ (aap_oauth_token | default('') | length == 0) and (aap_username | default('') | length > 0) }}"
+
     - name: "Export live organizations"
       ansible.builtin.uri:
         url: "{{ aap_hostname }}/api/gateway/v1/organizations/?page_size=200"
         method: GET
-        user: "{{ aap_username }}"
-        password: "{{ aap_password }}"
+        headers: "{{ _aap_auth_headers }}"
+        user: "{{ aap_username if _aap_use_basic | bool else omit }}"
+        password: "{{ aap_password if _aap_use_basic | bool else omit }}"
+        force_basic_auth: "{{ _aap_use_basic | bool }}"
         validate_certs: "{{ aap_validate_certs }}"
-        force_basic_auth: true
       register: live_organizations
 
     - name: "Export live credential types"
       ansible.builtin.uri:
         url: "{{ aap_hostname }}/api/controller/v2/credential_types/?managed=false&page_size=200"
         method: GET
-        user: "{{ aap_username }}"
-        password: "{{ aap_password }}"
+        headers: "{{ _aap_auth_headers }}"
+        user: "{{ aap_username if _aap_use_basic | bool else omit }}"
+        password: "{{ aap_password if _aap_use_basic | bool else omit }}"
+        force_basic_auth: "{{ _aap_use_basic | bool }}"
         validate_certs: "{{ aap_validate_certs }}"
-        force_basic_auth: true
       register: live_credential_types
 
     - name: "Export live projects"
       ansible.builtin.uri:
         url: "{{ aap_hostname }}/api/controller/v2/projects/?page_size=200"
         method: GET
-        user: "{{ aap_username }}"
-        password: "{{ aap_password }}"
+        headers: "{{ _aap_auth_headers }}"
+        user: "{{ aap_username if _aap_use_basic | bool else omit }}"
+        password: "{{ aap_password if _aap_use_basic | bool else omit }}"
+        force_basic_auth: "{{ _aap_use_basic | bool }}"
         validate_certs: "{{ aap_validate_certs }}"
-        force_basic_auth: true
       register: live_projects
 
     - name: "Export live job templates"
       ansible.builtin.uri:
         url: "{{ aap_hostname }}/api/controller/v2/job_templates/?page_size=200"
         method: GET
-        user: "{{ aap_username }}"
-        password: "{{ aap_password }}"
+        headers: "{{ _aap_auth_headers }}"
+        user: "{{ aap_username if _aap_use_basic | bool else omit }}"
+        password: "{{ aap_password if _aap_use_basic | bool else omit }}"
+        force_basic_auth: "{{ _aap_use_basic | bool }}"
         validate_certs: "{{ aap_validate_certs }}"
-        force_basic_auth: true
       register: live_job_templates
 
     # ── Phase 3: Compare and generate drift report ──────────────────────
