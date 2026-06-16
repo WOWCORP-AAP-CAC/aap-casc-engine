@@ -625,6 +625,8 @@ fanout:dispatcher:
       print('\n=== Fan-out complete ===')
       FANOUT_PY
   rules:
+    - if: '$CI_COMMIT_MESSAGE =~ /\[skip dispatch\]/'
+      when: never
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_PROJECT_NAME == $PLATFORM_HOME_REPO'
       changes:
         - tenants.yml
