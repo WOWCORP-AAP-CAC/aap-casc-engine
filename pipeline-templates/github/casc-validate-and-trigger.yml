@@ -39,18 +39,39 @@ jobs:
 
       - name: Detect tenants.yml change
         id: tenants_check
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ]; then
-            if git diff --name-only "${{ github.event.before }}" "${{ github.event.after }}" 2>/dev/null | grep -Fxq "tenants.yml"; then
-              echo "tenants_changed=true" >> "$GITHUB_OUTPUT"
-              echo "tenants.yml was modified in this push"
-            else
-              echo "tenants_changed=false" >> "$GITHUB_OUTPUT"
-              echo "tenants.yml was NOT modified in this push"
+          NULL_SHA="0000000000000000000000000000000000000000"
+
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "tenants_changed=false" >> "$GITHUB_OUTPUT"
+            echo "Non-push event — skipping tenants check"
+            exit 0
+          fi
+
+          if [ "$AFTER" = "$NULL_SHA" ]; then
+            echo "tenants_changed=false" >> "$GITHUB_OUTPUT"
+            echo "Branch delete event — no bootstrap"
+            exit 0
+          fi
+
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$NULL_SHA" ]; then
+            git diff-tree --no-commit-id --name-only -r "$AFTER" > /tmp/changed_files
+          else
+            if ! git diff --name-only "$BEFORE" "$AFTER" > /tmp/changed_files; then
+              echo "::error::Could not diff ${BEFORE}..${AFTER}; refusing to silently skip bootstrap"
+              exit 1
             fi
+          fi
+
+          if grep -Fxq "tenants.yml" /tmp/changed_files; then
+            echo "tenants_changed=true" >> "$GITHUB_OUTPUT"
+            echo "tenants.yml was modified in this push"
           else
             echo "tenants_changed=false" >> "$GITHUB_OUTPUT"
-            echo "Non-push event or missing before SHA — skipping tenants check"
+            echo "tenants.yml was NOT modified in this push"
           fi
 
       - name: Checkout engine repo (optional — for validation assets)
@@ -276,7 +297,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -288,21 +309,29 @@ jobs:
 
       - name: Diff tenants and determine actions
         id: diff
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           python3 -c "
           import yaml, json, subprocess, sys, os
 
+          NULL_SHA = '0000000000000000000000000000000000000000'
+          before = os.environ.get('BEFORE_SHA', '')
+
           try:
-              current = yaml.safe_load(open('tenants.yml'))
+              current = yaml.safe_load(open('tenants.yml')) or {'tenants': []}
           except Exception:
               print('tenants.yml not found or invalid — skipping bootstrap')
               sys.exit(0)
 
-          result = subprocess.run(['git', 'show', 'HEAD~1:tenants.yml'], capture_output=True, text=True)
-          if result.returncode != 0:
+          if not before or before == NULL_SHA:
               previous = {'tenants': []}
           else:
-              previous = yaml.safe_load(result.stdout) or {'tenants': []}
+              result = subprocess.run(['git', 'show', f'{before}:tenants.yml'], capture_output=True, text=True)
+              if result.returncode != 0:
+                  previous = {'tenants': []}
+              else:
+                  previous = yaml.safe_load(result.stdout) or {'tenants': []}
 
           prev_map = {t['org_id']: t for t in previous.get('tenants', [])}
           curr_map = {t['org_id']: t for t in current.get('tenants', [])}
