@@ -84,6 +84,16 @@
 
     default_ee: "{{ lookup('env', 'DEFAULT_EE') | default('Default execution environment', true) }}"
 
+    # Tenant resource type metadata — maps repo basenames to folder names and seed templates
+    _tenant_types:
+      - { folder: projects, basename: controller-projects, template: "templates/seed-controller-projects.yml.j2" }
+      - { folder: credentials, basename: controller-credentials, template: "templates/seed-controller-credentials.yml.j2" }
+      - { folder: inventories, basename: controller-inventories, template: "templates/seed-controller-inventories.yml.j2" }
+      - { folder: templates, basename: controller-templates, template: "templates/seed-controller-templates.yml.j2" }
+      - { folder: workflows, basename: controller-workflows, template: "templates/seed-controller-workflows.yml.j2" }
+      - { folder: schedules, basename: controller-schedules, template: "templates/seed-controller-schedules.yml.j2" }
+      - { folder: notifications, basename: controller-notifications, template: "templates/seed-controller-notifications.yml.j2" }
+
     platform_branch: "{{ lookup('env', 'PLATFORM_BRANCH') | default('main', true) }}"
 
     bootstrap_clone_dir: "/tmp/bootstrap-repos"

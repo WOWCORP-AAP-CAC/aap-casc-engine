@@ -59,6 +59,19 @@
     # Combined pattern: single platform repo name
     _combined_platform_repo: casc-platform-global
 
+    # Platform resource type folders — seeded in combined repo as base/<folder>/
+    # Must match the paths used by bootstrap when pushing platform YAML.
+    _platform_type_folders:
+      - organizations
+      - teams
+      - role_definitions
+      - rbac_user_assignments
+      - rbac_team_assignments
+      - credential_types
+      - execution_environments
+      - settings
+      - schedules
+
     # Per-resource-type: list of platform repos (legacy option)
     _per_type_platform_repos:
       - name: aap-organizations-global
