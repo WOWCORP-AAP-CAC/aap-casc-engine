@@ -46,3 +46,6 @@ exceptions:
   controller_credential_input_sources:
     value_type: list
     identity_field: input_field_name
+  eda_credential_input_sources:
+    value_type: list
+    identity_field: input_field_name
