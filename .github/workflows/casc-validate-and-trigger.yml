@@ -150,9 +150,29 @@ jobs:
   validate:
     name: Validate YAML Configs
     runs-on: ubuntu-latest
+    outputs:
+      tenants_changed: ${{ steps.tenants_check.outputs.tenants_changed }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect tenants.yml change
+        id: tenants_check
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.event.before }}" ]; then
+            if git diff --name-only "${{ github.event.before }}" "${{ github.event.after }}" 2>/dev/null | grep -Fxq "tenants.yml"; then
+              echo "tenants_changed=true" >> "$GITHUB_OUTPUT"
+              echo "tenants.yml was modified in this push"
+            else
+              echo "tenants_changed=false" >> "$GITHUB_OUTPUT"
+              echo "tenants.yml was NOT modified in this push"
+            fi
+          else
+            echo "tenants_changed=false" >> "$GITHUB_OUTPUT"
+            echo "Non-push event or missing before SHA — skipping tenants check"
+          fi
 
       - name: Derive engine repo from workflow context
         id: engine
@@ -369,7 +389,8 @@ jobs:
     if: >-
       github.event_name == 'push'
       && !contains(github.event.head_commit.message, '[skip dispatch]')
-      && contains(toJSON(github.event.commits.*.modified), 'tenants.yml')
+      && github.repository == format('{0}/{1}', inputs.platform_scm_org, inputs.platform_home_repo)
+      && needs.validate.outputs.tenants_changed == 'true'
     outputs:
       has_tenants_change: ${{ steps.diff.outputs.has_actions }}
     steps:
