@@ -444,6 +444,8 @@ jobs:
           AAP_HOST: ${{ secrets.AAP_HOST }}
           AAP_USERNAME: ${{ secrets.AAP_USERNAME }}
           AAP_PASSWORD: ${{ secrets.AAP_PASSWORD }}
+          PLATFORM_SCM_ORG: ${{ inputs.platform_scm_org }}
+          PLATFORM_HOME_REPO: ${{ inputs.platform_home_repo || 'casc-platform-global' }}
         run: |
           normalize_aap_host() {
             local raw="$1"
@@ -520,6 +522,8 @@ jobs:
                   'team_lead': tenant['team_lead'],
                   'tenant_scm_org': tenant['tenant_scm_org'],
                   'repo_pattern': tenant.get('repo_pattern', 'combined'),
+                  'platform_scm_org': os.environ.get('PLATFORM_SCM_ORG', ''),
+                  'platform_repo': os.environ.get('PLATFORM_HOME_REPO', 'casc-platform-global'),
               })
 
               launch_cmd = ['curl', '-sk', '-X', 'POST'] + auth_args + [
