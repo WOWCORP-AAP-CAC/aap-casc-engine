@@ -177,39 +177,91 @@
   loop_control:
     label: "{{ item.item.json.name }}"
 
-- name: "GL – Check if example YAML sample already exists in tenant repos"
+- name: "GL – Build repo name to project data lookup"
+  ansible.builtin.set_fact:
+    _gl_tenant_lookup: "{{ _gl_tenant_lookup | default({}) | combine({item.json.name: {'id': item.json.id, 'branch': item.json.default_branch | default('main')}}) }}"
+  loop: "{{ _gl_tenant_projects.results }}"
+  loop_control:
+    label: "{{ item.json.name }}"
+
+- name: "GL – Initialize seed item lists"
+  ansible.builtin.set_fact:
+    _seed_items: []
+    _env_seed_items: []
+
+- name: "GL – Build base/<type>/example.yml.sample seed list"
+  ansible.builtin.set_fact:
+    _seed_items: "{{ _seed_items + [{'project_id': _gl_tenant_lookup[_repo_name].id, 'branch': _gl_tenant_lookup[_repo_name].branch, 'path': 'base/' + item.folder + '/example.yml.sample', 'template': item.template, 'folder': item.folder}] }}"
+  loop: "{{ _tenant_types }}"
+  vars:
+    _repo_name: "{{ (item.basename + '-' + org_id) if repo_pattern == 'per-resource-type' else tenant_repos[0] }}"
+
+- name: "GL – Check if base seed files exist"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/base%2Fprojects%2Fexample.yml.sample?ref={{ item.json.default_branch | default('main') | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.project_id }}/repository/files/{{ item.path | urlencode() | replace('/', '%2F') }}?ref={{ item.branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     status_code: [200, 404]
-  loop: "{{ _gl_tenant_projects.results }}"
+  loop: "{{ _seed_items }}"
   loop_control:
-    label: "{{ item.json.name }}"
-  register: _gl_example_checks
+    label: "{{ item.path }}"
+  register: _gl_seed_checks
 
-- name: "GL – Seed example YAML sample in each tenant repo"
+- name: "GL – Seed example YAML in base/<type>/ folders"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/files/base%2Fprojects%2Fexample.yml.sample"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.project_id }}/repository/files/{{ item.item.path | urlencode() | replace('/', '%2F') }}"
     method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ item.item.json.default_branch | default('main') }}"
-      content: "{{ _seed_content }}"
-      commit_message: "Bootstrap: example YAML sample (rename to .yml to activate) [skip dispatch]"
+      branch: "{{ item.item.branch }}"
+      content: "{{ lookup('template', item.item.template) }}"
+      commit_message: "Bootstrap: add {{ item.item.folder }} example YAML (rename to .yml to activate) [skip dispatch]"
     status_code: [200, 201]
-  vars:
-    _repo_basename: "{{ item.item.json.name | regex_replace('-' + org_id + '$', '') }}"
-    _per_type_template: "templates/seed-{{ _repo_basename }}.yml.j2"
-    _combined_template: "templates/seed-combined-tenant.yml.j2"
-    _template: "{{ _per_type_template if lookup('first_found', dict(files=[_per_type_template], skip=true)) else _combined_template }}"
-    _seed_content: "{{ lookup('template', _template) }}"
-  loop: "{{ _gl_example_checks.results }}"
+  loop: "{{ _gl_seed_checks.results }}"
   loop_control:
-    label: "{{ item.item.json.name }}"
+    label: "{{ item.item.path }}"
+
+# --- Seed <env>/<type>/.gitkeep for multi-env layout (from env_branch_map) ---
+
+- name: "GL – Build <env>/<type>/.gitkeep seed list"
+  ansible.builtin.set_fact:
+    _env_seed_items: "{{ _env_seed_items + [{'project_id': _gl_tenant_lookup[_repo_name].id, 'branch': _gl_tenant_lookup[_repo_name].branch, 'path': item.1 + '/' + item.0.folder + '/.gitkeep', 'label': item.1 + '/' + item.0.folder}] }}"
+  loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
+  loop_control:
+    label: "{{ item.1 }}/{{ item.0.folder }}"
+  vars:
+    _repo_name: "{{ (item.0.basename + '-' + org_id) if repo_pattern == 'per-resource-type' else tenant_repos[0] }}"
+
+- name: "GL – Check if env folder .gitkeep files exist"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.project_id }}/repository/files/{{ item.path | urlencode() | replace('/', '%2F') }}?ref={{ item.branch | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _env_seed_items }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: _gl_env_seed_checks
+
+- name: "GL – Seed .gitkeep in <env>/<type>/ folders"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.project_id }}/repository/files/{{ item.item.path | urlencode() | replace('/', '%2F') }}"
+    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ item.item.branch }}"
+      content: ""
+      commit_message: "Bootstrap: create {{ item.item.label }}/ env folder [skip dispatch]"
+    status_code: [200, 201]
+  loop: "{{ _gl_env_seed_checks.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3b: Create environment branches in each tenant repo (if enabled)
