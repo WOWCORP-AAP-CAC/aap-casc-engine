@@ -103,7 +103,7 @@
     body:
       branch: "{{ platform_branch }}"
       content: "{{ _config_yml_content }}"
-      commit_message: "Genesis: initialize config.yml [skip dispatch]"
+      commit_message: "Genesis: initialize config.yml [skip ci]"
     status_code: [200, 201]
   when: _gl_config_check.status == 404
 
@@ -126,7 +126,7 @@
     body:
       branch: "{{ platform_branch }}"
       content: "{{ _tenants_yml_content }}"
-      commit_message: "Genesis: initialize tenants.yml [skip dispatch]"
+      commit_message: "Genesis: initialize tenants.yml [skip ci]"
     status_code: [200, 201]
   when: _gl_tenants_check.status == 404
 
@@ -186,7 +186,7 @@
     body:
       branch: "{{ platform_branch }}"
       content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
-      commit_message: "Genesis: add shared CasC pipeline template [skip dispatch]"
+      commit_message: "Genesis: add shared CasC pipeline template [skip ci]"
     status_code: [200, 201]
   loop: "{{ _gl_ci_checks.results }}"
   loop_control:
@@ -218,7 +218,7 @@
     body:
       branch: "{{ platform_branch }}"
       content: "{{ lookup('template', 'templates/genesis-readme.md.j2') }}"
-      commit_message: "Genesis: add README with repo purpose and usage [skip dispatch]"
+      commit_message: "Genesis: add README with repo purpose and usage [skip ci]"
     status_code: [200, 201]
   vars:
     repo: "{{ item.item.item }}"
@@ -264,7 +264,7 @@
     body:
       branch: "{{ platform_branch }}"
       content: ""
-      commit_message: "Genesis: create {{ item.item }}/ folder [skip dispatch]"
+      commit_message: "Genesis: create {{ item.item }}/ folder [skip ci]"
     status_code: [200, 201]
   loop: "{{ _gl_folder_checks_combined.results | default([]) }}"
   loop_control:
@@ -300,7 +300,7 @@
     body:
       branch: "{{ platform_branch }}"
       content: ""
-      commit_message: "Genesis: create {{ item.item.1 }}/ folder [skip dispatch]"
+      commit_message: "Genesis: create {{ item.item.1 }}/ folder [skip ci]"
     status_code: [200, 201]
   loop: "{{ _gl_folder_checks_per_type.results | default([]) }}"
   loop_control:
@@ -338,7 +338,7 @@
     body:
       branch: "{{ platform_branch }}"
       content: "{{ lookup('template', item.item.template) }}"
-      commit_message: "Genesis: add {{ item.item.folder }} example YAML (rename to .yml to activate) [skip dispatch]"
+      commit_message: "Genesis: add {{ item.item.folder }} example YAML (rename to .yml to activate) [skip ci]"
     status_code: [200, 201]
   loop: "{{ _gl_platform_example_checks.results | default([]) }}"
   loop_control:
@@ -369,7 +369,7 @@
     body:
       branch: "{{ platform_branch }}"
       content: "{{ lookup('template', item.item.item.template) }}"
-      commit_message: "Genesis: add {{ item.item.item.folder }} example YAML (rename to .yml to activate) [skip dispatch]"
+      commit_message: "Genesis: add {{ item.item.item.folder }} example YAML (rename to .yml to activate) [skip ci]"
     status_code: [200, 201]
   loop: "{{ _gl_platform_example_checks_per_type.results | default([]) }}"
   loop_control:

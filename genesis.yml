@@ -36,7 +36,7 @@
          else ('github' if 'github' in scm_base_url else 'gitlab') }}
 
     platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('') }}"
-    engine_repo: "{{ lookup('env', 'ENGINE_REPO') | default('aap-casc-engine') }}"
+    engine_repo: "{{ lookup('env', 'ENGINE_REPO') | default('aap-casc-engine', true) }}"
     repo_visibility: "{{ lookup('env', 'REPO_VISIBILITY') | default('private', true) }}"
     _repo_private: "{{ repo_visibility == 'private' }}"
     repo_pattern: "{{ lookup('env', 'REPO_PATTERN') | default('combined', true) }}"

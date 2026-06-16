@@ -46,7 +46,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add organization org-' + org_id + ' [skip dispatch]',
+      {{ {'message': 'Bootstrap: add organization org-' + org_id + ' [skip ci]',
           'branch': _effective_platform_branch,
           'content': lookup('template', 'templates/org-template.yml.j2') | b64encode}
          | combine({'sha': _gh_org_file.json.sha} if _gh_org_file.status == 200 else {}) }}
@@ -75,7 +75,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add team for org-' + org_id + ' [skip dispatch]',
+      {{ {'message': 'Bootstrap: add team for org-' + org_id + ' [skip ci]',
           'branch': _effective_platform_branch,
           'content': lookup('template', 'templates/team-template.yml.j2') | b64encode}
          | combine({'sha': _gh_team_file.json.sha} if _gh_team_file.status == 200 else {}) }}
@@ -131,7 +131,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add CasC pipeline-as-a-service (thin caller) [skip dispatch]',
+      {{ {'message': 'Bootstrap: add CasC pipeline-as-a-service (thin caller) [skip ci]',
           'content': lookup('template', 'templates/github-workflow-caller.yml.j2') | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
@@ -175,7 +175,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip dispatch]',
+      {{ {'message': 'Bootstrap: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip ci]',
           'content': _seed_content | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
@@ -218,7 +218,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: create ' + item.item.label + '/ env folder [skip dispatch]',
+      {{ {'message': 'Bootstrap: create ' + item.item.label + '/ env folder [skip ci]',
           'content': '' | b64encode}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
@@ -337,7 +337,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body:
-      message: "Bootstrap: register tenant {{ org_id }} [skip dispatch]"
+      message: "Bootstrap: register tenant {{ org_id }} [skip ci]"
       branch: "{{ _effective_platform_branch }}"
       content: "{{ _updated_tenants | to_nice_yaml(indent=2) | b64encode }}"
       sha: "{{ _tenants_sha }}"
@@ -379,7 +379,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add RBAC user assignments for org-' + org_id + ' [skip dispatch]',
+      {{ {'message': 'Bootstrap: add RBAC user assignments for org-' + org_id + ' [skip ci]',
           'branch': _effective_platform_branch,
           'content': lookup('template', 'templates/rbac-user-template.yml.j2') | b64encode}
          | combine({'sha': _gh_rbac_user_file.json.sha} if _gh_rbac_user_file.status == 200 else {}) }}
@@ -406,7 +406,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add RBAC team assignments for org-' + org_id + ' [skip dispatch]',
+      {{ {'message': 'Bootstrap: add RBAC team assignments for org-' + org_id + ' [skip ci]',
           'branch': _effective_platform_branch,
           'content': lookup('template', 'templates/rbac-team-template.yml.j2') | b64encode}
          | combine({'sha': _gh_rbac_team_file.json.sha} if _gh_rbac_team_file.status == 200 else {}) }}
@@ -433,7 +433,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Bootstrap: add user account for ' + team_lead + ' in org-' + org_id + ' [skip dispatch]',
+      {{ {'message': 'Bootstrap: add user account for ' + team_lead + ' in org-' + org_id + ' [skip ci]',
           'branch': _effective_platform_branch,
           'content': lookup('template', 'templates/user-template.yml.j2') | b64encode}
          | combine({'sha': _gh_user_account_file.json.sha} if _gh_user_account_file.status == 200 else {}) }}

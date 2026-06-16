@@ -1,4 +1,4 @@
 include:
-  - project: '{{ platform_scm_org }}/{{ engine_repo | default("aap-casc-engine") }}'
+  - project: '{{ platform_scm_org }}/{{ engine_repo | default("aap-casc-engine", true) }}'
     ref: 'main'
     file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'

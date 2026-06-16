@@ -25,3 +25,12 @@ exceptions:
   hub_group_roles:
     value_type: list
     identity_field: groups
+  aap_user_accounts:
+    value_type: list
+    identity_field: username
+  gateway_role_user_assignments:
+    value_type: list
+    identity_field: user
+  gateway_role_team_assignments:
+    value_type: list
+    identity_field: team

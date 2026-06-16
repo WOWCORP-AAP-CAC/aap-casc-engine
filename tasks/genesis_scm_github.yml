@@ -113,7 +113,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body:
-      message: "Genesis: initialize config.yml [skip dispatch]"
+      message: "Genesis: initialize config.yml [skip ci]"
       content: "{{ _config_yml_content | b64encode }}"
       branch: "{{ platform_branch }}"
     status_code: [200, 201]
@@ -143,7 +143,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body:
-      message: "Genesis: initialize tenants.yml [skip dispatch]"
+      message: "Genesis: initialize tenants.yml [skip ci]"
       content: "{{ _tenants_yml_content | b64encode }}"
       branch: "{{ platform_branch }}"
     status_code: [200, 201]
@@ -180,7 +180,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: add CasC pipeline-as-a-service (thin caller) [skip dispatch]',
+      {{ {'message': 'Genesis: add CasC pipeline-as-a-service (thin caller) [skip ci]',
           'content': lookup('template', 'templates/github-workflow-caller.yml.j2') | b64encode,
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
@@ -217,7 +217,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: add README with repo purpose and usage [skip dispatch]',
+      {{ {'message': 'Genesis: add README with repo purpose and usage [skip ci]',
           'content': lookup('template', 'templates/genesis-readme.md.j2') | b64encode,
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
@@ -266,7 +266,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: create ' + item.item + '/ folder [skip dispatch]',
+      {{ {'message': 'Genesis: create ' + item.item + '/ folder [skip ci]',
           'content': '' | b64encode,
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
@@ -305,7 +305,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: create ' + item.item.1 + '/ folder [skip dispatch]',
+      {{ {'message': 'Genesis: create ' + item.item.1 + '/ folder [skip ci]',
           'content': '' | b64encode,
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
@@ -346,7 +346,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip dispatch]',
+      {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip ci]',
           'content': lookup('template', item.item.template) | b64encode,
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
@@ -380,7 +380,7 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip dispatch]',
+      {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip ci]',
           'content': lookup('template', item.item.template) | b64encode,
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}

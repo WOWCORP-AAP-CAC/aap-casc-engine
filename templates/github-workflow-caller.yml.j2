@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 jobs:
   casc:
-    uses: {{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine') }}/.github/workflows/casc-validate-and-trigger.yml@{{ engine_ref | default('main', true) }}
+    uses: {{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine', true) }}/.github/workflows/casc-validate-and-trigger.yml@{{ engine_ref | default('main', true) }}
     with:
       dispatcher_jt_name: jt-platform-casc_dispatcher
       platform_scm_org: {{ platform_scm_org }}
