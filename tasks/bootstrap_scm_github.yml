@@ -139,14 +139,19 @@
   loop_control:
     label: "{{ item.item }}"
 
-- name: "GH – Build seed file list (type-aware paths for both patterns)"
+- name: "GH – Initialize seed item lists"
   ansible.builtin.set_fact:
-    _seed_items: "{{ _seed_items | default([]) + [{'repo': _repo_name, 'path': 'base/' + item.folder + '/example.yml.sample', 'template': item.template, 'folder': item.folder}] }}"
+    _seed_items: []
+    _env_seed_items: []
+
+- name: "GH – Build base/<type>/example.yml.sample seed list"
+  ansible.builtin.set_fact:
+    _seed_items: "{{ _seed_items + [{'repo': _repo_name, 'path': 'base/' + item.folder + '/example.yml.sample', 'template': item.template, 'folder': item.folder}] }}"
   loop: "{{ _tenant_types }}"
   vars:
     _repo_name: "{{ (item.basename + '-' + org_id) if repo_pattern == 'per-resource-type' else tenant_repos[0] }}"
 
-- name: "GH – Check if seed files already exist"
+- name: "GH – Check if base seed files already exist"
   ansible.builtin.uri:
     url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.repo }}/contents/{{ item.path }}"
     method: GET
@@ -159,7 +164,7 @@
     label: "{{ item.repo }}:{{ item.path }}"
   register: _gh_seed_checks
 
-- name: "GH – Seed example YAML in tenant repos (correct type folders)"
+- name: "GH – Seed example YAML in base/<type>/ folders"
   ansible.builtin.uri:
     url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.repo }}/contents/{{ item.item.path }}"
     method: PUT
@@ -175,6 +180,47 @@
   vars:
     _seed_content: "{{ lookup('template', item.item.template) }}"
   loop: "{{ _gh_seed_checks.results }}"
+  loop_control:
+    label: "{{ item.item.repo }}:{{ item.item.path }}"
+
+# --- Seed <env>/<type>/.gitkeep for multi-env layout (from env_branch_map) ---
+
+- name: "GH – Build <env>/<type>/.gitkeep seed list"
+  ansible.builtin.set_fact:
+    _env_seed_items: "{{ _env_seed_items + [{'repo': _repo_name, 'path': item.1 + '/' + item.0.folder + '/.gitkeep', 'label': item.1 + '/' + item.0.folder}] }}"
+  loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
+  loop_control:
+    label: "{{ item.1 }}/{{ item.0.folder }}"
+  vars:
+    _repo_name: "{{ (item.0.basename + '-' + org_id) if repo_pattern == 'per-resource-type' else tenant_repos[0] }}"
+
+- name: "GH – Check if env folder .gitkeep files exist"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.repo }}/contents/{{ item.path }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ _env_seed_items }}"
+  loop_control:
+    label: "{{ item.repo }}:{{ item.path }}"
+  register: _gh_env_seed_checks
+
+- name: "GH – Seed .gitkeep in <env>/<type>/ folders"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.repo }}/contents/{{ item.item.path }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Bootstrap: create ' + item.item.label + '/ env folder [skip dispatch]',
+          'content': '' | b64encode}
+         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
+    status_code: [200, 201]
+  loop: "{{ _gh_env_seed_checks.results }}"
   loop_control:
     label: "{{ item.item.repo }}:{{ item.item.path }}"
 

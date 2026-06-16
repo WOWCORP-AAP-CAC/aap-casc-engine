@@ -227,71 +227,88 @@
     label: "{{ item.item.name }}"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 5: Seed base/<type>/ folder structure so repos are self-documenting
-#   - combined:          base/<type>/.gitkeep in home repo for each platform type
-#   - per-resource-type: base/.gitkeep in each type-specific repo
+# Step 5: Seed full multi-env folder structure (base/ + env/)
+#   Makes repos self-documenting with the complete layout from day-0.
+#   - combined:          base/<type>/ + <env>/<type>/ in home repo
+#   - per-resource-type: base/ + <env>/ in each type-specific repo
+#   <env> comes from each KEY in env_branch_map (e.g., dev, tst, prd).
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Check .gitkeep in base/<type>/ (combined pattern)"
+# --- Combined pattern: base/<type>/ + <env>/<type>/ in one repo ---
+- name: "GH – Compute all folder paths (combined)"
+  ansible.builtin.set_fact:
+    _genesis_seed_paths: >-
+      {{ (_platform_type_folders | map('regex_replace', '^', 'base/') | list)
+         + (env_branch_map.keys() | list | product(_platform_type_folders)
+            | map('join', '/') | list) }}
+  when: repo_pattern == 'combined'
+
+- name: "GH – Check .gitkeep in folders (combined)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/base/{{ item }}/.gitkeep?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/{{ item }}/.gitkeep?ref={{ platform_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
-  loop: "{{ _platform_type_folders }}"
-  register: _gh_gitkeep_combined
+  loop: "{{ _genesis_seed_paths }}"
+  register: _gh_folder_checks_combined
   when: repo_pattern == 'combined'
 
-- name: "GH – Seed .gitkeep in base/<type>/ (combined pattern)"
+- name: "GH – Seed .gitkeep in folders (combined)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/base/{{ item.item }}/.gitkeep"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/{{ item.item }}/.gitkeep"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: create base/' + item.item + '/ folder [skip dispatch]',
+      {{ {'message': 'Genesis: create ' + item.item + '/ folder [skip dispatch]',
           'content': '' | b64encode,
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
-  loop: "{{ _gh_gitkeep_combined.results | default([]) }}"
+  loop: "{{ _gh_folder_checks_combined.results | default([]) }}"
   loop_control:
-    label: "base/{{ item.item }}/"
+    label: "{{ item.item }}/"
   when: repo_pattern == 'combined'
 
-- name: "GH – Check .gitkeep in base/ (per-resource-type repos)"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/base/.gitkeep?ref={{ platform_branch | urlencode }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404]
-  loop: "{{ platform_repos | rejectattr('is_home') | list }}"
-  loop_control:
-    label: "{{ item.name }}"
-  register: _gh_gitkeep_per_type
+# --- Per-resource-type: base/ + <env>/ in each type repo ---
+- name: "GH – Compute folder prefixes (per-resource-type)"
+  ansible.builtin.set_fact:
+    _genesis_folder_prefixes: "{{ ['base'] + (env_branch_map.keys() | list) }}"
   when: repo_pattern == 'per-resource-type'
 
-- name: "GH – Seed .gitkeep in base/ (per-resource-type repos)"
+- name: "GH – Check .gitkeep in folders (per-resource-type)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.name }}/contents/base/.gitkeep"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.0.name }}/contents/{{ item.1 }}/.gitkeep?ref={{ platform_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ (platform_repos | rejectattr('is_home') | list) | product(_genesis_folder_prefixes) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1 }}/"
+  register: _gh_folder_checks_per_type
+  when: repo_pattern == 'per-resource-type'
+
+- name: "GH – Seed .gitkeep in folders (per-resource-type)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.0.name }}/contents/{{ item.item.1 }}/.gitkeep"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body: >-
-      {{ {'message': 'Genesis: create base/ folder [skip dispatch]',
+      {{ {'message': 'Genesis: create ' + item.item.1 + '/ folder [skip dispatch]',
           'content': '' | b64encode,
           'branch': platform_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
-  loop: "{{ _gh_gitkeep_per_type.results | default([]) }}"
+  loop: "{{ _gh_folder_checks_per_type.results | default([]) }}"
   loop_control:
-    label: "{{ item.item.name }}/base/"
+    label: "{{ item.item.0.name }}/{{ item.item.1 }}/"
   when: repo_pattern == 'per-resource-type'
