@@ -250,6 +250,7 @@ jobs:
       github.event_name == 'push'
       && contains(toJSON(github.event.commits.*.modified), 'tenants.yml')
       && !contains(github.event.head_commit.message, '[skip dispatch]')
+      && github.repository == format('{0}/{1}', inputs.platform_scm_org, inputs.platform_home_repo)
     outputs:
       has_tenants_change: ${{ steps.diff.outputs.has_actions }}
     steps:
