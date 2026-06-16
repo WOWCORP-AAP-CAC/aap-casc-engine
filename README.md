@@ -123,7 +123,7 @@ ansible-playbook genesis.yml \
 | Pattern | Repos Created | Best For |
 |---------|--------------|----------|
 | `combined` (default) | 1 platform repo (`casc-platform-global`) | Most deployments |
-| `per-resource-type` | 9 separate repos + home repo | Large teams wanting fine-grained access |
+| `per-resource-type` | 10 separate repos + home repo | Large teams wanting fine-grained access |
 
 Genesis creates `config.yml` (platform settings) and `tenants.yml` (empty tenant registry) in the platform home repo. After genesis, the platform repo is the operational source of truth.
 

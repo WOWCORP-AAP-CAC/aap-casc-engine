@@ -59,49 +59,74 @@
     # Combined pattern: single platform repo name
     _combined_platform_repo: casc-platform-global
 
-    # Platform resource type folders — seeded in combined repo as base/<folder>/
-    # Must match the paths used by bootstrap when pushing platform YAML.
-    _platform_type_folders:
-      - organizations
-      - teams
-      - users
-      - role_definitions
-      - rbac_user_assignments
-      - rbac_team_assignments
-      - credential_types
-      - execution_environments
-      - settings
-      - schedules
+    # Platform resource type metadata — maps folders to seed templates.
+    # Used by genesis to seed example.yml.sample files in platform repos.
+    _platform_type_metadata:
+      - { folder: organizations,          template: "templates/seed-aap-organizations.yml.j2" }
+      - { folder: teams,                  template: "templates/seed-aap-teams.yml.j2" }
+      - { folder: users,                  template: "templates/seed-aap-users.yml.j2" }
+      - { folder: role_definitions,       template: "templates/seed-gateway-role_definitions.yml.j2" }
+      - { folder: rbac_user_assignments,  template: "templates/seed-gateway-rbac_user_assignments.yml.j2" }
+      - { folder: rbac_team_assignments,  template: "templates/seed-gateway-rbac_team_assignments.yml.j2" }
+      - { folder: credential_types,       template: "templates/seed-controller-credential_types.yml.j2" }
+      - { folder: execution_environments, template: "templates/seed-controller-execution_environments.yml.j2" }
+      - { folder: settings,               template: "templates/seed-controller-settings.yml.j2" }
+      - { folder: schedules,              template: "templates/seed-controller-schedules-platform.yml.j2" }
 
-    # Per-resource-type: list of platform repos (legacy option)
+    _platform_type_folders: "{{ _platform_type_metadata | map(attribute='folder') | list }}"
+
+    # Per-resource-type: list of platform repos with deterministic template mapping
     _per_type_platform_repos:
       - name: aap-organizations-global
         casc_key: aap_organizations
         description: "Organization definitions"
+        folder: organizations
+        template: "templates/seed-aap-organizations.yml.j2"
       - name: aap-teams-global
         casc_key: aap_teams
         description: "Team definitions (populated by bootstrap)"
+        folder: teams
+        template: "templates/seed-aap-teams.yml.j2"
+      - name: aap-users-global
+        casc_key: aap_user_accounts
+        description: "User account definitions (populated by bootstrap)"
+        folder: users
+        template: "templates/seed-aap-users.yml.j2"
       - name: gateway-role_definitions-global
         casc_key: gateway_role_definitions
         description: "Custom role definitions for RBAC"
+        folder: role_definitions
+        template: "templates/seed-gateway-role_definitions.yml.j2"
       - name: gateway-role_user_assignments-global
         casc_key: gateway_role_user_assignments
         description: "User-to-role RBAC assignments (populated by bootstrap)"
+        folder: rbac_user_assignments
+        template: "templates/seed-gateway-rbac_user_assignments.yml.j2"
       - name: gateway-role_team_assignments-global
         casc_key: gateway_role_team_assignments
         description: "Team-to-role RBAC assignments (populated by bootstrap)"
+        folder: rbac_team_assignments
+        template: "templates/seed-gateway-rbac_team_assignments.yml.j2"
       - name: controller-credential_types-global
         casc_key: controller_credential_types
         description: "Shared credential type definitions"
+        folder: credential_types
+        template: "templates/seed-controller-credential_types.yml.j2"
       - name: controller-execution_environments-global
         casc_key: controller_execution_environments
         description: "Shared execution environment definitions"
+        folder: execution_environments
+        template: "templates/seed-controller-execution_environments.yml.j2"
       - name: controller-settings-global
         casc_key: controller_settings
         description: "Controller settings configuration"
+        folder: settings
+        template: "templates/seed-controller-settings.yml.j2"
       - name: controller-schedules-platform
         casc_key: controller_schedules
         description: "Platform-level schedules (drift detection, reconciliation)"
+        folder: schedules
+        template: "templates/seed-controller-schedules-platform.yml.j2"
 
   tasks:
     # ── Compute effective values ───────────────────────────────────────────
@@ -191,7 +216,7 @@
         _ebm_items: "{{ env_branch_map | dict2items }}"
         _ebm_non_string_keys: "{{ (env_branch_map | dict2items) | rejectattr('key', 'string') | map(attribute='key') | list }}"
         _ebm_empty_keys: "{{ (env_branch_map | dict2items) | selectattr('key', 'string') | selectattr('key', 'equalto', '') | map(attribute='key') | list }}"
-        _ebm_bad_env_names: "{{ (env_branch_map | dict2items) | selectattr('key', 'string') | rejectattr('key', 'match', '^[a-z0-9_]+$') | map(attribute='key') | list }}"
+        _ebm_bad_env_names: "{{ (env_branch_map | dict2items) | selectattr('key', 'string') | rejectattr('key', 'match', '^[a-z][a-z0-9_]*$') | map(attribute='key') | list }}"
         _ebm_non_string_values: "{{ (env_branch_map | dict2items) | rejectattr('value', 'string') | map(attribute='key') | list }}"
         _ebm_empty_values: "{{ (env_branch_map | dict2items) | selectattr('value', 'string') | selectattr('value', 'match', '^\\s*$') | map(attribute='key') | list }}"
 
@@ -208,7 +233,7 @@
           env_branch_map validation failed.
           Non-string keys: {{ _ebm_non_string_keys }}.
           Empty keys: {{ _ebm_empty_keys }}.
-          Invalid env names (must match ^[a-z0-9_]+$): {{ _ebm_bad_env_names }}.
+          Invalid env names (must match ^[a-z][a-z0-9_]*$): {{ _ebm_bad_env_names }}.
           Non-string branch values: {{ _ebm_non_string_values }}.
           Empty/whitespace branch values: {{ _ebm_empty_values }}.
           Branch values must be unique: {{ env_branch_map.values() | list }}.

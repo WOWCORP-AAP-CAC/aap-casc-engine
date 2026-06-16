@@ -312,3 +312,78 @@
   loop_control:
     label: "{{ item.item.0.name }}/{{ item.item.1 }}/"
   when: repo_pattern == 'per-resource-type'
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 6: Seed example.yml.sample in platform repos
+#   Provides self-documenting examples of the expected YAML structure for
+#   each platform resource type. Uses .sample extension so the dispatcher
+#   ignores them — tenants/operators rename to .yml to activate.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# --- Combined pattern: base/<type>/example.yml.sample in home repo ---
+- name: "GH – Check example.yml.sample in platform type folders (combined)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/base/{{ item.folder }}/example.yml.sample?ref={{ platform_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ _platform_type_metadata }}"
+  loop_control:
+    label: "base/{{ item.folder }}/example.yml.sample"
+  register: _gh_platform_example_checks
+  when: repo_pattern == 'combined'
+
+- name: "GH – Seed example.yml.sample in platform type folders (combined)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/base/{{ item.item.folder }}/example.yml.sample"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip dispatch]',
+          'content': lookup('template', item.item.template) | b64encode,
+          'branch': platform_branch}
+         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
+    status_code: [200, 201]
+  loop: "{{ _gh_platform_example_checks.results | default([]) }}"
+  loop_control:
+    label: "base/{{ item.item.folder }}/example.yml.sample"
+  when: repo_pattern == 'combined'
+
+# --- Per-resource-type: base/example.yml.sample in each type repo ---
+- name: "GH – Check example.yml.sample in platform type repos (per-resource-type)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/base/example.yml.sample?ref={{ platform_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ platform_repos | rejectattr('is_home') | list }}"
+  loop_control:
+    label: "{{ item.name }}/base/example.yml.sample"
+  register: _gh_platform_example_checks_per_type
+  when: repo_pattern == 'per-resource-type'
+
+- name: "GH – Seed example.yml.sample in platform type repos (per-resource-type)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.name }}/contents/base/example.yml.sample"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body: >-
+      {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip dispatch]',
+          'content': lookup('template', item.item.template) | b64encode,
+          'branch': platform_branch}
+         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
+    status_code: [200, 201]
+  loop: "{{ _gh_platform_example_checks_per_type.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}/base/example.yml.sample"
+  when: repo_pattern == 'per-resource-type'
