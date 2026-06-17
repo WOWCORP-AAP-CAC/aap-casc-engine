@@ -33,7 +33,7 @@ jobs:
       tenants_changed: ${{ steps.tenants_check.outputs.tenants_changed }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -76,7 +76,7 @@ jobs:
 
       - name: Checkout engine repo (optional — for validation assets)
         if: env.ENGINE_REPO_TOKEN != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ secrets.ENGINE_REPO || '' }}
           path: .engine
@@ -111,7 +111,7 @@ jobs:
           [ -f roles/process_casc_config/defaults/main.yml ] && cp roles/process_casc_config/defaults/main.yml .schemas/engine_defaults.yml || true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -295,12 +295,12 @@ jobs:
       has_tenants_change: ${{ steps.diff.outputs.has_actions }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -496,9 +496,9 @@ jobs:
       needs.bootstrap.result == 'success'
       && needs.bootstrap.outputs.has_tenants_change == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install pyyaml
@@ -670,9 +670,9 @@ jobs:
       group: casc-dispatcher-trigger
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install pyyaml
