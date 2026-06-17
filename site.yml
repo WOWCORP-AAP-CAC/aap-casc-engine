@@ -1,5 +1,5 @@
 ---
-# Hybrid CasC Dispatcher — Apply Configuration to AAP
+# AAP Multi-Tenant CasC Engine — Dispatcher (Apply Configuration to AAP)
 #
 # Main entry point for the aap-casc-engine. Clones the platform repo first
 # to read config.yml + tenants.yml, then clones CasC repos, processes YAML
@@ -13,7 +13,7 @@
 #   ansible-playbook site.yml -e target_env=dev
 #   ansible-playbook site.yml -e target_env=dev -e triggered_repo=casc-tenant-myorg01
 
-- name: "Hybrid CasC Dispatcher — Apply Configuration to AAP"
+- name: "AAP Multi-Tenant CasC Engine — Dispatcher"
   hosts: localhost
   connection: local
   gather_facts: true
@@ -237,7 +237,7 @@
     - name: "Configuration apply complete"
       ansible.builtin.debug:
         msg: >-
-          Hybrid CasC dispatcher completed successfully.
+          AAP Multi-Tenant CasC dispatcher completed successfully.
           Mode: {{ trigger_source }} | Env: {{ target_env }} |
           Repos processed: {{ selected_repos | length }}
 

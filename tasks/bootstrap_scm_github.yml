@@ -95,7 +95,7 @@
     body_format: json
     body:
       name: "{{ item }}"
-      description: "CasC repo for tenant {{ org_id }} — managed by Hybrid CasC bootstrap"
+      description: "CasC repo for tenant {{ org_id }} — managed by AAP Multi-Tenant CasC Engine"
       private: "{{ _repo_private | bool }}"
       auto_init: true
     status_code: [200, 201, 422]

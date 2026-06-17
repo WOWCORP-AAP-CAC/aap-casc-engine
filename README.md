@@ -1,10 +1,10 @@
 # aap-casc-engine
 
-Hybrid AAP Configuration-as-Code engine combining **YAML-as-Interface** for tenant self-service with **`infra.aap_configuration`** as the platform backend. A reusable Red Hat Professional Services offering for governed, multi-tenant AAP management at enterprise scale.
+**AAP Multi-Tenant CasC Engine** — combining **YAML-as-Interface** for tenant self-service with **`infra.aap_configuration`** as the platform backend. A reusable Red Hat Professional Services offering for governed, multi-tenant AAP management at enterprise scale.
 
 ## Overview
 
-The `aap-casc-engine` is the core deliverable of the **Hybrid AAP Configuration-as-Code Framework**. It provides:
+The `aap-casc-engine` is the core deliverable of the **AAP Multi-Tenant CasC Framework**. It provides:
 
 - **Dispatcher playbook** — Clones the platform repo to read `config.yml` + `tenants.yml`, clones CasC repos, processes YAML (folder-based environment layering with base/env merge), and applies configuration to AAP via the `infra.aap_configuration.dispatch` role
 - **Drift detection** — Compares Git desired state vs AAP live state, generates drift reports (persisted as AAP job artifacts via `set_stats`), and optionally auto-remediates

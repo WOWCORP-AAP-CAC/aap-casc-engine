@@ -1,5 +1,5 @@
 ---
-# Hybrid CasC — Bootstrap New Tenant Organization (SCM-only)
+# AAP Multi-Tenant CasC Engine — Bootstrap New Tenant Organization (SCM-only)
 #
 # Creates/updates Git/SCM state for a new tenant. Does NOT apply AAP resources.
 # AAP resource creation (org, team, user, RBAC) is handled by the dispatcher
@@ -24,7 +24,7 @@
 #   JT extra vars provide: platform_scm_org, platform_repo
 #   Credential: crd-platform-scm_token only (no AAP credentials needed)
 
-- name: "Hybrid CasC — Bootstrap New Tenant Organization"
+- name: "AAP Multi-Tenant CasC Engine — Bootstrap Tenant"
   hosts: localhost
   connection: local
   gather_facts: false

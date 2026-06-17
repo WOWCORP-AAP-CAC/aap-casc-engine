@@ -1,5 +1,5 @@
 ---
-# Hybrid CasC Drift Detection — Compare Git desired state vs AAP live state
+# AAP Multi-Tenant CasC Engine — Drift Detection (Compare Git desired state vs AAP live state)
 #
 # Clones platform repo, reads config.yml + tenants.yml, clones all CasC repos,
 # processes YAML, exports live state from AAP, compares, and generates a drift
@@ -9,7 +9,7 @@
 #   ansible-playbook drift-detect.yml -e target_env=dev -e drift_mode=report
 #   ansible-playbook drift-detect.yml -e target_env=prd -e drift_mode=remediate
 
-- name: "Hybrid CasC — Drift Detection & Reconciliation"
+- name: "AAP Multi-Tenant CasC Engine — Drift Detection & Reconciliation"
   hosts: localhost
   connection: local
   gather_facts: true

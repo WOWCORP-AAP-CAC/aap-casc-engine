@@ -1,5 +1,5 @@
 ---
-# Hybrid CasC — Platform Genesis
+# AAP Multi-Tenant CasC Engine — Platform Genesis
 #
 # One-time automated setup of the platform CasC repository (or repositories)
 # in the customer's SCM organization. Creates repos, seeds folder structure,
@@ -20,7 +20,7 @@
 #   Survey: platform_scm_org, repo_visibility, default_organization, repo_pattern
 #   Credential: crd-platform-scm_token (injects SCM_TOKEN)
 
-- name: "Hybrid CasC — Platform Genesis"
+- name: "AAP Multi-Tenant CasC Engine — Platform Genesis"
   hosts: localhost
   connection: local
   gather_facts: false
