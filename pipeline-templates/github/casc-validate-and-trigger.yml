@@ -14,7 +14,6 @@ name: CasC Validate and Trigger (Standalone)
 on:
   push:
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:
