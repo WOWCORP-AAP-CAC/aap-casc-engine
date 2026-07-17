@@ -2,3 +2,20 @@ include:
   - project: '{{ platform_scm_org }}/{{ engine_repo | default("aap-casc-engine", true) }}'
     ref: 'main'
     file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
+
+variables:
+  CASC_CALLER_ROLE: '{{ caller_role | default("tenant") }}'
+  CONTROL_SCM_ORG: '{{ control_scm_org }}'
+  CONTROL_REPO: '{{ control_repo }}'
+  CONTROL_BRANCH: '{{ control_branch }}'
+  # Optional pinned control commit SHA (empty = CONTROL_BRANCH HEAD)
+  CONTROL_REVISION: ''
+{% if caller_role | default('tenant') == 'control' %}
+  # Protected onboarding continuation — set these in Run pipeline (web) UI:
+  #   CASC_OPERATION: onboarding_dispatch
+  #   TENANT_ORG_ID: <org_id>          # required when CASC_OPERATION=onboarding_dispatch
+  #   CONTROL_REVISION: <optional sha> # optional pin; empty resolves CONTROL_BRANCH HEAD
+  # Refuse full-scope launches; bounded platform+tenant only.
+  CASC_OPERATION: ''
+  TENANT_ORG_ID: ''
+{% endif %}

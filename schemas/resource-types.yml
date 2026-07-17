@@ -14,38 +14,102 @@
 defaults:
   value_type: list
   identity_field: name
+  # Brownfield-safe default: absence from YAML never deletes a live object.
+  deletion_supported: false
 
+# Seeded platform/tenant inventory explicitly audited as non-deleting until a
+# collection-role evidence review flips a key to true. Missing keys inherit
+# defaults.deletion_supported=false.
 exceptions:
-  controller_settings:
-    value_type: raw
-    identity_field: name
-  gateway_settings:
-    value_type: raw
-    identity_field: name
-  hub_group_roles:
+  aap_organizations:
     value_type: list
-    identity_field: groups
+    identity_field: name
+    deletion_supported: false
+  aap_teams:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
   aap_user_accounts:
     value_type: list
     identity_field: username
+    deletion_supported: false
+  gateway_role_definitions:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
   gateway_role_user_assignments:
     value_type: list
     identity_field: user
+    deletion_supported: false
   gateway_role_team_assignments:
     value_type: list
     identity_field: team
+    deletion_supported: false
+  controller_credential_types:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  controller_execution_environments:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  controller_settings:
+    value_type: raw
+    identity_field: name
+    deletion_supported: false
+  controller_schedules:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  controller_projects:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  controller_credentials:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  controller_inventories:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  controller_templates:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  controller_workflows:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  controller_notifications:
+    value_type: list
+    identity_field: name
+    deletion_supported: false
+  gateway_settings:
+    value_type: raw
+    identity_field: name
+    deletion_supported: false
+  hub_group_roles:
+    value_type: list
+    identity_field: groups
+    deletion_supported: false
   gateway_users:
     value_type: list
     identity_field: username
+    deletion_supported: false
   controller_instances:
     value_type: list
     identity_field: hostname
+    deletion_supported: false
   controller_roles:
     value_type: list
     identity_field: role
+    deletion_supported: false
   controller_credential_input_sources:
     value_type: list
     identity_field: input_field_name
+    deletion_supported: false
   eda_credential_input_sources:
     value_type: list
     identity_field: input_field_name
+    deletion_supported: false

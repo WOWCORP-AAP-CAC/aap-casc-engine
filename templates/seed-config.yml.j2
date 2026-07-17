@@ -2,24 +2,31 @@
 ---
 default_organization: {{ _effective_default_org | default('Default') }}
 scm_provider: {{ scm_provider }}
+control_scm_org: {{ control_scm_org }}
+control_repo: {{ control_repo }}
+control_branch: {{ control_branch }}
 platform_scm_org: {{ platform_scm_org }}
-repo_pattern: {{ repo_pattern | default('combined') }}
-platform_branch: {{ platform_branch | default('main', true) }}
+platform_repo_pattern: {{ repo_pattern | default('combined') }}
+repo_mode: {{ repo_mode | default('create') }}
+platform_repo: {{ platform_repo | default('casc-platform-global') }}
 create_missing_env_branches: {{ create_missing_env_branches | default(true) | bool | lower }}
 bootstrap_dispatch_fanout: {{ bootstrap_dispatch_fanout | default(true) | bool | lower }}
+dispatcher_concurrency: serialized
+
+job_templates:
+  genesis: {{ genesis_jt_name | default('jt-platform-genesis', true) }}
+  bootstrap: {{ bootstrap_jt_name | default('jt-platform-bootstrap_tenant', true) }}
+  dispatcher: {{ dispatcher_jt_name | default('jt-platform-casc_dispatcher', true) }}
+  drift_detection: {{ drift_detection_jt_name | default('jt-platform-drift_detection', true) }}
+
+naming_rules_file: naming-rules.yml
 
 env_branch_map:
 {{ _effective_env_branch_map | to_nice_yaml(indent=2) | indent(2, true) }}
 {% if repo_pattern | default('combined') == 'per-resource-type' %}
 platform_repos:
-  - name: aap-organizations-global
-  - name: aap-teams-global
-  - name: aap-users-global
-  - name: gateway-role_definitions-global
-  - name: gateway-role_user_assignments-global
-  - name: gateway-role_team_assignments-global
-  - name: controller-credential_types-global
-  - name: controller-execution_environments-global
-  - name: controller-settings-global
-  - name: controller-schedules-platform
+{% for repository in platform_repos %}
+  - resource_type: {{ repository.folder }}
+    name: {{ repository.name }}
+{% endfor %}
 {% endif %}

@@ -1,13 +1,15 @@
 ---
 # AAP Multi-Tenant CasC Engine — Dispatcher (Apply Configuration to AAP)
 #
-# Main entry point for the aap-casc-engine. Clones the platform repo first
-# to read config.yml + tenants.yml, then clones CasC repos, processes YAML
+# Main entry point for the aap-casc-engine. Clones the control repo first
+# to read authoritative metadata, then clones only the desired-state scope,
+# processes YAML
 # (folder-based env layering), and applies via infra.aap_configuration.dispatch.
 #
-# Supports dual-mode operation:
-#   - Targeted apply: CI/CD trigger passes triggered_repo (single tenant + platform repos)
-#   - Full apply: Scheduled reconciliation processes all repos from tenants.yml
+# Supports explicit scope operation:
+#   - platform: platform desired state only
+#   - tenant: one registered tenant desired-state scope only
+#   - full: platform plus all dispatch-enabled tenant scopes
 #
 # Usage:
 #   ansible-playbook site.yml -e target_env=dev
@@ -27,15 +29,18 @@
 
     trigger_commit: "{{ lookup('env', 'TRIGGER_COMMIT') | default('', true) }}"
     triggered_repo: "{{ lookup('env', 'TRIGGERED_REPO') | default('', true) }}"
+    tenant_org_id: "{{ lookup('env', 'TENANT_ORG_ID') | default('', true) }}"
     trigger_source: "{{ lookup('env', 'TRIGGER_SOURCE') | default('scheduled', true) }}"
+    dispatch_scope: "{{ lookup('env', 'DISPATCH_SCOPE') | default('full' if trigger_source in ['scheduled', 'drift'] else 'tenant', true) }}"
+    control_revision: "{{ lookup('env', 'CONTROL_REVISION') | default('', true) }}"
 
     aap_configuration_collect_logs: true
 
-    # Platform repo — contains config.yml and tenants.yml
-    platform_repo: "{{ lookup('env', 'PLATFORM_REPO') | default('casc-platform-global', true) }}"
+    control_scm_org: "{{ lookup('env', 'CONTROL_SCM_ORG') | default(lookup('env', 'PLATFORM_SCM_ORG'), true) }}"
+    control_repo: "{{ lookup('env', 'CONTROL_REPO') | default('casc-platform-control', true) }}"
+    control_branch: "{{ lookup('env', 'CONTROL_BRANCH') | default('main', true) }}"
     platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('', true) }}"
-    platform_branch: "{{ lookup('env', 'PLATFORM_BRANCH') | default('main', true) }}"
-    platform_dir: "/tmp/casc-platform"
+    control_dir: "/tmp/casc-control"
 
     scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
     scm_token: "{{ lookup('env', 'SCM_TOKEN') }}"
@@ -44,47 +49,94 @@
     staging_dir: "/tmp/casc-staging"
 
   pre_tasks:
-    # Phase 0: Clone platform repo and load config.yml + tenants.yml
-    - name: "Clone platform repo"
+    # Phase 0: Clone control repo and load authoritative metadata.
+    - name: "Clone control repo"
       ansible.builtin.include_role:
         name: git_clone_repos
       vars:
         repos_to_clone:
-          - name: "{{ platform_repo }}"
-            scm_org: "{{ platform_scm_org }}"
-            aap_scope: platform
-        clone_base_dir: "{{ platform_dir }}"
-        clone_branch: "{{ platform_branch }}"
+          - name: "{{ control_repo }}"
+            scm_org: "{{ control_scm_org }}"
+            aap_scope: control
+        clone_base_dir: "{{ control_dir }}"
+        clone_branch: "{{ control_branch }}"
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
-    - name: "Load config.yml from platform repo"
-      ansible.builtin.include_vars:
-        file: "{{ platform_dir }}/{{ platform_repo }}/config.yml"
-        name: platform_config
+    - name: "Pin control repo to authoritative revision when supplied"
+      ansible.builtin.command:
+        cmd: "git -C {{ control_dir }}/{{ control_repo }} checkout --detach {{ control_revision }}"
+      when: control_revision | length > 0
+      changed_when: false
 
-    - name: "Load tenants.yml from platform repo"
+    - name: "Resolve effective control revision"
+      ansible.builtin.command:
+        cmd: "git -C {{ control_dir }}/{{ control_repo }} rev-parse HEAD"
+      register: _control_rev_probe
+      changed_when: false
+
+    - name: "Record effective control revision"
+      ansible.builtin.set_fact:
+        effective_control_revision: "{{ control_revision if control_revision | length > 0 else _control_rev_probe.stdout }}"
+
+    - name: "Fail closed when requested control revision is unavailable"
+      ansible.builtin.assert:
+        that:
+          - effective_control_revision | length > 0
+          - control_revision | length == 0 or effective_control_revision == control_revision
+        fail_msg: >-
+          Authoritative control revision is unavailable or mismatched.
+          requested={{ control_revision }} resolved={{ effective_control_revision }}
+
+    - name: "Load config.yml from control repo"
       ansible.builtin.include_vars:
-        file: "{{ platform_dir }}/{{ platform_repo }}/tenants.yml"
+        file: "{{ control_dir }}/{{ control_repo }}/config.yml"
+        name: control_config
+
+    - name: "Load tenants.yml from control repo"
+      ansible.builtin.include_vars:
+        file: "{{ control_dir }}/{{ control_repo }}/tenants.yml"
         name: tenants_registry
 
-    # Phase 1: Compute effective platform branch and resolve env branch
-    - name: "Compute effective platform branch from config"
+    - name: "Require naming-rules.yml from control revision"
+      ansible.builtin.stat:
+        path: "{{ control_dir }}/{{ control_repo }}/{{ control_config.naming_rules_file | default('naming-rules.yml') }}"
+      register: _control_naming_rules
+
+    - name: "Fail closed when control naming rules are missing"
+      ansible.builtin.assert:
+        that:
+          - _control_naming_rules.stat.exists
+        fail_msg: >-
+          Control revision {{ effective_control_revision }} is missing
+          {{ control_config.naming_rules_file | default('naming-rules.yml') }}.
+
+    # Phase 1: Resolve the requested environment from control metadata.
+    - name: "Compute effective configuration from control metadata"
       ansible.builtin.set_fact:
-        _effective_platform_branch: "{{ platform_config.platform_branch | default(platform_branch) }}"
-        _repo_pattern: "{{ platform_config.repo_pattern | default('combined') }}"
+        _repo_pattern: "{{ control_config.platform_repo_pattern | default('combined') }}"
+        _platform_repo: "{{ control_config.platform_repo | default('casc-platform-global') }}"
+        naming_rules_file: "{{ control_config.naming_rules_file | default('naming-rules.yml') }}"
+        dispatcher_jt_name: "{{ control_config.job_templates.dispatcher | default('jt-platform-casc_dispatcher', true) }}"
 
     - name: "Assert target_env is defined in env_branch_map"
       ansible.builtin.assert:
         that:
-          - target_env in platform_config.env_branch_map
+          - target_env in control_config.env_branch_map
         fail_msg: >-
-          target_env '{{ target_env }}' not found in config.yml env_branch_map.
-          Valid environments: {{ platform_config.env_branch_map.keys() | list }}.
+          target_env '{{ target_env }}' not found in control config.yml env_branch_map.
+          Valid environments: {{ control_config.env_branch_map.keys() | list }}.
 
     - name: "Resolve target branch for {{ target_env }}"
       ansible.builtin.set_fact:
-        target_branch: "{{ platform_config.env_branch_map[target_env] }}"
+        target_branch: "{{ control_config.env_branch_map[target_env] }}"
+
+    - name: "Validate requested dispatcher scope"
+      ansible.builtin.assert:
+        that:
+          - dispatch_scope in ['platform', 'tenant', 'full']
+          - dispatch_scope != 'tenant' or tenant_org_id | length > 0 or triggered_repo | length > 0
+        fail_msg: "dispatch_scope must be platform, tenant, or full; tenant scope requires TENANT_ORG_ID or TRIGGERED_REPO."
 
     # Phase 2: Build selected repos list
     - name: "Filter active tenants"
@@ -101,9 +153,9 @@
     - name: "Build platform repos list"
       ansible.builtin.set_fact:
         _platform_repos: >-
-          {{ [{'name': platform_repo, 'aap_scope': 'platform', 'scm_org': platform_scm_org}]
+          {{ [{'name': _platform_repo, 'aap_scope': 'platform', 'scm_org': platform_scm_org}]
              if _repo_pattern == 'combined'
-             else (platform_config.platform_repos | default([])
+             else (control_config.platform_repos | default([])
                    | map('combine', {'aap_scope': 'platform', 'scm_org': platform_scm_org})
                    | list) }}
 
@@ -111,7 +163,19 @@
       ansible.builtin.set_fact:
         _tenant_repos: []
 
-    - name: "Build tenant repos list"
+    - name: "Build tenant repos list from registered repository names"
+      ansible.builtin.set_fact:
+        _tenant_repos: "{{ _tenant_repos + [{'name': item.1, 'aap_scope': item.0.org_id, 'scm_org': item.0.tenant_scm_org}] }}"
+      loop: >-
+        {{ (_active_tenants
+            | selectattr('tenant_repos', 'defined')
+            | selectattr('tenant_repos')
+            | list)
+           | subelements('tenant_repos') }}
+      loop_control:
+        label: "{{ item.0.org_id }} -> {{ item.1 }}"
+
+    - name: "Build tenant repos list for legacy registry records"
       ansible.builtin.set_fact:
         _tenant_repos: "{{ _tenant_repos + _entries }}"
       vars:
@@ -128,37 +192,41 @@
           - { name: "controller-workflows-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
           - { name: "controller-schedules-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
           - { name: "controller-notifications-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
+        # Explicit tenant repository names are normalized during Bootstrap and
+        # persisted as tenant_repos. The standard names remain the fallback for
+        # legacy registry records until migration rewrites them.
         _entries: "{{ _combined if _pattern == 'combined' else _per_type }}"
-      loop: "{{ _active_tenants }}"
+      loop: "{{ _active_tenants | selectattr('dispatch_enabled', 'undefined') | list + _active_tenants | selectattr('dispatch_enabled', 'defined') | selectattr('dispatch_enabled') | list }}"
       loop_control:
         label: "{{ item.org_id }}"
+      when: item.tenant_repos is not defined or item.tenant_repos | length == 0
 
-    - name: "Select repos to process"
+    - name: "Select only the requested desired-state scope"
       ansible.builtin.set_fact:
-        selected_repos: "{{ _platform_repos + _selected_tenant_repos }}"
-      vars:
-        _selected_tenant_repos: >-
-          {{ _tenant_repos | selectattr('name', 'equalto', triggered_repo) | list
-             if triggered_repo is defined and triggered_repo | length > 0
-             else _tenant_repos }}
+        selected_repos: >-
+          {{ _platform_repos if dispatch_scope == 'platform'
+             else (_tenant_repos | selectattr('aap_scope', 'equalto', tenant_org_id) | list)
+             if dispatch_scope == 'tenant' and tenant_org_id | length > 0
+             else (_tenant_repos | selectattr('name', 'equalto', triggered_repo) | list)
+             if dispatch_scope == 'tenant'
+             else _platform_repos + _tenant_repos }}
 
     - name: "Log apply mode"
       ansible.builtin.debug:
         msg: >-
-          Mode: {{ 'TARGETED (' + triggered_repo + ' + platform repos)'
-                   if triggered_repo is defined and triggered_repo | length > 0
-                   else 'FULL (all repos from tenants.yml)' }}
+          Scope: {{ dispatch_scope }}
           | Env: {{ target_env }} | Branch: {{ target_branch }}
+          | ControlRevision: {{ effective_control_revision }}
           | Repos: {{ selected_repos | length }}
 
-    # Phase 3: Clone repos from Git (split: platform @ _effective_platform_branch, tenant @ target_branch)
-    - name: "Clone platform CasC repos at effective platform branch"
+    # Phase 3: Clone only selected desired-state repos at the target environment branch.
+    - name: "Clone selected platform CasC repos at target branch"
       ansible.builtin.include_role:
         name: git_clone_repos
       vars:
-        repos_to_clone: "{{ _platform_repos }}"
+        repos_to_clone: "{{ selected_repos | selectattr('aap_scope', 'equalto', 'platform') | list }}"
         clone_base_dir: "{{ clone_dir }}"
-        clone_branch: "{{ _effective_platform_branch }}"
+        clone_branch: "{{ target_branch }}"
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
@@ -166,10 +234,7 @@
       ansible.builtin.include_role:
         name: git_clone_repos
       vars:
-        repos_to_clone: >-
-          {{ _tenant_repos | selectattr('name', 'equalto', triggered_repo) | list
-             if triggered_repo is defined and triggered_repo | length > 0
-             else _tenant_repos }}
+        repos_to_clone: "{{ selected_repos | rejectattr('aap_scope', 'equalto', 'platform') | list }}"
         clone_base_dir: "{{ clone_dir }}"
         clone_branch: "{{ target_branch }}"
         git_base_url: "{{ scm_base_url }}"
@@ -248,4 +313,4 @@
       loop:
         - "{{ clone_dir }}"
         - "{{ staging_dir }}"
-        - "{{ platform_dir }}"
+        - "{{ control_dir }}"

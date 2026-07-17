@@ -1,18 +1,18 @@
 ---
 # genesis_scm_gitlab.yml — GitLab-specific SCM operations for platform genesis
 #
-# Creates all platform repos, pushes config.yml + tenants.yml to the home repo,
-# seeds CI/CD includes, and README.md files. All operations are idempotent.
+# Creates the control repository plus platform desired-state repositories.
+# Control files are never written to desired-state repositories.
 #
-# Required variables: platform_scm_org, platform_namespace_id, engine_repo,
-#   platform_repos, _home_repo, scm_base_url, scm_api_token,
-#   repo_visibility, _config_yml_content, _tenants_yml_content
+# Required variables: control_scm_org, control_repo, control_branch, genesis_repos,
+#   platform_repos, platform_namespace_id, control_namespace_id, scm_api_token,
+#   repo_visibility, _config_yml_content, _tenants_yml_content, _naming_rules_yml_content
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 1: Create all platform repos (tolerates already-exists)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GL – Create platform repos in {{ platform_scm_org }}"
+- name: "GL – Create or verify control and platform repositories"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects"
     method: POST
@@ -22,7 +22,7 @@
     body:
       name: "{{ item.name }}"
       description: "{{ item.description }}"
-      namespace_id: "{{ platform_namespace_id }}"
+      namespace_id: "{{ control_namespace_id if item.repository_class == 'control' else platform_namespace_id }}"
       visibility: "{{ repo_visibility }}"
       initialize_with_readme: true
     status_code: [200, 201, 400]
@@ -30,41 +30,69 @@
     _gl_repo_result.status == 400 and
     'has already been taken' not in (_gl_repo_result.json | default({}) | string)
   register: _gl_repo_result
-  loop: "{{ platform_repos }}"
+  loop: "{{ genesis_repos }}"
   loop_control:
-    label: "{{ item.name }}"
+    label: "{{ item.name }}@{{ control_namespace_id if item.repository_class == 'control' else platform_namespace_id }}"
+  when: repo_mode == 'create'
 
 - name: "GL – Look up project IDs"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ item.name) | urlencode() | replace('/', '%2F') }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ ((control_scm_org if item.repository_class == 'control' else platform_scm_org) ~ '/' ~ item.name) | urlencode() | replace('/', '%2F') }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
-  loop: "{{ platform_repos }}"
+  loop: "{{ genesis_repos }}"
   loop_control:
     label: "{{ item.name }}"
   register: _gl_project_lookups
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 2: Push config.yml + tenants.yml to home repo (first-time only)
+# Step 2: Push config.yml + tenants.yml to the control repo (first-time only)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GL – Find home repo project ID"
+- name: "GL – Find control repo project ID"
   ansible.builtin.set_fact:
-    _gl_home_project_id: >-
-      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', _home_repo) | first).json.id }}
+    _gl_control_project_id: >-
+      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', control_repo) | first).json.id }}
 
-- name: "GL – Store home repo default branch"
+- name: "GL – Store control repo default branch"
   ansible.builtin.set_fact:
-    _gl_home_default_branch: >-
-      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', _home_repo) | first).json.default_branch | default('main') }}
+    _gl_control_default_branch: >-
+      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', control_repo) | first).json.default_branch | default('main') }}
 
-- name: "GL – Create platform branch if not default"
-  when: platform_branch != _gl_home_default_branch
+- name: "GL – Store combined platform desired-state project ID"
+  ansible.builtin.set_fact:
+    _gl_platform_combined_project_id: >-
+      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', platform_repo) | first).json.id }}
+  when: repo_pattern == 'combined'
+
+- name: "GL – Verify every mapped desired-state branch before existing-repo mutation"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.json.id }}/repository/branches/{{ item.1 | urlencode | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: >-
+    {{ (_gl_project_lookups.results | selectattr('item.repository_class', 'equalto', 'platform') | list)
+       | product(env_branch_map.values() | list) | list }}
+  loop_control:
+    label: "{{ item.0.item.name }}:{{ item.1 }}"
+  register: _gl_existing_branch_checks
+  when: not (create_missing_env_branches | bool)
+
+- name: "GL – Fail existing-repository Genesis before scaffolding when branches are missing"
+  ansible.builtin.assert:
+    that: _gl_existing_branch_checks.results | selectattr('status', 'equalto', 404) | list | length == 0
+    fail_msg: "repo_mode=existing with create_missing_env_branches=false requires every mapped branch in every platform desired-state repository."
+  when: not (create_missing_env_branches | bool)
+
+- name: "GL – Create control branch if not default"
+  when: control_branch != _gl_control_default_branch
   block:
     - name: "GL – Check if platform branch already exists"
       ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/branches/{{ platform_branch | urlencode | replace('/', '%2F') }}"
+        url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/branches/{{ control_branch | urlencode | replace('/', '%2F') }}"
         method: GET
         headers:
           PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -73,20 +101,20 @@
 
     - name: "GL – Create platform branch from default branch"
       ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/branches"
+        url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/branches"
         method: POST
         headers:
           PRIVATE-TOKEN: "{{ scm_api_token }}"
         body_format: json
         body:
-          branch: "{{ platform_branch }}"
-          ref: "{{ _gl_home_default_branch }}"
+          branch: "{{ control_branch }}"
+          ref: "{{ _gl_control_default_branch }}"
         status_code: [200, 201]
       when: _gl_platform_branch_check.status == 404
 
 - name: "GL – Check if config.yml already exists"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/config.yml?ref={{ platform_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/files/config.yml?ref={{ control_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -95,13 +123,13 @@
 
 - name: "GL – Push config.yml (first-time only)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/config.yml"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/files/config.yml"
     method: POST
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ platform_branch }}"
+      branch: "{{ control_branch }}"
       content: "{{ _config_yml_content }}"
       commit_message: "Genesis: initialize config.yml [skip ci]"
     status_code: [200, 201]
@@ -109,7 +137,7 @@
 
 - name: "GL – Check if tenants.yml already exists"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/tenants.yml?ref={{ platform_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/files/tenants.yml?ref={{ control_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -118,33 +146,56 @@
 
 - name: "GL – Push tenants.yml (first-time only)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/tenants.yml"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/files/tenants.yml"
     method: POST
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ platform_branch }}"
+      branch: "{{ control_branch }}"
       content: "{{ _tenants_yml_content }}"
       commit_message: "Genesis: initialize tenants.yml [skip ci]"
     status_code: [200, 201]
   when: _gl_tenants_check.status == 404
 
+- name: "GL – Check if naming-rules.yml already exists"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/files/naming-rules.yml?ref={{ control_branch | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  register: _gl_naming_rules_check
+
+- name: "GL – Push naming-rules.yml (first-time only)"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/files/naming-rules.yml"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ control_branch }}"
+      content: "{{ _naming_rules_yml_content }}"
+      commit_message: "Genesis: initialize naming policy [skip ci]"
+    status_code: [200, 201]
+  when: _gl_naming_rules_check.status == 404
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3: Seed CI/CD include in each repo
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GL – Create platform branch in non-home repos (if not default)"
-  when: platform_branch != _gl_home_default_branch
+- name: "GL – Create desired-state seed branch in platform repositories"
+  when: _desired_state_seed_branch != 'main' and create_missing_env_branches | bool
   block:
     - name: "GL – Check if platform branch exists in each repo"
       ansible.builtin.uri:
-        url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/branches/{{ platform_branch | urlencode | replace('/', '%2F') }}"
+        url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/branches/{{ _desired_state_seed_branch | urlencode | replace('/', '%2F') }}"
         method: GET
         headers:
           PRIVATE-TOKEN: "{{ scm_api_token }}"
         status_code: [200, 404]
-      loop: "{{ _gl_project_lookups.results | rejectattr('item.name', 'equalto', _home_repo) | list }}"
+      loop: "{{ _gl_project_lookups.results | selectattr('item.repository_class', 'equalto', 'platform') | list }}"
       loop_control:
         label: "{{ item.item.name }}"
       register: _gl_repo_branch_checks
@@ -157,8 +208,8 @@
           PRIVATE-TOKEN: "{{ scm_api_token }}"
         body_format: json
         body:
-          branch: "{{ platform_branch }}"
-          ref: "{{ item.item.json.default_branch | default(_gl_home_default_branch) }}"
+          branch: "{{ _desired_state_seed_branch }}"
+          ref: "{{ item.item.json.default_branch | default('main') }}"
         status_code: [200, 201]
       loop: "{{ _gl_repo_branch_checks.results | selectattr('status', 'equalto', 404) | list }}"
       loop_control:
@@ -166,7 +217,7 @@
 
 - name: "GL – Check if .gitlab-ci.yml already exists in each repo"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/.gitlab-ci.yml?ref={{ platform_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/.gitlab-ci.yml?ref={{ control_branch if item.item.repository_class == 'control' else _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -184,10 +235,12 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ platform_branch }}"
+      branch: "{{ control_branch if item.item.item.repository_class == 'control' else _desired_state_seed_branch }}"
       content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
       commit_message: "Genesis: add shared CasC pipeline template [skip ci]"
     status_code: [200, 201]
+  vars:
+    caller_role: "{{ 'control' if item.item.item.repository_class == 'control' else 'platform' }}"
   loop: "{{ _gl_ci_checks.results }}"
   loop_control:
     label: "{{ item.item.item.name }}"
@@ -198,7 +251,7 @@
 
 - name: "GL – Check if README.md already exists in each repo"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/README.md?ref={{ platform_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/README.md?ref={{ control_branch if item.item.repository_class == 'control' else _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -216,7 +269,7 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ platform_branch }}"
+      branch: "{{ control_branch if item.item.item.repository_class == 'control' else _desired_state_seed_branch }}"
       content: "{{ lookup('template', 'templates/genesis-readme.md.j2') }}"
       commit_message: "Genesis: add README with repo purpose and usage [skip ci]"
     status_code: [200, 201]
@@ -229,12 +282,12 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 5: Seed full multi-env folder structure (base/ + env/)
 #   Makes repos self-documenting with the complete layout from day-0.
-#   - combined:          base/<type>/ + <env>/<type>/ in home repo
+#   - combined:          base/<type>/ + <env>/<type>/ in the combined platform desired-state repo
 #   - per-resource-type: base/ + <env>/ in each type-specific repo
 #   <env> comes from each KEY in env_branch_map (e.g., dev, tst, prd).
 # ═══════════════════════════════════════════════════════════════════════════
 
-# --- Combined pattern: base/<type>/ + <env>/<type>/ in home repo ---
+# --- Combined pattern: base/<type>/ + <env>/<type>/ in the combined platform desired-state repo ---
 - name: "GL – Compute all folder paths (combined)"
   ansible.builtin.set_fact:
     _genesis_seed_paths: >-
@@ -245,7 +298,7 @@
 
 - name: "GL – Check .gitkeep in folders (combined)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/{{ (item ~ '/.gitkeep') | urlencode() | replace('/', '%2F') }}?ref={{ platform_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_platform_combined_project_id }}/repository/files/{{ (item ~ '/.gitkeep') | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -256,13 +309,13 @@
 
 - name: "GL – Seed .gitkeep in folders (combined)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/{{ (item.item ~ '/.gitkeep') | urlencode() | replace('/', '%2F') }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_platform_combined_project_id }}/repository/files/{{ (item.item ~ '/.gitkeep') | urlencode() | replace('/', '%2F') }}"
     method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ platform_branch }}"
+      branch: "{{ _desired_state_seed_branch }}"
       content: ""
       commit_message: "Genesis: create {{ item.item }}/ folder [skip ci]"
     status_code: [200, 201]
@@ -279,12 +332,12 @@
 
 - name: "GL – Check .gitkeep in folders (per-resource-type)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.json.id }}/repository/files/{{ (item.1 ~ '/.gitkeep') | urlencode() | replace('/', '%2F') }}?ref={{ platform_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.json.id }}/repository/files/{{ (item.1 ~ '/.gitkeep') | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     status_code: [200, 404]
-  loop: "{{ (_gl_project_lookups.results | rejectattr('item.name', 'equalto', _home_repo) | list) | product(_genesis_folder_prefixes) | list }}"
+  loop: "{{ (_gl_project_lookups.results | selectattr('item.repository_class', 'equalto', 'platform') | list) | product(_genesis_folder_prefixes) | list }}"
   loop_control:
     label: "{{ item.0.item.name }}/{{ item.1 }}/"
   register: _gl_folder_checks_per_type
@@ -298,7 +351,7 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ platform_branch }}"
+      branch: "{{ _desired_state_seed_branch }}"
       content: ""
       commit_message: "Genesis: create {{ item.item.1 }}/ folder [skip ci]"
     status_code: [200, 201]
@@ -314,10 +367,10 @@
 #   ignores them — tenants/operators rename to .yml to activate.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# --- Combined pattern: base/<type>/example.yml.sample in home repo ---
+# --- Combined pattern: base/<type>/example.yml.sample in the combined platform desired-state repo ---
 - name: "GL – Check example.yml.sample in platform type folders (combined)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/{{ ('base/' ~ item.folder ~ '/example.yml.sample') | urlencode() | replace('/', '%2F') }}?ref={{ platform_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_platform_combined_project_id }}/repository/files/{{ ('base/' ~ item.folder ~ '/example.yml.sample') | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
@@ -330,13 +383,13 @@
 
 - name: "GL – Seed example.yml.sample in platform type folders (combined)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_home_project_id }}/repository/files/{{ ('base/' ~ item.item.folder ~ '/example.yml.sample') | urlencode() | replace('/', '%2F') }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_platform_combined_project_id }}/repository/files/{{ ('base/' ~ item.item.folder ~ '/example.yml.sample') | urlencode() | replace('/', '%2F') }}"
     method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ platform_branch }}"
+      branch: "{{ _desired_state_seed_branch }}"
       content: "{{ lookup('template', item.item.template) }}"
       commit_message: "Genesis: add {{ item.item.folder }} example YAML (rename to .yml to activate) [skip ci]"
     status_code: [200, 201]
@@ -348,12 +401,12 @@
 # --- Per-resource-type: base/example.yml.sample in each type repo ---
 - name: "GL – Check example.yml.sample in platform type repos (per-resource-type)"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/{{ ('base/example.yml.sample') | urlencode() | replace('/', '%2F') }}?ref={{ platform_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/{{ ('base/example.yml.sample') | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     status_code: [200, 404]
-  loop: "{{ _gl_project_lookups.results | rejectattr('item.name', 'equalto', _home_repo) | list }}"
+  loop: "{{ _gl_project_lookups.results | selectattr('item.repository_class', 'equalto', 'platform') | list }}"
   loop_control:
     label: "{{ item.item.name }}/base/example.yml.sample"
   register: _gl_platform_example_checks_per_type
@@ -367,7 +420,7 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      branch: "{{ platform_branch }}"
+      branch: "{{ _desired_state_seed_branch }}"
       content: "{{ lookup('template', item.item.item.template) }}"
       commit_message: "Genesis: add {{ item.item.item.folder }} example YAML (rename to .yml to activate) [skip ci]"
     status_code: [200, 201]
@@ -375,3 +428,32 @@
   loop_control:
     label: "{{ item.item.item.name }}/base/example.yml.sample"
   when: repo_pattern == 'per-resource-type'
+
+# Desired-state files are seeded on the highest environment branch first. The
+# remaining branches start from that immutable seed commit and then follow the
+# normal low-to-high promotion lifecycle.
+- name: "GL – Compute lower environment branches in promotion order"
+  ansible.builtin.set_fact:
+    _lower_env_branches: "{{ (env_branch_map.values() | list | reverse | list)[1:] }}"
+
+- name: "GL – Create missing lower environment branches from seeded high branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.json.id }}/repository/branches"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ item.1 }}"
+      ref: "{{ _desired_state_seed_branch }}"
+    status_code: [200, 201, 400]
+  failed_when: >-
+    _gl_lower_branch_result.status == 400 and
+    'already exists' not in (_gl_lower_branch_result.json | default({}) | string)
+  loop: >-
+    {{ (_gl_project_lookups.results | selectattr('item.repository_class', 'equalto', 'platform') | list)
+       | product(_lower_env_branches) | list }}
+  loop_control:
+    label: "{{ item.0.item.name }}:{{ item.1 }}"
+  register: _gl_lower_branch_result
+  when: create_missing_env_branches | bool

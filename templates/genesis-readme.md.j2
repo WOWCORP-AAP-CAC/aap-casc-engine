@@ -2,6 +2,18 @@
 
 {{ repo.description }}
 
+{% if repo.repository_class | default('platform') == 'control' %}
+## Control Plane
+
+This repository contains orchestration metadata only:
+
+- `config.yml` — repository topology, environment branches, and Job Template names
+- `tenants.yml` — tenant registry
+- `naming-rules.yml` — platform-admin-managed naming policy
+
+Do not place AAP desired-state resource YAML in this repository. Use the
+separate platform desired-state repositories and their environment branches.
+{% else %}
 ## Usage
 
 Place YAML files in the `base/` directory using the appropriate resource type
@@ -19,20 +31,13 @@ to AAP when the CI/CD pipeline triggers.
   - name: example-resource
     description: Replace with your actual configuration
 ```
+{% endif %}
 
 ## CI/CD Pipeline
 
 This repository includes a thin CI/CD caller that triggers the platform's
 shared CasC pipeline on push and pull request events. The pipeline validates
 YAML files and triggers the dispatcher Job Template in AAP.
-{% if repo.is_home | default(false) %}
-
-## Platform Configuration
-
-This repository contains the platform control files:
-- `config.yml` — platform settings (env_branch_map, repo_pattern, scm settings)
-- `tenants.yml` — tenant registry (single source of truth for all tenants)
-{% endif %}
 
 ## Part of the AAP Multi-Tenant CasC Framework
 

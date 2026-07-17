@@ -6,12 +6,12 @@
 # on the subsequent CI/CD fan-out run.
 #
 # SCM operations performed:
-#   1. Pushes org/team/RBAC YAML to platform repo(s)
-#   2. Creates tenant CasC repositories in the tenant's SCM org/namespace
+#   1. Reads the authoritative control configuration
+#   2. Creates or scaffolds tenant CasC repositories in the tenant SCM org/namespace
 #   3. Seeds repos with CI/CD pipeline include + example YAML files
 #   4. Sets repository permissions (tenant team lead = maintainer)
 #   5. Creates environment branches from env_branch_map (if enabled)
-#   6. Updates tenants.yml in the platform home repo
+#   6. Updates tenants.yml in the dedicated control repo when registration is requested
 #
 # Supports both GitHub and GitLab. Provider is set via SCM_PROVIDER env var
 # (github|gitlab) or auto-detected from scm_base_url.
@@ -21,7 +21,7 @@
 # Usage (via AAP Job Template with Survey):
 #   Survey provides: org_id, team_name, team_lead, team_lead_email,
 #                    repo_pattern, tenant_scm_org
-#   JT extra vars provide: platform_scm_org, platform_repo
+#   JT extra vars provide: control_scm_org, control_repo, control_branch
 #   Credential: crd-platform-scm_token only (no AAP credentials needed)
 
 - name: "AAP Multi-Tenant CasC Engine — Bootstrap Tenant"
@@ -40,10 +40,11 @@
          else ('github' if 'github' in scm_base_url else 'gitlab') }}
 
     platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('') }}"
+    control_scm_org: "{{ lookup('env', 'CONTROL_SCM_ORG') | default(platform_scm_org, true) }}"
+    control_repo: "{{ lookup('env', 'CONTROL_REPO') | default('casc-platform-control', true) }}"
+    control_branch: "{{ lookup('env', 'CONTROL_BRANCH') | default('main', true) }}"
+    control_revision: "{{ lookup('env', 'CONTROL_REVISION') | default('', true) }}"
     engine_repo: "{{ lookup('env', 'ENGINE_REPO') | default('aap-casc-engine', true) }}"
-
-    # Platform home repo — where config.yml and tenants.yml live
-    platform_repo: "{{ lookup('env', 'PLATFORM_REPO') | default('casc-platform-global') }}"
 
     # GitLab-specific numeric project/namespace IDs (ignored for GitHub)
     platform_repo_id: "{{ lookup('env', 'PLATFORM_REPO_ID') | default('') }}"
@@ -59,6 +60,9 @@
     team_lead_password: "{{ lookup('env', 'TEAM_LEAD_PASSWORD') | default('change_me') }}"
     team_group: "{{ lookup('env', 'TEAM_GROUP') | default('') }}"
     repo_pattern: "{{ lookup('env', 'REPO_PATTERN') | default('combined', true) }}"
+    repo_mode: "{{ lookup('env', 'REPO_MODE') | default('create', true) }}"
+    onboarding_mode: "{{ lookup('env', 'ONBOARDING_MODE') | default('greenfield', true) }}"
+    dispatch_enabled: "{{ lookup('env', 'DISPATCH_ENABLED') | default(true, true) | bool }}"
     repo_visibility: "{{ lookup('env', 'REPO_VISIBILITY') | default('private', true) }}"
     _repo_private: "{{ repo_visibility == 'private' }}"
 
@@ -71,20 +75,28 @@
     team_lead_username: "{{ lookup('env', 'TEAM_LEAD_USERNAME') | default('') }}"
     team_lead_user_id: "{{ lookup('env', 'TEAM_LEAD_USER_ID') | default('') }}"
 
-    # Tenant repos — auto-generated from repo_pattern
+    # Optional customer-provided repo_name/repo_names take precedence over the
+    # standard scaffold names. The shape stays deliberately small.
+    repo_name: "{{ lookup('env', 'REPO_NAME') | default('', true) }}"
+    repo_names: "{{ lookup('env', 'REPO_NAMES_JSON') | default('[]', true) | from_json }}"
+
+    # Tenant repos — generated only when no explicit customer names are supplied.
+    # For per-resource-type, order is fixed and matches _tenant_types folders.
     tenant_repos: >-
-      {{ ['casc-tenant-' + org_id] if repo_pattern == 'combined'
+      {{ ([repo_name] if repo_name | length > 0 else repo_names)
+         if ((repo_name | length > 0) or (repo_names | length > 0))
+         else (['casc-tenant-' + org_id] if repo_pattern == 'combined'
          else ['controller-projects-' + org_id,
                'controller-credentials-' + org_id,
                'controller-inventories-' + org_id,
                'controller-templates-' + org_id,
                'controller-workflows-' + org_id,
                'controller-schedules-' + org_id,
-               'controller-notifications-' + org_id] }}
+               'controller-notifications-' + org_id]) }}
 
     default_ee: "{{ lookup('env', 'DEFAULT_EE') | default('Default execution environment', true) }}"
 
-    # Tenant resource type metadata — maps repo basenames to folder names and seed templates
+    # Tenant resource type metadata — folder order is the contract for repo_names.
     _tenant_types:
       - { folder: projects, basename: controller-projects, template: "templates/seed-controller-projects.yml.j2" }
       - { folder: credentials, basename: controller-credentials, template: "templates/seed-controller-credentials.yml.j2" }
@@ -94,7 +106,16 @@
       - { folder: schedules, basename: controller-schedules, template: "templates/seed-controller-schedules.yml.j2" }
       - { folder: notifications, basename: controller-notifications, template: "templates/seed-controller-notifications.yml.j2" }
 
-    platform_branch: "{{ lookup('env', 'PLATFORM_BRANCH') | default('main', true) }}"
+    # Deterministic folder -> repo map used by all seed/env/branch SCM tasks.
+    _tenant_repo_by_folder: >-
+      {{ dict(
+           (_tenant_types | map(attribute='folder') | list)
+           | zip(
+               tenant_repos if repo_pattern == 'per-resource-type'
+               else ([tenant_repos[0]] * (_tenant_types | length))
+             )
+           | list
+         ) }}
 
     bootstrap_clone_dir: "/tmp/bootstrap-repos"
 
@@ -128,6 +149,46 @@
         fail_msg: >-
           repo_pattern must be 'combined' or 'per-resource-type'. Got: '{{ repo_pattern }}'.
 
+    - name: "Validate tenant onboarding contract"
+      ansible.builtin.assert:
+        that:
+          - repo_mode in ['create', 'existing']
+          - onboarding_mode in ['greenfield', 'brownfield']
+        fail_msg: >-
+          repo_mode must be create or existing; onboarding_mode must be greenfield or brownfield.
+
+    - name: "Validate and resolve tenant repository name overrides (fail closed)"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/scripts/pipeline/repo_name_overrides.py"
+          - validate-tenant
+          - --repo-pattern
+          - "{{ repo_pattern }}"
+          - --org-id
+          - "{{ org_id }}"
+          - --repo-name
+          - "{{ repo_name }}"
+          - --repo-names-json
+          - "{{ repo_names | to_json }}"
+      register: _tenant_repo_names_validation
+      changed_when: false
+
+    - name: "Apply fail-closed tenant repository names"
+      ansible.builtin.set_fact:
+        tenant_repos: "{{ (_tenant_repo_names_validation.stdout | from_json).tenant_repos }}"
+        _tenant_repo_by_folder: >-
+          {{ dict(
+               (_tenant_types | map(attribute='folder') | list)
+               | zip(
+                   (_tenant_repo_names_validation.stdout | from_json).tenant_repos
+                   if repo_pattern == 'per-resource-type'
+                   else ([(_tenant_repo_names_validation.stdout | from_json).tenant_repos[0]]
+                         * (_tenant_types | length))
+                 )
+               | list
+             ) }}
+
     - name: "Validate repo visibility value"
       ansible.builtin.assert:
         that:
@@ -145,30 +206,87 @@
           and tenant_scm_namespace_id (numeric namespace ID).
       when: scm_provider == 'gitlab'
 
-    # ── Load platform config (env_branch_map, platform_branch) ─────────
-    - name: "Clone platform home repo for config"
+    # ── Load authoritative control config ───────────────────────────────────
+    - name: "Clone control repo for config"
       ansible.builtin.include_role:
         name: git_clone_repos
       vars:
         repos_to_clone:
-          - name: "{{ platform_repo }}"
-            scm_org: "{{ platform_scm_org }}"
-            aap_scope: platform
+          - name: "{{ control_repo }}"
+            scm_org: "{{ control_scm_org }}"
+            aap_scope: control
         clone_base_dir: "{{ bootstrap_clone_dir }}"
-        clone_branch: "{{ platform_branch }}"
+        clone_branch: "{{ control_branch }}"
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_api_token }}"
 
-    - name: "Load config.yml from platform home repo"
-      ansible.builtin.include_vars:
-        file: "{{ bootstrap_clone_dir }}/{{ platform_repo }}/config.yml"
-        name: platform_config
+    - name: "Pin control repo to authoritative revision when supplied"
+      ansible.builtin.command:
+        cmd: "git -C {{ bootstrap_clone_dir }}/{{ control_repo }} checkout --detach {{ control_revision }}"
+      when: control_revision | length > 0
+      changed_when: false
 
-    - name: "Derive effective platform branch and env_branch_map"
+    - name: "Resolve effective control revision"
+      ansible.builtin.command:
+        cmd: "git -C {{ bootstrap_clone_dir }}/{{ control_repo }} rev-parse HEAD"
+      register: _control_rev_probe
+      changed_when: false
+
+    - name: "Record effective control revision"
       ansible.builtin.set_fact:
-        _effective_platform_branch: "{{ platform_config.platform_branch | default('main') }}"
-        _env_branch_map: "{{ platform_config.env_branch_map }}"
-        _create_missing_env_branches: "{{ platform_config.create_missing_env_branches | default(true) | bool }}"
+        effective_control_revision: "{{ control_revision if control_revision | length > 0 else _control_rev_probe.stdout }}"
+
+    - name: "Fail closed when requested control revision is unavailable"
+      ansible.builtin.assert:
+        that:
+          - effective_control_revision | length > 0
+          - control_revision | length == 0 or effective_control_revision == control_revision
+        fail_msg: >-
+          Authoritative control revision is unavailable or mismatched.
+          requested={{ control_revision }} resolved={{ effective_control_revision }}
+
+    - name: "Load config.yml from control repo"
+      ansible.builtin.include_vars:
+        file: "{{ bootstrap_clone_dir }}/{{ control_repo }}/config.yml"
+        name: control_config
+
+    - name: "Require naming-rules.yml from control revision"
+      ansible.builtin.stat:
+        path: "{{ bootstrap_clone_dir }}/{{ control_repo }}/{{ control_config.naming_rules_file | default('naming-rules.yml') }}"
+      register: _control_naming_rules
+
+    - name: "Fail closed when control naming rules are missing"
+      ansible.builtin.assert:
+        that:
+          - _control_naming_rules.stat.exists
+        fail_msg: >-
+          Control revision {{ effective_control_revision }} is missing
+          {{ control_config.naming_rules_file | default('naming-rules.yml') }}.
+
+    - name: "Derive effective control configuration"
+      ansible.builtin.set_fact:
+        _control_config: "{{ control_config }}"
+        _env_branch_map: "{{ control_config.env_branch_map }}"
+        _create_missing_env_branches: "{{ control_config.create_missing_env_branches | default(true) | bool }}"
+        platform_repo_pattern: "{{ control_config.platform_repo_pattern }}"
+        platform_repo: "{{ control_config.platform_repo | default('') }}"
+        _platform_repos: "{{ control_config.platform_repos | default([]) }}"
+        bootstrap_jt_name: "{{ control_config.job_templates.bootstrap | default('jt-platform-bootstrap_tenant', true) }}"
+        dispatcher_jt_name: "{{ control_config.job_templates.dispatcher | default('jt-platform-casc_dispatcher', true) }}"
+        naming_rules_file: "{{ control_config.naming_rules_file | default('naming-rules.yml') }}"
+
+    - name: "Initialize platform repository resolver"
+      ansible.builtin.set_fact:
+        _platform_repo_lookup: {}
+        _desired_state_seed_branch: "{{ control_config.env_branch_map.values() | list | last }}"
+
+    - name: "Build platform repository resolver for per-resource-type layout"
+      ansible.builtin.set_fact:
+        _platform_repo_lookup: "{{ _platform_repo_lookup | combine({item.resource_type: item.name}) }}"
+      loop: "{{ _platform_repos }}"
+      loop_control:
+        label: "{{ item.resource_type }} -> {{ item.name }}"
+      when: platform_repo_pattern == 'per-resource-type'
 
     - name: "Log bootstrap parameters"
       ansible.builtin.debug:
@@ -179,7 +297,7 @@
           {{ '| tenant_ns_id=' + tenant_scm_namespace_id if scm_provider == 'gitlab' else '' }}
           | repos={{ tenant_repos | length }}
           | effective_team_group={{ _effective_team_group }}
-          | platform_branch={{ _effective_platform_branch }}
+          | control_repo={{ control_scm_org }}/{{ control_repo }}@{{ effective_control_revision }}
           | create_env_branches={{ _create_missing_env_branches }}
 
     # ── Steps 1-5: SCM operations (provider-specific, idempotent) ──────────
@@ -200,7 +318,7 @@
           SCM Provider:  {{ scm_provider }}
           Repo Pattern:  {{ repo_pattern }}
           Tenant SCM:    {{ tenant_scm_org }}
-          Platform Branch: {{ _effective_platform_branch }}
+          Control Repo:   {{ control_scm_org }}/{{ control_repo }}@{{ effective_control_revision }}
           Env Branches:  {{ _env_branch_map | to_nice_yaml | indent(25) }}
           Repositories:
           {% for repo in tenant_repos %}

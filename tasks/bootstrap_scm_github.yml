@@ -1,10 +1,9 @@
 ---
 # bootstrap_scm_github.yml — GitHub-specific SCM operations for tenant bootstrap
 #
-# Steps 1-6: Push platform YAML (org/team/RBAC to platform repo(s) at
-# folder-based paths), create tenant repos, seed with folder structure,
-# set permissions, update tenants.yml, push RBAC. Called from bootstrap.yml.
-# All platform writes target _effective_platform_branch.
+# Bootstrap reads/writes control metadata only in the control repository. It
+# writes platform foundation YAML only for greenfield tenants on the desired-state
+# seed branch; brownfield onboarding remains SCM-only.
 #
 # All operations are idempotent — safe to rerun. File writes use
 # GET-then-PUT (with SHA when updating existing files). Repo creation
@@ -22,20 +21,22 @@
 
 - name: "GH – Compute platform target repos and paths"
   ansible.builtin.set_fact:
-    _org_target_repo: "{{ 'aap-organizations-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-    _team_target_repo: "{{ 'aap-teams-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _org_target_repo: "{{ _platform_repo_lookup.organizations | default('aap-organizations-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _team_target_repo: "{{ _platform_repo_lookup.teams | default('aap-teams-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
     _org_target_path: "{{ 'base/org-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/organizations/org-' + org_id + '.yml' }}"
     _team_target_path: "{{ 'base/team-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/teams/team-' + org_id + '.yml' }}"
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Check if org YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _org_target_repo }}/contents/{{ _org_target_path }}?ref={{ _effective_platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _org_target_repo }}/contents/{{ _org_target_path }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
   register: _gh_org_file
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Push organization YAML to platform"
   ansible.builtin.uri:
@@ -47,7 +48,7 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add organization org-' + org_id + ' [skip ci]',
-          'branch': _effective_platform_branch,
+          'branch': _desired_state_seed_branch,
           'content': lookup('template', 'templates/org-template.yml.j2') | b64encode}
          | combine({'sha': _gh_org_file.json.sha} if _gh_org_file.status == 200 else {}) }}
     status_code: [200, 201]
@@ -55,16 +56,18 @@
     org_name: "org-{{ org_id }}"
     org_description: "{{ team_name }} automation organization"
     org_default_ee: "{{ default_ee }}"
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Check if team YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _team_target_repo }}/contents/{{ _team_target_path }}?ref={{ _effective_platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _team_target_repo }}/contents/{{ _team_target_path }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
   register: _gh_team_file
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Push team YAML to platform"
   ansible.builtin.uri:
@@ -76,10 +79,11 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add team for org-' + org_id + ' [skip ci]',
-          'branch': _effective_platform_branch,
+          'branch': _desired_state_seed_branch,
           'content': lookup('template', 'templates/team-template.yml.j2') | b64encode}
          | combine({'sha': _gh_team_file.json.sha} if _gh_team_file.status == 200 else {}) }}
     status_code: [200, 201]
+  when: onboarding_mode == 'greenfield'
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 2: Create tenant CasC repositories (tolerates already-exists)
@@ -105,6 +109,7 @@
     and 'already exists' not in (_gh_created_repos.json.message | default(''))
   loop: "{{ tenant_repos }}"
   register: _gh_created_repos
+  when: repo_mode == 'create'
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3: Seed repos with pipeline + example YAML (folder-based structure)
@@ -141,6 +146,32 @@
   loop_control:
     label: "{{ item.item }}"
 
+- name: "GH – Check tenant scaffold marker in each tenant repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/contents/.aap-casc-engine/tenant-scaffold.yml"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ tenant_repos }}"
+  register: _gh_marker_checks
+
+- name: "GH – Seed immutable tenant scaffold marker"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item }}/contents/.aap-casc-engine/tenant-scaffold.yml"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      message: "Bootstrap: record tenant scaffold identity [skip ci]"
+      content: "{{ lookup('template', 'templates/tenant-scaffold.yml.j2') | b64encode }}"
+    status_code: [200, 201]
+  loop: "{{ _gh_marker_checks.results }}"
+  when: item.status == 404
+
 - name: "GH – Initialize seed item lists"
   ansible.builtin.set_fact:
     _seed_items: []
@@ -148,10 +179,8 @@
 
 - name: "GH – Build base/<type>/example.yml.sample seed list"
   ansible.builtin.set_fact:
-    _seed_items: "{{ _seed_items + [{'repo': _repo_name, 'path': 'base/' + item.folder + '/example.yml.sample', 'template': item.template, 'folder': item.folder}] }}"
+    _seed_items: "{{ _seed_items + [{'repo': _tenant_repo_by_folder[item.folder], 'path': 'base/' + item.folder + '/example.yml.sample', 'template': item.template, 'folder': item.folder}] }}"
   loop: "{{ _tenant_types }}"
-  vars:
-    _repo_name: "{{ (item.basename + '-' + org_id) if repo_pattern == 'per-resource-type' else tenant_repos[0] }}"
 
 - name: "GH – Check if base seed files already exist"
   ansible.builtin.uri:
@@ -189,12 +218,10 @@
 
 - name: "GH – Build <env>/<type>/.gitkeep seed list"
   ansible.builtin.set_fact:
-    _env_seed_items: "{{ _env_seed_items + [{'repo': _repo_name, 'path': item.1 + '/' + item.0.folder + '/.gitkeep', 'label': item.1 + '/' + item.0.folder}] }}"
+    _env_seed_items: "{{ _env_seed_items + [{'repo': _tenant_repo_by_folder[item.0.folder], 'path': item.1 + '/' + item.0.folder + '/.gitkeep', 'label': item.1 + '/' + item.0.folder}] }}"
   loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
   loop_control:
     label: "{{ item.1 }}/{{ item.0.folder }}"
-  vars:
-    _repo_name: "{{ (item.0.basename + '-' + org_id) if repo_pattern == 'per-resource-type' else tenant_repos[0] }}"
 
 - name: "GH – Check if env folder .gitkeep files exist"
   ansible.builtin.uri:
@@ -227,10 +254,18 @@
     label: "{{ item.item.repo }}:{{ item.item.path }}"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 3b: Create environment branches in each tenant repo (if enabled)
-#   Done AFTER seeding so branches inherit CI caller + example YAML.
-#   Re-fetches default branch HEAD SHA to include seeded commits.
+# Step 3b: Create environment branches high-to-low (if enabled)
+#   Seed content lands on the default branch tip. Ensure the highest mapped
+#   branch points at that tip, then create each lower branch from the seeded
+#   high branch tip so promotion topology matches Genesis/docs.
 # ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GH – Compute tenant env branches high-to-low"
+  ansible.builtin.set_fact:
+    _tenant_env_branches_high_to_low: "{{ _env_branch_map.values() | list | reverse | list }}"
+    _tenant_highest_env_branch: "{{ _env_branch_map.values() | list | last }}"
+    _tenant_lower_env_branches: "{{ (_env_branch_map.values() | list | reverse | list)[1:] }}"
+  when: _create_missing_env_branches | bool
 
 - name: "GH – Get default branch info for each tenant repo"
   ansible.builtin.uri:
@@ -243,7 +278,7 @@
   register: _gh_repo_info
   when: _create_missing_env_branches | bool
 
-- name: "GH – Get default branch HEAD SHA for each tenant repo"
+- name: "GH – Get seeded default branch HEAD SHA for each tenant repo"
   ansible.builtin.uri:
     url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ item.json.default_branch }}"
     method: GET
@@ -256,7 +291,43 @@
   register: _gh_default_refs
   when: _create_missing_env_branches | bool
 
-- name: "GH – Create environment branches in tenant repos"
+- name: "GH – Ensure highest mapped branch exists from seeded tip"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.json.name }}/git/refs"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      ref: "refs/heads/{{ _tenant_highest_env_branch }}"
+      sha: "{{ item.json.object.sha }}"
+    status_code: [200, 201, 422]
+  failed_when: >-
+    _gh_high_branch_result.status == 422 and
+    'Reference already exists' not in (_gh_high_branch_result.json.message | default(''))
+  loop: "{{ _gh_default_refs.results }}"
+  loop_control:
+    label: "{{ item.item.json.name }}:{{ _tenant_highest_env_branch }}"
+  register: _gh_high_branch_result
+  when:
+    - _create_missing_env_branches | bool
+    - item.item.json.default_branch != _tenant_highest_env_branch
+
+- name: "GH – Resolve highest mapped branch SHA for each tenant repo"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ _tenant_highest_env_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+  loop: "{{ _gh_repo_info.results }}"
+  loop_control:
+    label: "{{ item.json.name }}:{{ _tenant_highest_env_branch }}"
+  register: _gh_high_branch_refs
+  when: _create_missing_env_branches | bool
+
+- name: "GH – Create lower environment branches from seeded high branch tip"
   ansible.builtin.uri:
     url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.0.item.json.name }}/git/refs"
     method: POST
@@ -265,15 +336,15 @@
       Accept: "application/vnd.github.v3+json"
     body_format: json
     body:
-      ref: "refs/heads/{{ item.1.value }}"
+      ref: "refs/heads/{{ item.1 }}"
       sha: "{{ item.0.json.object.sha }}"
     status_code: [200, 201, 422]
   failed_when: >-
     _gh_env_branch_result.status == 422 and
     'Reference already exists' not in (_gh_env_branch_result.json.message | default(''))
-  loop: "{{ _gh_default_refs.results | product(_env_branch_map | dict2items) | list }}"
+  loop: "{{ _gh_high_branch_refs.results | product(_tenant_lower_env_branches) | list }}"
   loop_control:
-    label: "{{ item.0.item.json.name }}:{{ item.1.value }}"
+    label: "{{ item.0.item.json.name }}:{{ item.1 }}"
   register: _gh_env_branch_result
   when: _create_missing_env_branches | bool
 
@@ -296,12 +367,12 @@
   when: team_lead_username | default('') | length > 0
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 5: Update tenants.yml in platform home repo (dedup-safe)
+# Step 5: Update tenants.yml in the control repo (dedup-safe)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Get current tenants.yml from platform repo"
+- name: "GH – Get current tenants.yml from control repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/tenants.yml?ref={{ _effective_platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/tenants.yml?ref={{ control_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -325,12 +396,16 @@
       team_lead: "{{ team_lead }}"
       tenant_scm_org: "{{ tenant_scm_org }}"
       repo_pattern: "{{ repo_pattern }}"
+      repo_mode: "{{ repo_mode }}"
+      onboarding_mode: "{{ onboarding_mode }}"
+      dispatch_enabled: "{{ dispatch_enabled | bool }}"
+      tenant_repos: "{{ tenant_repos }}"
       status: active
   when: org_id not in _existing_org_ids
 
 - name: "GH – Update tenants.yml with new tenant"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/tenants.yml"
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/tenants.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -338,7 +413,7 @@
     body_format: json
     body:
       message: "Bootstrap: register tenant {{ org_id }} [skip ci]"
-      branch: "{{ _effective_platform_branch }}"
+      branch: "{{ control_branch }}"
       content: "{{ _updated_tenants | to_nice_yaml(indent=2) | b64encode }}"
       sha: "{{ _tenants_sha }}"
     status_code: [200, 201]
@@ -353,22 +428,24 @@
 
 - name: "GH – Compute RBAC and user target repos and paths"
   ansible.builtin.set_fact:
-    _rbac_user_repo: "{{ 'gateway-role_user_assignments-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-    _rbac_team_repo: "{{ 'gateway-role_team_assignments-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-    _user_account_repo: "{{ 'aap-users-global' if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _rbac_user_repo: "{{ _platform_repo_lookup.rbac_user_assignments | default('gateway-role_user_assignments-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _rbac_team_repo: "{{ _platform_repo_lookup.rbac_team_assignments | default('gateway-role_team_assignments-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+    _user_account_repo: "{{ _platform_repo_lookup.users | default('aap-users-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
     _rbac_user_path: "{{ 'base/rbac-user-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/rbac_user_assignments/rbac-user-' + org_id + '.yml' }}"
     _rbac_team_path: "{{ 'base/rbac-team-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/rbac_team_assignments/rbac-team-' + org_id + '.yml' }}"
     _user_account_path: "{{ 'base/user-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/users/user-' + org_id + '.yml' }}"
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Check if RBAC user YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _rbac_user_repo }}/contents/{{ _rbac_user_path }}?ref={{ _effective_platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _rbac_user_repo }}/contents/{{ _rbac_user_path }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
   register: _gh_rbac_user_file
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Push RBAC user assignments"
   ansible.builtin.uri:
@@ -380,22 +457,24 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add RBAC user assignments for org-' + org_id + ' [skip ci]',
-          'branch': _effective_platform_branch,
+          'branch': _desired_state_seed_branch,
           'content': lookup('template', 'templates/rbac-user-template.yml.j2') | b64encode}
          | combine({'sha': _gh_rbac_user_file.json.sha} if _gh_rbac_user_file.status == 200 else {}) }}
     status_code: [200, 201]
   vars:
     admin_user: "{{ team_lead }}"
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Check if RBAC team YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _rbac_team_repo }}/contents/{{ _rbac_team_path }}?ref={{ _effective_platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _rbac_team_repo }}/contents/{{ _rbac_team_path }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
   register: _gh_rbac_team_file
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Push RBAC team assignments"
   ansible.builtin.uri:
@@ -407,22 +486,24 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add RBAC team assignments for org-' + org_id + ' [skip ci]',
-          'branch': _effective_platform_branch,
+          'branch': _desired_state_seed_branch,
           'content': lookup('template', 'templates/rbac-team-template.yml.j2') | b64encode}
          | combine({'sha': _gh_rbac_team_file.json.sha} if _gh_rbac_team_file.status == 200 else {}) }}
     status_code: [200, 201]
   vars:
     dev_team: "{{ _effective_team_group }}"
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Check if user account YAML already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _user_account_repo }}/contents/{{ _user_account_path }}?ref={{ _effective_platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _user_account_repo }}/contents/{{ _user_account_path }}?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
   register: _gh_user_account_file
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH – Push user account YAML"
   ansible.builtin.uri:
@@ -434,7 +515,7 @@
     body_format: json
     body: >-
       {{ {'message': 'Bootstrap: add user account for ' + team_lead + ' in org-' + org_id + ' [skip ci]',
-          'branch': _effective_platform_branch,
+          'branch': _desired_state_seed_branch,
           'content': lookup('template', 'templates/user-template.yml.j2') | b64encode}
          | combine({'sha': _gh_user_account_file.json.sha} if _gh_user_account_file.status == 200 else {}) }}
     status_code: [200, 201]
@@ -444,3 +525,4 @@
     admin_email: "{{ team_lead_email }}"
     admin_first_name: "{{ team_lead_first_name }}"
     admin_last_name: "{{ team_lead_last_name }}"
+  when: onboarding_mode == 'greenfield'

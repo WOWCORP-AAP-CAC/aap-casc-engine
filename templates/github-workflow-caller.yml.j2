@@ -1,25 +1,56 @@
 #jinja2: trim_blocks: False
-{# Ansible-specific pragma — vanilla Jinja2 with trim_blocks=True will still collapse lines. #}
+# Generated thin caller. It passes only the repository metadata and secrets
+# required for its role; privileged AAP apply credentials stay inside AAP JTs.
 name: CasC Pipeline
+
+# Least privilege for generated callers.
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:
   workflow_dispatch:
+{% if caller_role | default('tenant') == 'control' %}
+    inputs:
+      operation:
+        description: "Protected control operation (leave empty for normal control validation)"
+        required: false
+        default: ""
+        type: choice
+        options:
+          - ""
+          - onboarding_dispatch
+      tenant_org_id:
+        description: "Required when operation=onboarding_dispatch"
+        required: false
+        type: string
+      control_revision:
+        description: "Optional pinned control commit SHA"
+        required: false
+        type: string
+{% endif %}
+
 jobs:
   casc:
     uses: {{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine', true) }}/.github/workflows/casc-validate-and-trigger.yml@{{ engine_ref | default('main', true) }}
     with:
-      dispatcher_jt_name: jt-platform-casc_dispatcher
-      platform_scm_org: {{ platform_scm_org }}
-      platform_home_repo: {{ platform_repo | default('casc-platform-global') }}
-      platform_branch: {{ platform_branch | default('main') }}
-    secrets:
-{% if caller_role | default('tenant') == 'platform_home' %}
-      AAP_ENGINE_HOST: {% raw %}${{ secrets.AAP_ENGINE_HOST }}{% endraw %}
-      AAP_ENGINE_TOKEN: {% raw %}${{ secrets.AAP_ENGINE_TOKEN }}{% endraw %}
-      AAP_ENGINE_USERNAME: {% raw %}${{ secrets.AAP_ENGINE_USERNAME }}{% endraw %}
-      AAP_ENGINE_PASSWORD: {% raw %}${{ secrets.AAP_ENGINE_PASSWORD }}{% endraw %}
+      caller_role: {{ caller_role | default('tenant') }}
+      control_scm_org: {{ control_scm_org }}
+      control_repo: {{ control_repo }}
+      control_branch: {{ control_branch }}
+      dispatcher_jt_name: {{ dispatcher_jt_name | default('jt-platform-casc_dispatcher', true) }}
+      bootstrap_jt_name: {{ bootstrap_jt_name | default('jt-platform-bootstrap_tenant', true) }}
+{% if caller_role | default('tenant') == 'control' %}
+      aap_engine_host: {% raw %}${{ vars.AAP_ENGINE_HOST }}{% endraw %}
+      operation: {% raw %}${{ github.event.inputs.operation || '' }}{% endraw %}
+      tenant_org_id: {% raw %}${{ github.event.inputs.tenant_org_id || '' }}{% endraw %}
+      control_revision: {% raw %}${{ github.event.inputs.control_revision || '' }}{% endraw %}
 {% endif %}
+    secrets:
       AAP_ENV_TARGETS_JSON: {% raw %}${{ secrets.AAP_ENV_TARGETS_JSON }}{% endraw %}
       ENGINE_REPO_TOKEN: {% raw %}${{ secrets.ENGINE_REPO_TOKEN }}{% endraw %}
-      PLATFORM_REPO_TOKEN: {% raw %}${{ secrets.PLATFORM_REPO_TOKEN }}{% endraw %}
+      CONTROL_REPO_TOKEN: {% raw %}${{ secrets.CONTROL_REPO_TOKEN }}{% endraw %}
+{% if caller_role | default('tenant') == 'control' %}
+      AAP_ENGINE_TOKEN: {% raw %}${{ secrets.AAP_ENGINE_TOKEN }}{% endraw %}
+{% endif %}

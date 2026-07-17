@@ -1,13 +1,13 @@
 ---
 # AAP Multi-Tenant CasC Engine — Platform Genesis
 #
-# One-time automated setup of the platform CasC repository (or repositories)
-# in the customer's SCM organization. Creates repos, seeds folder structure,
-# generates config.yml + tenants.yml, and pushes CI/CD thin callers.
+# One-time automated setup of the platform control and desired-state repositories
+# in the customer's SCM organization. The control repository contains orchestration
+# metadata only; desired-state repositories contain AAP configuration only.
 #
-# Supports two repo patterns:
-#   - combined (default): single platform repo (casc-platform-global)
-#   - per-resource-type:  9 separate repos + a home repo for config/tenants
+# Supports two desired-state patterns:
+#   - combined (default): one platform desired-state repo (casc-platform-global)
+#   - per-resource-type:  one desired-state repo for each supported resource type
 #
 # Supports both GitHub and GitLab. Provider is set via SCM_PROVIDER env var
 # (github|gitlab) or auto-detected from scm_base_url.
@@ -15,9 +15,9 @@
 # All operations are idempotent — safe to rerun without side effects.
 #
 # Usage (via AAP Job Template):
-#   JT extra vars: scm_base_url, platform_scm_org, engine_repo,
+#   JT extra vars: scm_base_url, control_scm_org, control_repo, control_branch,
+#                  platform_scm_org, platform_repo_pattern, platform_repo,
 #                  default_organization, env_branch_map (optional override)
-#   Survey: platform_scm_org, repo_visibility, default_organization, repo_pattern
 #   Credential: crd-platform-scm_token (injects SCM_TOKEN)
 
 - name: "AAP Multi-Tenant CasC Engine — Platform Genesis"
@@ -36,13 +36,28 @@
          else ('github' if 'github' in scm_base_url else 'gitlab') }}
 
     platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('') }}"
+    control_scm_org: "{{ lookup('env', 'CONTROL_SCM_ORG') | default(platform_scm_org, true) }}"
+    control_repo: "{{ lookup('env', 'CONTROL_REPO') | default('casc-platform-control', true) }}"
+    control_branch: "{{ lookup('env', 'CONTROL_BRANCH') | default('main', true) }}"
     engine_repo: "{{ lookup('env', 'ENGINE_REPO') | default('aap-casc-engine', true) }}"
+    aap_engine_host: "{{ lookup('env', 'AAP_ENGINE_HOST') | default('', true) }}"
     repo_visibility: "{{ lookup('env', 'REPO_VISIBILITY') | default('private', true) }}"
     _repo_private: "{{ repo_visibility == 'private' }}"
-    repo_pattern: "{{ lookup('env', 'REPO_PATTERN') | default('combined', true) }}"
+    platform_repo_pattern: "{{ lookup('env', 'PLATFORM_REPO_PATTERN') | default('combined', true) }}"
+    # repo_pattern remains an internal provider-task alias during this transition.
+    repo_pattern: "{{ platform_repo_pattern }}"
+    repo_mode: "{{ lookup('env', 'REPO_MODE') | default('create', true) }}"
+    platform_repo: "{{ lookup('env', 'PLATFORM_REPO') | default('casc-platform-global', true) }}"
+    # Optional per-resource-type name overrides. Accepts either:
+    #   - mapping keyed by resource folder (organizations, teams, ...)
+    #   - list of names in _platform_type_folders order
+    # Provided via PLATFORM_REPO_NAMES_JSON or JT extra var platform_repo_names.
+    platform_repo_names: "{{ lookup('env', 'PLATFORM_REPO_NAMES_JSON') | default('{}', true) | from_json }}"
 
-    # GitLab-specific: numeric namespace ID for the platform group
+    # GitLab-specific: numeric namespace IDs. control_namespace_id defaults to the
+    # platform namespace; set it explicitly when control_scm_org is a different group.
     platform_namespace_id: "{{ lookup('env', 'PLATFORM_NAMESPACE_ID') | default('') }}"
+    control_namespace_id: "{{ lookup('env', 'CONTROL_NAMESPACE_ID') | default(lookup('env', 'PLATFORM_NAMESPACE_ID') | default('', true), true) }}"
 
     # Day-0 overrides — provided via JT extra_vars or survey.
     default_organization: "{{ lookup('env', 'DEFAULT_ORGANIZATION') | default('Default') }}"
@@ -52,12 +67,18 @@
       npr: release/npr
       prd: main
 
-    platform_branch: "{{ lookup('env', 'PLATFORM_BRANCH') | default('main', true) }}"
+    # platform_branch is the highest environment branch used to seed desired state.
+    # It is derived from the ordered environment map unless explicitly provided.
+    platform_branch: "{{ lookup('env', 'PLATFORM_BRANCH') | default(env_branch_map.values() | list | last, true) }}"
     create_missing_env_branches: "{{ lookup('env', 'CREATE_MISSING_ENV_BRANCHES') | default(true, true) | bool }}"
     bootstrap_dispatch_fanout: "{{ lookup('env', 'BOOTSTRAP_DISPATCH_FANOUT') | default(true, true) | bool }}"
+    genesis_jt_name: "{{ lookup('env', 'GENESIS_JT_NAME') | default('jt-platform-genesis', true) }}"
+    bootstrap_jt_name: "{{ lookup('env', 'BOOTSTRAP_JT_NAME') | default('jt-platform-bootstrap_tenant', true) }}"
+    dispatcher_jt_name: "{{ lookup('env', 'DISPATCHER_JT_NAME') | default('jt-platform-casc_dispatcher', true) }}"
+    drift_detection_jt_name: "{{ lookup('env', 'DRIFT_DETECTION_JT_NAME') | default('jt-platform-drift_detection', true) }}"
 
-    # Combined pattern: single platform repo name
-    _combined_platform_repo: casc-platform-global
+    # Combined desired-state pattern: one platform desired-state repository.
+    _combined_platform_repo: "{{ platform_repo }}"
 
     # Platform resource type metadata — maps folders to seed templates.
     # Used by genesis to seed example.yml.sample files in platform repos.
@@ -75,8 +96,8 @@
 
     _platform_type_folders: "{{ _platform_type_metadata | map(attribute='folder') | list }}"
 
-    # Per-resource-type: list of platform repos with deterministic template mapping
-    _per_type_platform_repos:
+    # Per-resource-type defaults. Names may be overridden via platform_repo_names.
+    _default_per_type_platform_repos:
       - name: aap-organizations-global
         casc_key: aap_organizations
         description: "Organization definitions"
@@ -135,24 +156,44 @@
         _effective_default_org: "{{ default_organization }}"
         _effective_env_branch_map: "{{ env_branch_map }}"
         _effective_platform_branch: "{{ platform_branch }}"
+        _desired_state_seed_branch: "{{ env_branch_map.values() | list | last }}"
 
-    - name: "Determine platform repos based on repo_pattern"
+    - name: "Validate and normalize platform_repo_names (fail closed)"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/scripts/pipeline/repo_name_overrides.py"
+          - validate-platform
+          - --folders-json
+          - "{{ _platform_type_folders | to_json }}"
+          - --overrides-json
+          - "{{ platform_repo_names | to_json }}"
+          - --defaults-json
+          - "{{ _default_per_type_platform_repos | to_json }}"
+      register: _platform_repo_names_validation
+      changed_when: false
+
+    - name: "Load validated platform repository overrides"
+      ansible.builtin.set_fact:
+        _platform_repo_name_overrides: "{{ (_platform_repo_names_validation.stdout | from_json).overrides }}"
+        _per_type_platform_repos: "{{ (_platform_repo_names_validation.stdout | from_json).repos }}"
+
+    - name: "Determine platform desired-state repos"
       ansible.builtin.set_fact:
         platform_repos: >-
           {{ [{'name': _combined_platform_repo,
-               'description': 'Platform CasC configuration and tenant registry',
-               'casc_key': 'platform',
-               'is_home': true}]
+               'description': 'Platform AAP desired-state configuration',
+               'casc_key': 'platform'}]
              if repo_pattern == 'combined'
-             else (_per_type_platform_repos | map('combine', {'is_home': false}) | list)
-                  + [{'name': _combined_platform_repo,
-                      'description': 'Platform home — config.yml and tenants.yml',
-                      'casc_key': 'platform',
-                      'is_home': true}] }}
+             else _per_type_platform_repos }}
 
-    - name: "Set home repo name (where config.yml and tenants.yml live)"
+    - name: "Build complete Genesis repository inventory"
       ansible.builtin.set_fact:
-        _home_repo: "{{ _combined_platform_repo }}"
+        control_repo_record:
+          name: "{{ control_repo }}"
+          description: "AAP CasC control plane: configuration, tenant registry, and naming policy"
+          repository_class: control
+        genesis_repos: "{{ [control_repo_record] + (platform_repos | map('combine', {'repository_class': 'platform'}) | list) }}"
 
     # ── Render control file content ────────────────────────────────────────
     - name: "Render config.yml content"
@@ -162,6 +203,10 @@
     - name: "Render tenants.yml content"
       ansible.builtin.set_fact:
         _tenants_yml_content: "{{ lookup('template', 'templates/seed-tenants.yml.j2') }}"
+
+    - name: "Render naming-rules.yml content"
+      ansible.builtin.set_fact:
+        _naming_rules_yml_content: "{{ lookup('template', 'templates/naming-rules.yml.j2') }}"
 
     # ── Validation ─────────────────────────────────────────────────────────
     - name: "Validate required inputs"
@@ -187,6 +232,26 @@
         fail_msg: >-
           repo_pattern must be 'combined' or 'per-resource-type'. Got: '{{ repo_pattern }}'.
 
+    - name: "Validate control repository contract"
+      ansible.builtin.assert:
+        that:
+          - control_scm_org | length > 0
+          - control_repo | length > 0
+          - control_branch | length > 0
+          - repo_mode in ['create', 'existing']
+          - control_repo not in (platform_repos | map(attribute='name') | list)
+        fail_msg: >-
+          control_scm_org, control_repo, control_branch, and a distinct control repo are required.
+          repo_mode must be create or existing.
+
+    - name: "Validate existing-repository branch behavior"
+      ansible.builtin.assert:
+        that:
+          - create_missing_env_branches | bool or repo_mode == 'existing'
+        fail_msg: >-
+          create_missing_env_branches=false requires repo_mode=existing so branch topology can be
+          verified before Genesis mutates any repository.
+
     - name: "Validate repo visibility"
       ansible.builtin.assert:
         that:
@@ -198,8 +263,12 @@
       ansible.builtin.assert:
         that:
           - platform_namespace_id | length > 0
+          - control_namespace_id | length > 0
+          - control_scm_org == platform_scm_org or (control_namespace_id | string) != (platform_namespace_id | string)
         fail_msg: >-
-          platform_namespace_id is required for GitLab.
+          GitLab Genesis requires platform_namespace_id and control_namespace_id.
+          When control_scm_org differs from platform_scm_org, set CONTROL_NAMESPACE_ID
+          to the numeric ID of the control group (must not equal PLATFORM_NAMESPACE_ID).
       when: scm_provider == 'gitlab'
 
     - name: "Validate env_branch_map structure"
@@ -251,10 +320,11 @@
           Default Org:    {{ _effective_default_org }}
           Repo Pattern:   {{ repo_pattern }}
           Visibility:     {{ repo_visibility }}
-          Home Repo:      {{ _home_repo }}
-          Repos to create: {{ platform_repos | length }}
-          {% for r in platform_repos %}
-            {{ loop.index }}. {{ r.name }}{{ ' (home)' if r.is_home | default(false) else '' }}
+          Control Repo:   {{ control_scm_org }}/{{ control_repo }} ({{ control_branch }})
+          Desired-state branch seed: {{ _desired_state_seed_branch }}
+          Repos to create/verify: {{ genesis_repos | length }}
+          {% for r in genesis_repos %}
+            {{ loop.index }}. {{ r.name }} ({{ r.repository_class }})
           {% endfor %}
           ══════════════════════════════════════════════════════
 
@@ -271,9 +341,9 @@
           ══════════════════════════════════════════════════════
           Platform Org:    {{ platform_scm_org }}
           Repo Pattern:    {{ repo_pattern }}
-          Repos Created:   {{ platform_repos | length }}
-          Home Repo:       {{ _home_repo }}
-          Control Files:   config.yml, tenants.yml (in {{ _home_repo }})
+          Repos Created:   {{ genesis_repos | length }}
+          Control Repo:    {{ control_repo }}
+          Control Files:   config.yml, tenants.yml, naming-rules.yml (in {{ control_repo }})
           CI/CD Seeded:    {{ '.github/workflows/casc.yml' if scm_provider == 'github' else '.gitlab-ci.yml' }}
           ══════════════════════════════════════════════════════
           Next steps:

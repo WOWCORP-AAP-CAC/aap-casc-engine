@@ -1,20 +1,20 @@
 ---
 # genesis_scm_github.yml — GitHub-specific SCM operations for platform genesis
 #
-# Creates all platform repos, pushes config.yml + tenants.yml to the home repo,
-# seeds CI/CD thin callers, and README.md files. All operations are idempotent.
+# Creates the control repository plus platform desired-state repositories. Control
+# files are never written to desired-state repositories.
 #
-# Required variables: platform_scm_org, engine_repo, platform_repos, _home_repo,
-#   scm_api_token, repo_visibility, _repo_private, _config_yml_content,
-#   _tenants_yml_content
+# Required variables: control_scm_org, control_repo, control_branch, genesis_repos,
+#   platform_repos, scm_api_token, repo_visibility, _repo_private,
+#   _config_yml_content, _tenants_yml_content, _naming_rules_yml_content
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 1: Create all platform repos (tolerates already-exists 422)
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Create platform repos in {{ platform_scm_org }}"
+- name: "GH – Create or verify control and platform repositories"
   ansible.builtin.uri:
-    url: "https://api.github.com/orgs/{{ platform_scm_org }}/repos"
+    url: "https://api.github.com/orgs/{{ control_scm_org if item.repository_class == 'control' else platform_scm_org }}/repos"
     method: POST
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -30,73 +30,144 @@
     _gh_repo_result.status == 422 and
     'already exists' not in (_gh_repo_result.json | default({}) | string)
   register: _gh_repo_result
-  loop: "{{ platform_repos }}"
+  loop: "{{ genesis_repos }}"
   loop_control:
     label: "{{ item.name }}"
+  when: repo_mode == 'create'
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 1b: Create platform_branch on all repos if it differs from default
+# Step 1b: Create control branch and desired-state branch topology
 # ═══════════════════════════════════════════════════════════════════════════
 
-- name: "GH – Get repo info for all platform repos"
+- name: "GH – Get repository metadata"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}"
+    url: "https://api.github.com/repos/{{ control_scm_org if item.repository_class == 'control' else platform_scm_org }}/{{ item.name }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
-  loop: "{{ platform_repos }}"
+  loop: "{{ genesis_repos }}"
   loop_control:
     label: "{{ item.name }}"
   register: _gh_repo_info
 
-- name: "GH – Store home repo default branch"
+- name: "GH – Store control repository default branch"
   ansible.builtin.set_fact:
     _gh_home_default_branch: >-
-      {{ (_gh_repo_info.results | selectattr('item.name', 'equalto', _home_repo) | first).json.default_branch }}
+      {{ (_gh_repo_info.results | selectattr('item.name', 'equalto', control_repo) | first).json.default_branch }}
 
-- name: "GH – Create platform_branch on all repos (if not default)"
-  when: platform_branch != _gh_home_default_branch
+- name: "GH – Create control branch when it differs from its default branch"
+  when: control_branch != _gh_home_default_branch
   block:
-    - name: "GH – Get default branch HEAD SHA for each repo"
+    - name: "GH – Get control default branch HEAD SHA"
       ansible.builtin.uri:
-        url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ item.json.default_branch }}"
+        url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/git/ref/heads/{{ _gh_home_default_branch }}"
         method: GET
         headers:
           Authorization: "Bearer {{ scm_api_token }}"
           Accept: "application/vnd.github.v3+json"
-      loop: "{{ _gh_repo_info.results }}"
-      loop_control:
-        label: "{{ item.json.name }}"
-      register: _gh_default_branch_refs
+      register: _gh_control_default_branch_ref
 
-    - name: "GH – Create platform_branch from default branch"
+    - name: "GH – Create control branch from default branch"
       ansible.builtin.uri:
-        url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.json.name }}/git/refs"
+        url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/git/refs"
         method: POST
         headers:
           Authorization: "Bearer {{ scm_api_token }}"
           Accept: "application/vnd.github.v3+json"
         body_format: json
         body:
-          ref: "refs/heads/{{ platform_branch }}"
-          sha: "{{ item.json.object.sha }}"
+          ref: "refs/heads/{{ control_branch }}"
+          sha: "{{ _gh_control_default_branch_ref.json.object.sha }}"
         status_code: [200, 201, 422]
       failed_when: >-
-        _gh_platform_branch_result.status == 422 and
-        'Reference already exists' not in (_gh_platform_branch_result.json.message | default(''))
-      loop: "{{ _gh_default_branch_refs.results }}"
-      loop_control:
-        label: "{{ item.item.json.name }}"
-      register: _gh_platform_branch_result
+        _gh_control_branch_result.status == 422 and
+        'Reference already exists' not in (_gh_control_branch_result.json.message | default(''))
+      register: _gh_control_branch_result
+
+- name: "GH – Check highest environment branch in platform desired-state repositories"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ _desired_state_seed_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ _gh_repo_info.results | rejectattr('item.repository_class', 'equalto', 'control') | list }}"
+  loop_control:
+    label: "{{ item.json.name }}:{{ _desired_state_seed_branch }}"
+  register: _gh_seed_branch_checks
+
+- name: "GH – Get default branch ref for missing highest environment branches"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.json.name }}/git/ref/heads/{{ item.item.json.default_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+  loop: "{{ _gh_seed_branch_checks.results | selectattr('status', 'equalto', 404) | list }}"
+  loop_control:
+    label: "{{ item.item.json.name }}"
+  register: _gh_seed_branch_default_refs
+  when: create_missing_env_branches | bool
+
+- name: "GH – Create missing highest environment branches"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.item.json.name }}/git/refs"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      ref: "refs/heads/{{ _desired_state_seed_branch }}"
+      sha: "{{ item.json.object.sha }}"
+    status_code: [200, 201, 422]
+  loop: "{{ _gh_seed_branch_default_refs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.item.json.name }}:{{ _desired_state_seed_branch }}"
+  when: create_missing_env_branches | bool
+
+- name: "GH – Fail when the required highest environment branch is absent"
+  ansible.builtin.assert:
+    that: _gh_seed_branch_checks.results | selectattr('status', 'equalto', 404) | list | length == 0
+    fail_msg: >-
+      create_missing_env_branches=false requires {{ _desired_state_seed_branch }} to exist in every
+      platform desired-state repository before any scaffolding mutation.
+  when: not (create_missing_env_branches | bool)
+
+- name: "GH – Verify every mapped desired-state branch before existing-repo mutation"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.0.json.name }}/git/ref/heads/{{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: >-
+    {{ (_gh_repo_info.results | rejectattr('item.repository_class', 'equalto', 'control') | list)
+       | product(env_branch_map.values() | list) | list }}
+  loop_control:
+    label: "{{ item.0.json.name }}:{{ item.1 }}"
+  register: _gh_existing_branch_checks
+  when: not (create_missing_env_branches | bool)
+
+- name: "GH – Fail existing-repository Genesis before scaffolding when branches are missing"
+  ansible.builtin.assert:
+    that: _gh_existing_branch_checks.results | selectattr('status', 'equalto', 404) | list | length == 0
+    fail_msg: >-
+      repo_mode=existing with create_missing_env_branches=false requires every mapped branch in every
+      platform desired-state repository. Missing: {{ _gh_existing_branch_checks.results
+      | selectattr('status', 'equalto', 404) | map(attribute='item') | list }}
+  when: not (create_missing_env_branches | bool)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Step 2: Push config.yml and tenants.yml to home repo (first-time only)
+# Step 2: Push control files to the control repo (first-time only)
 # ═══════════════════════════════════════════════════════════════════════════
 
 - name: "GH – Check if config.yml already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/config.yml?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/config.yml?ref={{ control_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -106,7 +177,7 @@
 
 - name: "GH – Push config.yml (first-time only)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/config.yml"
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/config.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -115,18 +186,18 @@
     body:
       message: "Genesis: initialize config.yml [skip ci]"
       content: "{{ _config_yml_content | b64encode }}"
-      branch: "{{ platform_branch }}"
+      branch: "{{ control_branch }}"
     status_code: [200, 201]
   when: _gh_config_check.status == 404
 
 - name: "GH – Skip config.yml (already exists)"
   ansible.builtin.debug:
-    msg: "config.yml already exists in {{ _home_repo }}. Skipping to preserve operational settings."
+    msg: "config.yml already exists in {{ control_repo }}. Skipping to preserve operational settings."
   when: _gh_config_check.status == 200
 
 - name: "GH – Check if tenants.yml already exists"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/tenants.yml?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/tenants.yml?ref={{ control_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -136,7 +207,7 @@
 
 - name: "GH – Push tenants.yml (first-time only)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/tenants.yml"
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/tenants.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -145,14 +216,39 @@
     body:
       message: "Genesis: initialize tenants.yml [skip ci]"
       content: "{{ _tenants_yml_content | b64encode }}"
-      branch: "{{ platform_branch }}"
+      branch: "{{ control_branch }}"
     status_code: [200, 201]
   when: _gh_tenants_check.status == 404
 
 - name: "GH – Skip tenants.yml (already exists)"
   ansible.builtin.debug:
-    msg: "tenants.yml already exists in {{ _home_repo }}. Skipping to preserve tenant entries."
+    msg: "tenants.yml already exists in {{ control_repo }}. Skipping to preserve tenant entries."
   when: _gh_tenants_check.status == 200
+
+- name: "GH – Check if naming-rules.yml already exists"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/naming-rules.yml?ref={{ control_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_naming_rules_check
+
+- name: "GH – Push naming-rules.yml (first-time only)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/naming-rules.yml"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      message: "Genesis: initialize naming policy [skip ci]"
+      content: "{{ _naming_rules_yml_content | b64encode }}"
+      branch: "{{ control_branch }}"
+    status_code: [200, 201]
+  when: _gh_naming_rules_check.status == 404
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3: Seed CI/CD thin caller workflow in each repo
@@ -160,20 +256,20 @@
 
 - name: "GH – Check if CI/CD workflow already exists in each repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/.github/workflows/casc.yml?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ control_scm_org if item.repository_class == 'control' else platform_scm_org }}/{{ item.name }}/contents/.github/workflows/casc.yml?ref={{ control_branch if item.repository_class == 'control' else _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
-  loop: "{{ platform_repos }}"
+  loop: "{{ genesis_repos }}"
   loop_control:
     label: "{{ item.name }}"
   register: _gh_workflow_checks
 
 - name: "GH – Seed CI/CD thin caller in each repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.name }}/contents/.github/workflows/casc.yml"
+    url: "https://api.github.com/repos/{{ control_scm_org if item.item.repository_class == 'control' else platform_scm_org }}/{{ item.item.name }}/contents/.github/workflows/casc.yml"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -182,11 +278,11 @@
     body: >-
       {{ {'message': 'Genesis: add CasC pipeline-as-a-service (thin caller) [skip ci]',
           'content': lookup('template', 'templates/github-workflow-caller.yml.j2') | b64encode,
-          'branch': platform_branch}
+          'branch': (control_branch if item.item.repository_class == 'control' else _desired_state_seed_branch)}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
   vars:
-    caller_role: "{{ 'platform_home' if item.item.is_home | default(false) else 'platform_nonhome' }}"
+    caller_role: "{{ 'control' if item.item.repository_class == 'control' else 'platform' }}"
   loop: "{{ _gh_workflow_checks.results }}"
   loop_control:
     label: "{{ item.item.name }}"
@@ -197,20 +293,20 @@
 
 - name: "GH – Check if README.md already exists in each repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/README.md?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ control_scm_org if item.repository_class == 'control' else platform_scm_org }}/{{ item.name }}/contents/README.md?ref={{ control_branch if item.repository_class == 'control' else _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
-  loop: "{{ platform_repos }}"
+  loop: "{{ genesis_repos }}"
   loop_control:
     label: "{{ item.name }}"
   register: _gh_readme_checks
 
 - name: "GH – Seed README.md in each repo"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.name }}/contents/README.md"
+    url: "https://api.github.com/repos/{{ control_scm_org if item.item.repository_class == 'control' else platform_scm_org }}/{{ item.item.name }}/contents/README.md"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -219,7 +315,7 @@
     body: >-
       {{ {'message': 'Genesis: add README with repo purpose and usage [skip ci]',
           'content': lookup('template', 'templates/genesis-readme.md.j2') | b64encode,
-          'branch': platform_branch}
+          'branch': (control_branch if item.item.repository_class == 'control' else _desired_state_seed_branch)}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
   vars:
@@ -231,7 +327,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 5: Seed full multi-env folder structure (base/ + env/)
 #   Makes repos self-documenting with the complete layout from day-0.
-#   - combined:          base/<type>/ + <env>/<type>/ in home repo
+#   - combined:          base/<type>/ + <env>/<type>/ in the combined platform desired-state repo
 #   - per-resource-type: base/ + <env>/ in each type-specific repo
 #   <env> comes from each KEY in env_branch_map (e.g., dev, tst, prd).
 # ═══════════════════════════════════════════════════════════════════════════
@@ -247,7 +343,7 @@
 
 - name: "GH – Check .gitkeep in folders (combined)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/{{ item }}/.gitkeep?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/{{ item }}/.gitkeep?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -259,7 +355,7 @@
 
 - name: "GH – Seed .gitkeep in folders (combined)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/{{ item.item }}/.gitkeep"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/{{ item.item }}/.gitkeep"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -268,7 +364,7 @@
     body: >-
       {{ {'message': 'Genesis: create ' + item.item + '/ folder [skip ci]',
           'content': '' | b64encode,
-          'branch': platform_branch}
+          'branch': _desired_state_seed_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
   loop: "{{ _gh_folder_checks_combined.results | default([]) }}"
@@ -284,13 +380,13 @@
 
 - name: "GH – Check .gitkeep in folders (per-resource-type)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.0.name }}/contents/{{ item.1 }}/.gitkeep?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.0.name }}/contents/{{ item.1 }}/.gitkeep?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
-  loop: "{{ (platform_repos | rejectattr('is_home') | list) | product(_genesis_folder_prefixes) | list }}"
+  loop: "{{ platform_repos | product(_genesis_folder_prefixes) | list }}"
   loop_control:
     label: "{{ item.0.name }}/{{ item.1 }}/"
   register: _gh_folder_checks_per_type
@@ -307,7 +403,7 @@
     body: >-
       {{ {'message': 'Genesis: create ' + item.item.1 + '/ folder [skip ci]',
           'content': '' | b64encode,
-          'branch': platform_branch}
+          'branch': _desired_state_seed_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
   loop: "{{ _gh_folder_checks_per_type.results | default([]) }}"
@@ -322,10 +418,10 @@
 #   ignores them — tenants/operators rename to .yml to activate.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# --- Combined pattern: base/<type>/example.yml.sample in home repo ---
+# --- Combined pattern: base/<type>/example.yml.sample in the combined platform desired-state repo ---
 - name: "GH – Check example.yml.sample in platform type folders (combined)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/base/{{ item.folder }}/example.yml.sample?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/base/{{ item.folder }}/example.yml.sample?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -339,7 +435,7 @@
 
 - name: "GH – Seed example.yml.sample in platform type folders (combined)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ _home_repo }}/contents/base/{{ item.item.folder }}/example.yml.sample"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/base/{{ item.item.folder }}/example.yml.sample"
     method: PUT
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
@@ -348,7 +444,7 @@
     body: >-
       {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip ci]',
           'content': lookup('template', item.item.template) | b64encode,
-          'branch': platform_branch}
+          'branch': _desired_state_seed_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
   loop: "{{ _gh_platform_example_checks.results | default([]) }}"
@@ -359,13 +455,13 @@
 # --- Per-resource-type: base/example.yml.sample in each type repo ---
 - name: "GH – Check example.yml.sample in platform type repos (per-resource-type)"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/base/example.yml.sample?ref={{ platform_branch | urlencode }}"
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/base/example.yml.sample?ref={{ _desired_state_seed_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
     status_code: [200, 404]
-  loop: "{{ platform_repos | rejectattr('is_home') | list }}"
+  loop: "{{ platform_repos }}"
   loop_control:
     label: "{{ item.name }}/base/example.yml.sample"
   register: _gh_platform_example_checks_per_type
@@ -382,10 +478,60 @@
     body: >-
       {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip ci]',
           'content': lookup('template', item.item.template) | b64encode,
-          'branch': platform_branch}
+          'branch': _desired_state_seed_branch}
          | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
     status_code: [200, 201]
   loop: "{{ _gh_platform_example_checks_per_type.results | default([]) }}"
   loop_control:
     label: "{{ item.item.name }}/base/example.yml.sample"
   when: repo_pattern == 'per-resource-type'
+
+# Seed files are committed on the highest environment branch first. Create the
+# remaining promotion branches afterwards so each starts from the seeded state.
+- name: "GH – Compute lower environment branches in promotion order"
+  ansible.builtin.set_fact:
+    _lower_env_branches: "{{ (env_branch_map.values() | list | reverse | list)[1:] }}"
+
+- name: "GH – Get seeded highest branch refs for platform repositories"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/git/ref/heads/{{ _desired_state_seed_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+  loop: "{{ platform_repos }}"
+  loop_control:
+    label: "{{ item.name }}:{{ _desired_state_seed_branch }}"
+  register: _gh_high_branch_refs
+  when: create_missing_env_branches | bool
+
+- name: "GH – Check lower environment branches in platform repositories"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.0.item.name }}/git/ref/heads/{{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  loop: "{{ (_gh_high_branch_refs.results | default([])) | product(_lower_env_branches) | list }}"
+  loop_control:
+    label: "{{ item.0.item.name }}:{{ item.1 }}"
+  register: _gh_lower_branch_checks
+  when: create_missing_env_branches | bool
+
+- name: "GH – Create missing lower environment branches from seeded high branch"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.0.item.name }}/git/refs"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      ref: "refs/heads/{{ item.item.1 }}"
+      sha: "{{ item.item.0.json.object.sha }}"
+    status_code: [200, 201, 422]
+  loop: "{{ _gh_lower_branch_checks.results | default([]) | selectattr('status', 'equalto', 404) | list }}"
+  loop_control:
+    label: "{{ item.item.0.item.name }}:{{ item.item.1 }}"
+  when: create_missing_env_branches | bool

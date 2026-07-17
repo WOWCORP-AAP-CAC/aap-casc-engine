@@ -1,0 +1,12 @@
+---
+# Engine-owned lifecycle marker. Do not edit tenant identity fields in place;
+# use the documented tenant identity/repository migration procedure instead.
+org_id: {{ org_id }}
+tenant_scm_org: {{ tenant_scm_org }}
+repo_pattern: {{ repo_pattern }}
+tenant_repos:
+{% for repository in tenant_repos %}
+  - {{ repository }}
+{% endfor %}
+onboarding_mode: {{ onboarding_mode }}
+scaffold_version: 1

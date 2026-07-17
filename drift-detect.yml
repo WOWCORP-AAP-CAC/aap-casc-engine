@@ -1,7 +1,7 @@
 ---
 # AAP Multi-Tenant CasC Engine — Drift Detection (Compare Git desired state vs AAP live state)
 #
-# Clones platform repo, reads config.yml + tenants.yml, clones all CasC repos,
+# Clones the control repo, reads config.yml + tenants.yml, clones desired-state repos,
 # processes YAML, exports live state from AAP, compares, and generates a drift
 # report. Optionally auto-remediates.
 #
@@ -26,53 +26,95 @@
     scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
     scm_token: "{{ lookup('env', 'SCM_TOKEN') }}"
 
-    platform_repo: "{{ lookup('env', 'PLATFORM_REPO') | default('casc-platform-global', true) }}"
+    control_scm_org: "{{ lookup('env', 'CONTROL_SCM_ORG') | default(lookup('env', 'PLATFORM_SCM_ORG'), true) }}"
+    control_repo: "{{ lookup('env', 'CONTROL_REPO') | default('casc-platform-control', true) }}"
+    control_branch: "{{ lookup('env', 'CONTROL_BRANCH') | default('main', true) }}"
+    control_revision: "{{ lookup('env', 'CONTROL_REVISION') | default('', true) }}"
     platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('', true) }}"
-    platform_branch: "{{ lookup('env', 'PLATFORM_BRANCH') | default('main', true) }}"
-    platform_dir: "/tmp/casc-platform"
+    control_dir: "/tmp/casc-control"
 
   tasks:
-    # ── Phase 0: Clone platform repo and load config ────────────────────
-    - name: "Clone platform repo"
+    # ── Phase 0: Clone control repo and load authoritative metadata ─────
+    - name: "Clone control repo"
       ansible.builtin.include_role:
         name: git_clone_repos
       vars:
         repos_to_clone:
-          - name: "{{ platform_repo }}"
-            scm_org: "{{ platform_scm_org }}"
-            aap_scope: platform
-        clone_base_dir: "{{ platform_dir }}"
-        clone_branch: "{{ platform_branch }}"
+          - name: "{{ control_repo }}"
+            scm_org: "{{ control_scm_org }}"
+            aap_scope: control
+        clone_base_dir: "{{ control_dir }}"
+        clone_branch: "{{ control_branch }}"
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
-    - name: "Load config.yml from platform repo"
-      ansible.builtin.include_vars:
-        file: "{{ platform_dir }}/{{ platform_repo }}/config.yml"
-        name: platform_config
+    - name: "Pin control repo to authoritative revision when supplied"
+      ansible.builtin.command:
+        cmd: "git -C {{ control_dir }}/{{ control_repo }} checkout --detach {{ control_revision }}"
+      when: control_revision | length > 0
+      changed_when: false
 
-    - name: "Load tenants.yml from platform repo"
+    - name: "Resolve effective control revision"
+      ansible.builtin.command:
+        cmd: "git -C {{ control_dir }}/{{ control_repo }} rev-parse HEAD"
+      register: _control_rev_probe
+      changed_when: false
+
+    - name: "Record effective control revision"
+      ansible.builtin.set_fact:
+        effective_control_revision: "{{ control_revision if control_revision | length > 0 else _control_rev_probe.stdout }}"
+
+    - name: "Fail closed when requested control revision is unavailable"
+      ansible.builtin.assert:
+        that:
+          - effective_control_revision | length > 0
+          - control_revision | length == 0 or effective_control_revision == control_revision
+        fail_msg: >-
+          Authoritative control revision is unavailable or mismatched.
+          requested={{ control_revision }} resolved={{ effective_control_revision }}
+
+    - name: "Load config.yml from control repo"
       ansible.builtin.include_vars:
-        file: "{{ platform_dir }}/{{ platform_repo }}/tenants.yml"
+        file: "{{ control_dir }}/{{ control_repo }}/config.yml"
+        name: control_config
+
+    - name: "Load tenants.yml from control repo"
+      ansible.builtin.include_vars:
+        file: "{{ control_dir }}/{{ control_repo }}/tenants.yml"
         name: tenants_registry
 
-    # ── Phase 1: Compute effective platform branch and resolve env branch ───
-    - name: "Compute effective platform branch from config"
+    - name: "Require naming-rules.yml from control revision"
+      ansible.builtin.stat:
+        path: "{{ control_dir }}/{{ control_repo }}/{{ control_config.naming_rules_file | default('naming-rules.yml') }}"
+      register: _control_naming_rules
+
+    - name: "Fail closed when control naming rules are missing"
+      ansible.builtin.assert:
+        that:
+          - _control_naming_rules.stat.exists
+        fail_msg: >-
+          Control revision {{ effective_control_revision }} is missing
+          {{ control_config.naming_rules_file | default('naming-rules.yml') }}.
+
+    # ── Phase 1: Resolve the desired-state branch from control metadata ───
+    - name: "Compute effective configuration from control metadata"
       ansible.builtin.set_fact:
-        _effective_platform_branch: "{{ platform_config.platform_branch | default(platform_branch) }}"
-        _repo_pattern: "{{ platform_config.repo_pattern | default('combined') }}"
+        _repo_pattern: "{{ control_config.platform_repo_pattern | default('combined') }}"
+        _platform_repo: "{{ control_config.platform_repo | default('casc-platform-global') }}"
+        naming_rules_file: "{{ control_config.naming_rules_file | default('naming-rules.yml') }}"
+        drift_detection_jt_name: "{{ control_config.job_templates.drift_detection | default('jt-platform-drift_detection', true) }}"
 
     - name: "Assert target_env is defined in env_branch_map"
       ansible.builtin.assert:
         that:
-          - target_env in platform_config.env_branch_map
+          - target_env in control_config.env_branch_map
         fail_msg: >-
-          target_env '{{ target_env }}' not found in config.yml env_branch_map.
-          Valid environments: {{ platform_config.env_branch_map.keys() | list }}.
+          target_env '{{ target_env }}' not found in control config.yml env_branch_map.
+          Valid environments: {{ control_config.env_branch_map.keys() | list }}.
 
     - name: "Resolve target branch"
       ansible.builtin.set_fact:
-        target_branch: "{{ platform_config.env_branch_map[target_env] }}"
+        target_branch: "{{ control_config.env_branch_map[target_env] }}"
 
     - name: "Filter active tenants"
       ansible.builtin.set_fact:
@@ -88,9 +130,9 @@
     - name: "Build platform repos list for drift check"
       ansible.builtin.set_fact:
         _platform_repos: >-
-          {{ [{'name': platform_repo, 'aap_scope': 'platform', 'scm_org': platform_scm_org}]
+          {{ [{'name': _platform_repo, 'aap_scope': 'platform', 'scm_org': platform_scm_org}]
              if _repo_pattern == 'combined'
-             else (platform_config.platform_repos | default([])
+             else (control_config.platform_repos | default([])
                    | map('combine', {'aap_scope': 'platform', 'scm_org': platform_scm_org})
                    | list) }}
 
@@ -124,13 +166,13 @@
       ansible.builtin.set_fact:
         _all_repos: "{{ _platform_repos + _tenant_repos }}"
 
-    - name: "Clone platform CasC repos at effective platform branch"
+    - name: "Clone platform CasC repos at target branch"
       ansible.builtin.include_role:
         name: git_clone_repos
       vars:
         repos_to_clone: "{{ _platform_repos }}"
         clone_base_dir: "/tmp/drift-repos"
-        clone_branch: "{{ _effective_platform_branch }}"
+        clone_branch: "{{ target_branch }}"
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
