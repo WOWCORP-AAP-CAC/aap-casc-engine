@@ -1,96 +1,190 @@
 # Nonproduction Integration Validation
 
-Run these checks against a nonproduction AAP and SCM org/group before any
-production cutover. Do **not** use production launcher tokens or production
-desired-state repositories.
+Do not use production AAP or production SCM for these tests. Complete all
+scenarios before release or demo cutover. Archive pipeline URLs, AAP job IDs,
+control revisions, API responses, and negative-test output.
 
 ## 0. Preconditions
 
-- Engine commit under test is available to AAP project sync.
-- Nonprod GitHub or GitLab org/group with ability to create private repos.
-- Nonprod AAP with Genesis/Bootstrap/Dispatcher/Drift JTs.
-- Dedicated execute-only launcher identities:
-  - control launcher → Genesis/Bootstrap only
-  - per-env dispatcher launcher → Dispatcher only
-- Read-only `ENGINE_REPO_TOKEN` / `CONTROL_REPO_TOKEN`.
-- Serialized Dispatcher JT: `allow_simultaneous=false`.
+- Engine project synced to the candidate commit.
+- Genesis, Bootstrap, Dispatcher, and Drift Job Templates use configured names.
+- Dispatcher has `allow_simultaneous=false`.
+- GitHub or GitLab protected secrets are configured as documented.
+- `casc-platform-control` and platform desired-state repo(s) are disposable.
+- `env_branch_map` contains at least two distinct branches.
 
-Record evidence for each step: pipeline URL, AAP job ID, and outcome.
+## 1. Genesis create mode
 
-## 1. SCM API scaffolding (create mode)
+1. Run Genesis with `repo_mode=create`.
+2. Confirm separate control and platform desired-state repositories.
+3. Confirm control contains `config.yml` and `tenants.yml` but no active
+   `naming-rules.yml`.
+4. Confirm caller, examples, and folder scaffold on every mapped branch.
+5. Confirm branches were created high-to-low.
 
-1. Run Genesis with `repo_mode: create`.
-2. Expect dedicated `casc-platform-control` plus separate platform desired-state repo(s).
-3. Confirm control repo has only `config.yml`, `tenants.yml`, `naming-rules.yml`,
-   caller, and README.
-4. Confirm platform desired-state repo has no control files.
+Evidence: Genesis job ID, repository URLs, branch SHAs, tree listings.
 
-## 2. Existing-repository mode
+## 2. Genesis existing mode and custom names
 
-1. Pre-create empty control and platform repos.
-2. Run Genesis with `repo_mode: existing`.
-3. Confirm scaffold files are added without changing visibility/permissions.
-4. Re-run Genesis and confirm existing customer files are preserved.
+1. Pre-create control and platform repos with unrelated files.
+2. Use `repo_mode=existing` and customer-selected names.
+3. Include one truly empty pre-created repository for each provider and confirm
+   Genesis initializes it with the final README before branch creation. Repeat
+   with an empty tenant repository and confirm Bootstrap uses the immutable
+   marker as its first commit.
+4. For per-resource layout, supply `platform_repo_names` as a mapping.
+5. Confirm unrelated files and permissions remain unchanged.
+6. Negative-test ordered lists, unknown folders, blanks, duplicates, and missing
+   mapped branches with branch creation disabled.
 
-## 3. Greenfield bootstrap + bounded onboarding
+## 3. Greenfield default identity
 
-1. Merge an active greenfield tenant into control `tenants.yml`.
-2. Confirm Bootstrap scaffolds tenant repo(s) and writes foundation YAML to every
-   mapped platform branch.
-3. With `bootstrap_dispatch_fanout: true`, confirm Dispatcher launches:
-   - `dispatch_scope=platform`
-   - then `dispatch_scope=tenant` for only that `tenant_org_id`
-   - never `full`
-4. Confirm each launched job is polled to terminal success/failure.
+Add a tenant with `tenant_id: stores`, no `aap_organization`, and a valid
+`team_name`.
 
-## 4. Disabled fan-out continuation
+Confirm:
 
-1. Set `bootstrap_dispatch_fanout: false`.
-2. Onboard another greenfield tenant.
-3. Confirm Bootstrap succeeds and pipeline reports onboarding pending.
-4. Confirm normal trigger does **not** run for that control event.
-5. Run protected control manual operation:
-   - GitHub: `workflow_dispatch` with `operation=onboarding_dispatch` and
-     `tenant_org_id`
-   - GitLab: web pipeline with `CASC_OPERATION=onboarding_dispatch` and
-     `TENANT_ORG_ID`
-6. Confirm bounded platform-then-tenant dispatch for that tenant only.
+- effective AAP Organization is exactly `stores`, never `org-stores`;
+- tenant routing remains keyed by `stores`;
+- only Organization and Team foundation are generated;
+- filenames are `stores.yml` in Organizations and Teams locations;
+- identical bytes exist on every mapped branch;
+- no user, RBAC, Galaxy, or default-EE foundation appears;
+- survey fallback does not write a redundant `aap_organization: stores`.
 
-## 5. Brownfield bootstrap
+Separately commit a password-free customer user declaration and confirm no
+`change_me` default is applied. Confirm Bootstrap does not change individual
+GitHub collaborators or GitLab project members.
 
-1. Bootstrap a tenant with `onboarding_mode: brownfield`.
-2. Confirm no foundation YAML and no Dispatcher/fan-out launch.
-3. Merge one declared object into the lowest mapped branch.
-4. Confirm only that tenant scope is applied.
-5. Confirm undeclared AAP objects remain untouched.
+## 4. Greenfield custom identity and custom repos
 
-## 6. Control bootstrap authorization
+Use:
 
-1. Attempt Bootstrap launch credentials that lack Execute on Bootstrap JT → fail.
-2. Confirm platform/tenant callers do not receive `AAP_ENGINE_TOKEN`.
-3. Confirm PR/MR pipelines validate only and make no AAP API calls.
+```yaml
+tenant_id: stores
+aap_organization: "WW Stores: Automation #1"
+team_name: Stores Automation
+```
 
-## 7. Dispatcher scope and polling
+Use a custom combined `repo_name`, then repeat with a partial per-resource
+`repo_names` mapping.
 
-1. Push a platform desired-state change → `dispatch_scope=platform`.
-2. Push a tenant desired-state change → `dispatch_scope=tenant` for that tenant.
-3. Force a long-running job or lower poll timeout and confirm timeout fails the
-   pipeline (nonzero), not warn-and-succeed.
-4. Confirm supplied `control_revision` is honored by Dispatcher/Drift.
+Confirm YAML punctuation round-trips unchanged, markers contain the exact
+identity and resolved mapping, Dispatcher and Drift both resolve custom names,
+and bounded onboarding launches `platform` then only `tenant:stores`.
 
-## 8. Least-privilege launcher RBAC
+## 5. Optional naming policy
 
-1. Control launcher cannot edit JTs, read credentials, or launch Dispatcher.
-2. Env dispatcher launcher cannot edit JTs or read attached credentials.
-3. Privileged SCM-write and AAP-apply credentials exist only on AAP JTs, not in
-   SCM secret stores.
+### Inactive
 
-## 9. Evidence package
+Run Greenfield Bootstrap with no `naming-rules.yml`, then with an empty file.
+Both must succeed and log that naming policy is inactive.
 
-Before production approval, archive:
+### Active and compliant
 
-- Genesis/Bootstrap/Dispatcher/Drift job IDs
-- GitHub/GitLab pipeline URLs for create, existing, greenfield, brownfield,
-  pending onboarding continuation, PR validation, and timeout failure
-- Security preflight notes (no secret values)
-- Confirmation that Phase 4 scoped concurrency was **not** enabled
+Commit a customer Organization/Team policy to the control branch. Bootstrap a
+matching tenant and confirm preflight success.
+
+### Active and noncompliant
+
+Bootstrap a nonmatching Organization or Team. Confirm failure before any repo,
+branch, marker, caller, scaffold, or foundation mutation.
+
+Negative-test malformed YAML, unknown resource type, malformed regex, raw
+resource type, and non-scalar identity policy. Each must fail closed.
+
+## 6. Brownfield gradual adoption
+
+Register an existing LDAP/SAML-style AAP Organization with
+`onboarding_mode: brownfield`, explicit `aap_organization`, and no `team_name`.
+
+Confirm:
+
+- SCM repositories are scaffolded;
+- no Organization or Team foundation is generated;
+- no onboarding fan-out occurs;
+- existing Teams, users, RBAC, credentials, and other objects are untouched;
+- supplying `team_name` or omitting `aap_organization` fails before mutation;
+- one separately committed existing object can be adopted without affecting
+  undeclared objects.
+
+## 7. Lifecycle immutability
+
+Before any marker:
+
+- correct `tenant_id`, Organization, Team, namespace, and repository inputs;
+- remove the pending request;
+- confirm both operations are accepted only after previous and proposed repo
+  sets are proven marker-free.
+
+After a marker:
+
+- change each immutable identity/topology field and confirm CI rejects before
+  Bootstrap launch;
+- remove the record and confirm rejection with migration guidance;
+- change `status` or `dispatch_enabled` and confirm no Bootstrap rerun;
+- onboard one Greenfield tenant with `dispatch_enabled=false`; confirm platform
+  Organization/Team foundation applies while tenant-scope dispatch is skipped;
+- set inactive and confirm its ID, Organization, and repositories remain reserved.
+
+Create a matching partial scaffold and confirm idempotent resume. Create a
+conflicting marker and confirm no managed write occurs.
+
+Exercise survey fallback and inspect the registered records: Greenfield default
+omits redundant `aap_organization`, a distinct Greenfield Organization persists,
+and Brownfield retains its required explicit Organization with no `team_name`.
+
+## 8. Disabled fan-out continuation
+
+Set `bootstrap_dispatch_fanout=false` and bootstrap Greenfield.
+
+Confirm SCM/foundation completion, pending notice, normal trigger suppression,
+and no automatic Dispatcher launch. Then run protected control
+`onboarding_dispatch` for the tenant. Confirm all-branch marker/foundation
+preflight and bounded platform-then-tenant completion.
+
+## 9. Pipeline and authorization matrix
+
+For GitHub and GitLab, verify:
+
+- feature push: validate only;
+- PR/MR to every mapped branch: validate only and no AAP deploy secrets;
+- mapped platform push: platform scope only;
+- mapped tenant push: matching tenant scope only;
+- control `tenants.yml` push: lifecycle/bootstrap path only;
+- `[skip dispatch]`: no Bootstrap/fan-out/trigger;
+- forced Dispatcher timeout: nonzero pipeline failure;
+- missing `CONTROL_REPO_TOKEN`: fail closed;
+- missing Bootstrap Execute permission: fail closed;
+- platform/tenant callers do not receive `AAP_ENGINE_TOKEN`;
+- launcher tokens cannot execute unrelated Job Templates.
+
+Inspect the deployed AAP Job Templates and surveys: use `tenant_id`, expose
+`aap_organization` and `team_name` as optional survey fields whose conditional
+rules are enforced at runtime, and contain no legacy team-lead/password or
+replacement collaborator input.
+
+## 10. Drift and deletion safety
+
+Run report mode first. Confirm current coverage is limited to Organizations,
+credential types, projects, and job templates and that undeclared live objects
+may appear as `extra_in_live`. Do not enable remediation until the report is
+reviewed for the Brownfield case.
+
+Confirm absence from YAML does not delete any object and unsupported explicit
+deletion declarations fail validation.
+Use an object with `state: absent`; verify both CI validation and a direct
+Dispatcher run fail before `infra.aap_configuration.dispatch` is invoked.
+
+## 11. Final evidence package
+
+Record:
+
+- candidate engine SHA;
+- control revision for every run;
+- GitHub and GitLab pipeline URLs;
+- AAP job IDs and final statuses;
+- generated marker and foundation files from every branch;
+- custom repository-resolution proof;
+- all negative-test failures;
+- rollback decision and operator approval.

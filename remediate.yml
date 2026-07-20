@@ -14,6 +14,7 @@
   vars:
     dispatch_include_wildcard_vars: true
     aap_configuration_collect_logs: true
+    users_default_password: ""
 
 - name: "Report remediation errors"
   ansible.builtin.fail:

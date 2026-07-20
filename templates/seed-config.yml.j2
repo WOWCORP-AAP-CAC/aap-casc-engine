@@ -1,32 +1,29 @@
 #jinja2: trim_blocks: False
 ---
-default_organization: {{ _effective_default_org | default('Default') }}
-scm_provider: {{ scm_provider }}
-control_scm_org: {{ control_scm_org }}
-control_repo: {{ control_repo }}
-control_branch: {{ control_branch }}
-platform_scm_org: {{ platform_scm_org }}
-platform_repo_pattern: {{ repo_pattern | default('combined') }}
-repo_mode: {{ repo_mode | default('create') }}
-platform_repo: {{ platform_repo | default('casc-platform-global') }}
+scm_provider: {{ scm_provider | to_json }}
+control_scm_org: {{ control_scm_org | to_json }}
+control_repo: {{ control_repo | to_json }}
+control_branch: {{ control_branch | to_json }}
+platform_scm_org: {{ platform_scm_org | to_json }}
+platform_repo_pattern: {{ (repo_pattern | default('combined')) | to_json }}
+repo_mode: {{ (repo_mode | default('create')) | to_json }}
+platform_repo: {{ (platform_repo | default('casc-platform-global')) | to_json }}
 create_missing_env_branches: {{ create_missing_env_branches | default(true) | bool | lower }}
 bootstrap_dispatch_fanout: {{ bootstrap_dispatch_fanout | default(true) | bool | lower }}
 dispatcher_concurrency: serialized
 
 job_templates:
-  genesis: {{ genesis_jt_name | default('jt-platform-genesis', true) }}
-  bootstrap: {{ bootstrap_jt_name | default('jt-platform-bootstrap_tenant', true) }}
-  dispatcher: {{ dispatcher_jt_name | default('jt-platform-casc_dispatcher', true) }}
-  drift_detection: {{ drift_detection_jt_name | default('jt-platform-drift_detection', true) }}
-
-naming_rules_file: naming-rules.yml
+  genesis: {{ (genesis_jt_name | default('jt-platform-genesis', true)) | to_json }}
+  bootstrap: {{ (bootstrap_jt_name | default('jt-platform-bootstrap_tenant', true)) | to_json }}
+  dispatcher: {{ (dispatcher_jt_name | default('jt-platform-casc_dispatcher', true)) | to_json }}
+  drift_detection: {{ (drift_detection_jt_name | default('jt-platform-drift_detection', true)) | to_json }}
 
 env_branch_map:
 {{ _effective_env_branch_map | to_nice_yaml(indent=2) | indent(2, true) }}
 {% if repo_pattern | default('combined') == 'per-resource-type' %}
 platform_repos:
 {% for repository in platform_repos %}
-  - resource_type: {{ repository.folder }}
-    name: {{ repository.name }}
+  - resource_type: {{ repository.folder | to_json }}
+    name: {{ repository.name | to_json }}
 {% endfor %}
 {% endif %}

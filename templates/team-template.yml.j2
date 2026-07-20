@@ -1,5 +1,5 @@
 ---
 aap_teams:
-  - name: "{{ _effective_team_group }}"
-    organization: org-{{ org_id }}
-    description: "Team for tenant {{ org_id }}"
+  - name: {{ _effective_team_name | to_json }}
+    organization: {{ _effective_aap_organization | to_json }}
+    description: {{ ('Team for tenant ' ~ _effective_tenant_id) | to_json }}

@@ -79,17 +79,13 @@ def plan_legacy_split(args: argparse.Namespace) -> int:
             "drift_detection": "jt-platform-drift_detection",
         },
     )
-    cfg.setdefault("naming_rules_file", "naming-rules.yml")
+    cfg.pop("naming_rules_file", None)
 
     dump_yaml(control_out / "config.yml", cfg)
     shutil.copy2(source / "tenants.yml", control_out / "tenants.yml")
     naming_src = source / "naming-rules.yml"
     if naming_src.exists():
         shutil.copy2(naming_src, control_out / "naming-rules.yml")
-    else:
-        engine_rules = Path(__file__).resolve().parents[2] / "schemas" / "naming-rules.yml"
-        if engine_rules.exists():
-            shutil.copy2(engine_rules, control_out / "naming-rules.yml")
 
     # Copy desired-state content into platform workspace; never delete source.
     for item in source.iterdir():
@@ -134,12 +130,12 @@ def plan_tenant_identity_migration(args: argparse.Namespace) -> int:
     tenants_path = Path(args.tenants_file)
     doc = load_yaml(tenants_path)
     tenants = doc.get("tenants") or []
-    current = next((t for t in tenants if t.get("org_id") == args.from_org_id), None)
+    current = next((t for t in tenants if t.get("tenant_id") == args.from_tenant_id), None)
     if current is None:
-        raise SystemExit(f"Tenant {args.from_org_id} not found")
+        raise SystemExit(f"Tenant {args.from_tenant_id} not found")
 
     immutable = {
-        "org_id": current.get("org_id"),
+        "tenant_id": current.get("tenant_id"),
         "aap_organization": current.get("aap_organization"),
         "tenant_scm_org": current.get("tenant_scm_org"),
         "repo_pattern": current.get("repo_pattern"),
@@ -150,8 +146,8 @@ def plan_tenant_identity_migration(args: argparse.Namespace) -> int:
     digest = hashlib.sha256(json.dumps(immutable, sort_keys=True).encode()).hexdigest()[:16]
 
     proposed = dict(current)
-    if args.to_org_id:
-        proposed["org_id"] = args.to_org_id
+    if args.to_tenant_id:
+        proposed["tenant_id"] = args.to_tenant_id
     if args.to_scm_org:
         proposed["tenant_scm_org"] = args.to_scm_org
     if args.to_repo_name:
@@ -164,7 +160,7 @@ def plan_tenant_identity_migration(args: argparse.Namespace) -> int:
         "migration": "tenant_identity_repository",
         "from": immutable,
         "to": {
-            "org_id": proposed.get("org_id"),
+            "tenant_id": proposed.get("tenant_id"),
             "aap_organization": proposed.get("aap_organization"),
             "tenant_scm_org": proposed.get("tenant_scm_org"),
             "repo_pattern": proposed.get("repo_pattern"),
@@ -189,7 +185,7 @@ def plan_tenant_identity_migration(args: argparse.Namespace) -> int:
     }
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"tenant-migration-{args.from_org_id}.json").write_text(
+    (out / f"tenant-migration-{args.from_tenant_id}.json").write_text(
         json.dumps(plan, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(plan, indent=2))
@@ -213,8 +209,8 @@ def main() -> int:
 
     tenant = sub.add_parser("tenant-identity", help="Generate tenant identity/repository migration plan")
     tenant.add_argument("--tenants-file", required=True)
-    tenant.add_argument("--from-org-id", required=True)
-    tenant.add_argument("--to-org-id", default="")
+    tenant.add_argument("--from-tenant-id", required=True)
+    tenant.add_argument("--to-tenant-id", default="")
     tenant.add_argument("--to-scm-org", default="")
     tenant.add_argument("--to-repo-name", default="")
     tenant.add_argument("--to-aap-organization", default="")

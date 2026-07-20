@@ -3,12 +3,12 @@
 # This file belongs in base/workflows/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/workflows/.
 controller_workflows:
-  - name: wfjt-{{ org_id }}-example
+  - name: wfjt-{{ tenant_id }}-example
     description: "Example workflow — replace with your orchestration use-case"
-    organization: org-{{ org_id }}
+    organization: {{ _effective_aap_organization | to_json }}
     simplified_workflow_nodes:
       - identifier: node-start
-        unified_job_template: jt-{{ org_id }}-example
+        unified_job_template: jt-{{ tenant_id }}-example
         success_nodes: []
         failure_nodes: []
         always_nodes: []

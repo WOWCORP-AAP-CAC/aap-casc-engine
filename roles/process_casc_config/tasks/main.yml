@@ -29,6 +29,18 @@
     file: "{{ casc_resource_types_file }}"
     name: _resource_types_meta
 
+- name: "Reject unsupported explicit deletion before processing"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ playbook_dir }}/scripts/pipeline/casc_runtime.py"
+      - validate-deletions
+      - --root
+      - "{{ repo_clone_dir }}"
+      - --resource-types
+      - "{{ casc_resource_types_file }}"
+  changed_when: false
+
 - name: "Detect repo layout (folder-based vs flat-file)"
   ansible.builtin.stat:
     path: "{{ repo_clone_dir }}/base"

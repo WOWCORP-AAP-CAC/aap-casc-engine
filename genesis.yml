@@ -17,7 +17,7 @@
 # Usage (via AAP Job Template):
 #   JT extra vars: scm_base_url, control_scm_org, control_repo, control_branch,
 #                  platform_scm_org, platform_repo_pattern, platform_repo,
-#                  default_organization, env_branch_map (optional override)
+#                  env_branch_map (optional override)
 #   Credential: crd-platform-scm_token (injects SCM_TOKEN)
 
 - name: "AAP Multi-Tenant CasC Engine — Platform Genesis"
@@ -48,9 +48,7 @@
     repo_pattern: "{{ platform_repo_pattern }}"
     repo_mode: "{{ lookup('env', 'REPO_MODE') | default('create', true) }}"
     platform_repo: "{{ lookup('env', 'PLATFORM_REPO') | default('casc-platform-global', true) }}"
-    # Optional per-resource-type name overrides. Accepts either:
-    #   - mapping keyed by resource folder (organizations, teams, ...)
-    #   - list of names in _platform_type_folders order
+    # Optional per-resource-type names use one folder-to-repository mapping.
     # Provided via PLATFORM_REPO_NAMES_JSON or JT extra var platform_repo_names.
     platform_repo_names: "{{ lookup('env', 'PLATFORM_REPO_NAMES_JSON') | default('{}', true) | from_json }}"
 
@@ -59,17 +57,13 @@
     platform_namespace_id: "{{ lookup('env', 'PLATFORM_NAMESPACE_ID') | default('') }}"
     control_namespace_id: "{{ lookup('env', 'CONTROL_NAMESPACE_ID') | default(lookup('env', 'PLATFORM_NAMESPACE_ID') | default('', true), true) }}"
 
-    # Day-0 overrides — provided via JT extra_vars or survey.
-    default_organization: "{{ lookup('env', 'DEFAULT_ORGANIZATION') | default('Default') }}"
+    # Day-0 environment topology — provided via JT extra_vars or survey.
     env_branch_map:
       dev: develop
       tst: release/tst
       npr: release/npr
       prd: main
 
-    # platform_branch is the highest environment branch used to seed desired state.
-    # It is derived from the ordered environment map unless explicitly provided.
-    platform_branch: "{{ lookup('env', 'PLATFORM_BRANCH') | default(env_branch_map.values() | list | last, true) }}"
     create_missing_env_branches: "{{ lookup('env', 'CREATE_MISSING_ENV_BRANCHES') | default(true, true) | bool }}"
     bootstrap_dispatch_fanout: "{{ lookup('env', 'BOOTSTRAP_DISPATCH_FANOUT') | default(true, true) | bool }}"
     genesis_jt_name: "{{ lookup('env', 'GENESIS_JT_NAME') | default('jt-platform-genesis', true) }}"
@@ -105,12 +99,12 @@
         template: "templates/seed-aap-organizations.yml.j2"
       - name: aap-teams-global
         casc_key: aap_teams
-        description: "Team definitions (populated by bootstrap)"
+        description: "Team definitions"
         folder: teams
         template: "templates/seed-aap-teams.yml.j2"
       - name: aap-users-global
         casc_key: aap_user_accounts
-        description: "User account definitions (populated by bootstrap)"
+        description: "User account definitions"
         folder: users
         template: "templates/seed-aap-users.yml.j2"
       - name: gateway-role_definitions-global
@@ -120,12 +114,12 @@
         template: "templates/seed-gateway-role_definitions.yml.j2"
       - name: gateway-role_user_assignments-global
         casc_key: gateway_role_user_assignments
-        description: "User-to-role RBAC assignments (populated by bootstrap)"
+        description: "User-to-role RBAC assignments"
         folder: rbac_user_assignments
         template: "templates/seed-gateway-rbac_user_assignments.yml.j2"
       - name: gateway-role_team_assignments-global
         casc_key: gateway_role_team_assignments
-        description: "Team-to-role RBAC assignments (populated by bootstrap)"
+        description: "Team-to-role RBAC assignments"
         folder: rbac_team_assignments
         template: "templates/seed-gateway-rbac_team_assignments.yml.j2"
       - name: controller-credential_types-global
@@ -153,9 +147,7 @@
     # ── Compute effective values ───────────────────────────────────────────
     - name: "Compute effective configuration values"
       ansible.builtin.set_fact:
-        _effective_default_org: "{{ default_organization }}"
         _effective_env_branch_map: "{{ env_branch_map }}"
-        _effective_platform_branch: "{{ platform_branch }}"
         _desired_state_seed_branch: "{{ env_branch_map.values() | list | last }}"
 
     - name: "Validate and normalize platform_repo_names (fail closed)"
@@ -203,10 +195,6 @@
     - name: "Render tenants.yml content"
       ansible.builtin.set_fact:
         _tenants_yml_content: "{{ lookup('template', 'templates/seed-tenants.yml.j2') }}"
-
-    - name: "Render naming-rules.yml content"
-      ansible.builtin.set_fact:
-        _naming_rules_yml_content: "{{ lookup('template', 'templates/naming-rules.yml.j2') }}"
 
     # ── Validation ─────────────────────────────────────────────────────────
     - name: "Validate required inputs"
@@ -269,7 +257,9 @@
           GitLab Genesis requires platform_namespace_id and control_namespace_id.
           When control_scm_org differs from platform_scm_org, set CONTROL_NAMESPACE_ID
           to the numeric ID of the control group (must not equal PLATFORM_NAMESPACE_ID).
-      when: scm_provider == 'gitlab'
+      when:
+        - scm_provider == 'gitlab'
+        - repo_mode == 'create'
 
     - name: "Validate env_branch_map structure"
       ansible.builtin.assert:
@@ -317,7 +307,6 @@
           Provider:       {{ scm_provider }}
           Platform Org:   {{ platform_scm_org }}
           Engine Repo:    {{ engine_repo }}
-          Default Org:    {{ _effective_default_org }}
           Repo Pattern:   {{ repo_pattern }}
           Visibility:     {{ repo_visibility }}
           Control Repo:   {{ control_scm_org }}/{{ control_repo }} ({{ control_branch }})
@@ -343,7 +332,7 @@
           Repo Pattern:    {{ repo_pattern }}
           Repos Created:   {{ genesis_repos | length }}
           Control Repo:    {{ control_repo }}
-          Control Files:   config.yml, tenants.yml, naming-rules.yml (in {{ control_repo }})
+          Control Files:   config.yml, tenants.yml (optional naming-rules.yml is customer-owned)
           CI/CD Seeded:    {{ '.github/workflows/casc.yml' if scm_provider == 'github' else '.gitlab-ci.yml' }}
           ══════════════════════════════════════════════════════
           Next steps:

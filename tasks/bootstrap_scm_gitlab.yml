@@ -1,134 +1,202 @@
 ---
-# bootstrap_scm_gitlab.yml — GitLab-specific SCM operations for tenant bootstrap
-#
-# Bootstrap reads/writes control metadata only in the control repository. It
-# writes platform foundation YAML only for greenfield tenants; brownfield
-# onboarding scaffolds SCM without applying a foundation declaration.
-#
-# All operations are idempotent — safe to rerun.
-#
-# Required variables:
-#   platform_scm_org, platform_repo, platform_repo_id,
-#   tenant_scm_org, tenant_scm_namespace_id,
-#   scm_base_url, scm_api_token, org_id, team_name,
-#   _effective_team_group, team_lead, team_lead_user_id,
-#   tenant_repos, repo_pattern, engine_repo
+# GitLab Bootstrap provider implementation. It mirrors the GitHub ownership,
+# branch, foundation, caller, marker, and survey-fallback contracts.
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 1: Push org + team YAML to platform repo(s) (folder-based paths)
-#   - combined: writes to platform_repo at base/organizations/ and base/teams/
-#   - per-resource-type: writes to aap-organizations-global and aap-teams-global
-# ═══════════════════════════════════════════════════════════════════════════
-
-- name: "GL – Resolve platform repo project ID (if not provided)"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ platform_repo) | urlencode() | replace('/', '%2F') }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-  register: _gl_platform_project
-  when:
-    - onboarding_mode == 'greenfield'
-    - platform_repo_id | default('') | length == 0
-
-- name: "GL – Set effective platform project ID"
+- name: "GL - Build Greenfield foundation targets"
   ansible.builtin.set_fact:
-    _effective_platform_id: "{{ platform_repo_id if platform_repo_id | default('') | length > 0 else _gl_platform_project.json.id }}"
+    _foundation_files:
+      - repo: "{{ _platform_repo_lookup.organizations if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+        path: "{{ 'base/' + _effective_tenant_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/organizations/' + _effective_tenant_id + '.yml' }}"
+        content: "{{ _org_foundation_content }}"
+        label: organization
+      - repo: "{{ _platform_repo_lookup.teams if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
+        path: "{{ 'base/' + _effective_tenant_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/teams/' + _effective_tenant_id + '.yml' }}"
+        content: "{{ _team_foundation_content }}"
+        label: team
   when: onboarding_mode == 'greenfield'
 
-- name: "GL – Compute platform target repos and paths"
-  ansible.builtin.set_fact:
-    _org_target_repo: "{{ _platform_repo_lookup.organizations | default('aap-organizations-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-    _team_target_repo: "{{ _platform_repo_lookup.teams | default('aap-teams-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-    _org_target_path: "{{ 'base/org-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/organizations/org-' + org_id + '.yml' }}"
-    _team_target_path: "{{ 'base/team-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/teams/team-' + org_id + '.yml' }}"
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Resolve per-resource-type org project ID"
+- name: "GL - Check requested tenant projects"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ _org_target_repo) | urlencode() | replace('/', '%2F') }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-  register: _gl_org_project
-  when:
-    - onboarding_mode == 'greenfield'
-    - platform_repo_pattern == 'per-resource-type'
-
-- name: "GL – Resolve per-resource-type team project ID"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ _team_target_repo) | urlencode() | replace('/', '%2F') }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-  register: _gl_team_project
-  when:
-    - onboarding_mode == 'greenfield'
-    - platform_repo_pattern == 'per-resource-type'
-
-- name: "GL – Set effective target project IDs for org/team"
-  ansible.builtin.set_fact:
-    _org_project_id: "{{ _gl_org_project.json.id if platform_repo_pattern == 'per-resource-type' else _effective_platform_id }}"
-    _team_project_id: "{{ _gl_team_project.json.id if platform_repo_pattern == 'per-resource-type' else _effective_platform_id }}"
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Check if org YAML already exists"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _org_project_id }}/repository/files/{{ _org_target_path | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ (tenant_scm_org ~ '/' ~ item) | urlencode() | replace('/', '%2F') }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     status_code: [200, 404]
-  register: _gl_org_file
-  when: onboarding_mode == 'greenfield'
+  loop: "{{ _tenant_repositories }}"
+  register: _gl_repo_preflight
 
-- name: "GL – Push organization YAML to platform"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _org_project_id }}/repository/files/{{ _org_target_path | urlencode() | replace('/', '%2F') }}"
-    method: "{{ 'PUT' if _gl_org_file.status == 200 else 'POST' }}"
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ _desired_state_seed_branch }}"
-      content: "{{ lookup('template', 'templates/org-template.yml.j2') }}"
-      commit_message: "Bootstrap: {{ 'update' if _gl_org_file.status == 200 else 'add' }} organization org-{{ org_id }} [skip ci]"
-    status_code: [200, 201]
-  vars:
-    org_name: "org-{{ org_id }}"
-    org_description: "{{ team_name }} automation organization"
-    org_default_ee: "{{ default_ee }}"
-  when: onboarding_mode == 'greenfield'
+- name: "GL - Require every pre-created tenant project"
+  ansible.builtin.assert:
+    that:
+      - item.status == 200
+    fail_msg: "repo_mode=existing requires pre-created project {{ tenant_scm_org }}/{{ item.item }}."
+  loop: "{{ _gl_repo_preflight.results }}"
+  when: repo_mode == 'existing'
 
-- name: "GL – Check if team YAML already exists"
+- name: "GL - Build existing project records"
+  ansible.builtin.set_fact:
+    _gl_existing_projects: >-
+      {{ _gl_existing_projects | default([])
+         + [{'name': item.item,
+             'id': item.json.id,
+             'default_branch': item.json.default_branch}] }}
+  loop: "{{ _gl_repo_preflight.results }}"
+  when: (item.status | default(0)) == 200
+
+- name: "GL - Require repositories to pre-exist when branch creation is disabled"
+  ansible.builtin.assert:
+    that:
+      - item.status == 200
+    fail_msg: >-
+      create_missing_env_branches=false requires pre-created project
+      {{ tenant_scm_org }}/{{ item.item }} with every mapped branch.
+  loop: "{{ _gl_repo_preflight.results }}"
+  when: not _create_missing_env_branches | bool
+
+- name: "GL - Check scaffold markers on all existing mapped branches"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _team_project_id }}/repository/files/{{ _team_target_path | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.id }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     status_code: [200, 404]
-  register: _gl_team_file
-  when: onboarding_mode == 'greenfield'
+  loop: "{{ (_gl_existing_projects | default([])) | product(_mapped_branches) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}@{{ item.1 }}"
+  register: _gl_marker_preflight
 
-- name: "GL – Push team YAML to platform"
+- name: "GL - Validate every existing scaffold marker"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ playbook_dir }}/scripts/pipeline/casc_runtime.py"
+      - scaffold-marker
+      - --tenant-json
+      - "{{ _tenant_runtime | to_json }}"
+      - --repository
+      - "{{ item.item.0.name }}"
+      - --resource-type
+      - "{{ (_tenant_repo_records | selectattr('name', 'equalto', item.item.0.name) | first).resource_type }}"
+      - --actual-json
+      - "{{ (item.json.content | b64decode | from_yaml) | to_json }}"
+  loop: "{{ _gl_marker_preflight.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.0.name }}@{{ item.item.1 }}"
+  when: (item.status | default(0)) == 200
+  changed_when: false
+
+- name: "GL - Check scaffold markers on existing project default branches"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _team_project_id }}/repository/files/{{ _team_target_path | urlencode() | replace('/', '%2F') }}"
-    method: "{{ 'PUT' if _gl_team_file.status == 200 else 'POST' }}"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.id }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}?ref={{ item.default_branch | urlencode }}"
+    method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ _desired_state_seed_branch }}"
-      content: "{{ lookup('template', 'templates/team-template.yml.j2') }}"
-      commit_message: "Bootstrap: {{ 'update' if _gl_team_file.status == 200 else 'add' }} team for org-{{ org_id }} [skip ci]"
-    status_code: [200, 201]
+    status_code: [200, 404]
+  loop: "{{ _gl_existing_projects | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}@{{ item.default_branch }}"
+  register: _gl_default_marker_preflight
+  when: item.default_branch | default('') | length > 0
+
+- name: "GL - Validate every existing default-branch scaffold marker"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ playbook_dir }}/scripts/pipeline/casc_runtime.py"
+      - scaffold-marker
+      - --tenant-json
+      - "{{ _tenant_runtime | to_json }}"
+      - --repository
+      - "{{ item.item.name }}"
+      - --resource-type
+      - "{{ (_tenant_repo_records | selectattr('name', 'equalto', item.item.name) | first).resource_type }}"
+      - --actual-json
+      - "{{ (item.json.content | b64decode | from_yaml) | to_json }}"
+  loop: "{{ _gl_default_marker_preflight.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}@{{ item.item.default_branch }}"
+  when: (item.status | default(0)) == 200
+  changed_when: false
+
+- name: "GL - Check existing environment branches"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.id }}/repository/branches/{{ item.1 | urlencode() | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404, 409]
+  loop: "{{ (_gl_existing_projects | default([])) | product(_mapped_branches) | list }}"
+  register: _gl_branch_preflight
+
+- name: "GL - Fail when branch creation is disabled and a branch is missing"
+  ansible.builtin.assert:
+    that:
+      - item.status == 200
+    fail_msg: >-
+      Required branch {{ item.item.1 }} is missing from {{ tenant_scm_org }}/{{ item.item.0.name }}
+      and create_missing_env_branches=false.
+  loop: "{{ _gl_branch_preflight.results | default([]) }}"
+  when:
+    - not _create_missing_env_branches | bool
+
+- name: "GL - Resolve Greenfield foundation projects"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ item.repo) | urlencode() | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  loop: "{{ _foundation_files | default([]) }}"
+  register: _gl_foundation_projects
   when: onboarding_mode == 'greenfield'
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 2: Create tenant CasC repositories (tolerates already-exists)
-# ═══════════════════════════════════════════════════════════════════════════
+- name: "GL - Check every existing foundation target before any foundation write"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.json.id }}/repository/files/{{ item.0.item.path | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ (_gl_foundation_projects.results | default([])) | product(_mapped_branches) | list }}"
+  loop_control:
+    label: "{{ item.0.item.repo }}@{{ item.1 }}:{{ item.0.item.path }}"
+  register: _gl_foundation_preflight
+  when: onboarding_mode == 'greenfield'
 
-- name: "GL – Create tenant repos in GitLab namespace {{ tenant_scm_namespace_id }}"
+- name: "GL - Require every Greenfield platform branch before tenant mutation"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.json.id }}/repository/branches/{{ item.1 | urlencode() | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ (_gl_foundation_projects.results | default([])) | product(_mapped_branches) | list }}"
+  loop_control:
+    label: "{{ item.0.item.repo }}@{{ item.1 }}"
+  register: _gl_platform_branch_preflight
+  when: onboarding_mode == 'greenfield'
+
+- name: "GL - Fail when a required Greenfield platform branch is missing"
+  ansible.builtin.assert:
+    that:
+      - item.status == 200
+    fail_msg: >-
+      Required platform branch {{ item.item.1 }} is missing from
+      {{ platform_scm_org }}/{{ item.item.0.item.repo }}. Run Genesis branch convergence first.
+  loop: "{{ _gl_platform_branch_preflight.results | default([]) }}"
+  when: onboarding_mode == 'greenfield'
+
+- name: "GL - Reject occupied foundation paths with different content"
+  ansible.builtin.assert:
+    that:
+      - item.status == 404 or (item.json.content | b64decode) == item.item.0.item.content
+    fail_msg: >-
+      Foundation path {{ item.item.0.item.repo }}@{{ item.item.1 }}:{{ item.item.0.item.path }}
+      already contains different content. Refusing to take ownership.
+  loop: "{{ _gl_foundation_preflight.results | default([]) }}"
+  when: onboarding_mode == 'greenfield'
+
+# Mutation begins only after all preflight checks above pass.
+- name: "GL - Create missing tenant projects"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects"
     method: POST
@@ -136,265 +204,356 @@
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      name: "{{ item }}"
+      name: "{{ item.item }}"
       namespace_id: "{{ tenant_scm_namespace_id }}"
       visibility: "{{ repo_visibility }}"
       initialize_with_readme: true
-    status_code: [200, 201, 400]
-  failed_when: >-
-    _gl_created_repos.status == 400 and
-    'has already been taken' not in (_gl_created_repos.json | default({}) | string)
-  loop: "{{ tenant_repos }}"
-  register: _gl_created_repos
-  when: repo_mode == 'create'
+    status_code: [200, 201]
+  loop: "{{ _gl_repo_preflight.results }}"
+  when:
+    - repo_mode == 'create'
+    - item.status == 404
 
-- name: "GL – Look up project IDs for tenant repos"
+- name: "GL - Resolve all tenant projects"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects/{{ (tenant_scm_org ~ '/' ~ item) | urlencode() | replace('/', '%2F') }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
-  loop: "{{ tenant_repos }}"
+  loop: "{{ _tenant_repositories }}"
   register: _gl_tenant_projects
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 3: Seed repos with pipeline + example YAML (folder-based structure)
-#   Seeding BEFORE env branch creation ensures branches inherit these files.
-# ═══════════════════════════════════════════════════════════════════════════
-
-- name: "GL – Check if CI config already exists in tenant repos"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/.gitlab-ci.yml?ref={{ item.json.default_branch | default('main') | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
+- name: "GL - Index tenant project IDs"
+  ansible.builtin.set_fact:
+    _gl_tenant_project_by_name: >-
+      {{ _gl_tenant_project_by_name | default({}) | combine({item.item: item.json.id}) }}
   loop: "{{ _gl_tenant_projects.results }}"
-  loop_control:
-    label: "{{ item.json.name }}"
-  register: _gl_ci_checks
 
-- name: "GL – Seed GitLab CI include in each tenant repo"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.json.id }}/repository/files/.gitlab-ci.yml"
-    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ item.item.json.default_branch | default('main') }}"
-      content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
-      commit_message: "Bootstrap: shared pipeline template [skip ci]"
-    status_code: [200, 201]
-  vars:
-    caller_role: tenant
-  loop: "{{ _gl_ci_checks.results }}"
-  loop_control:
-    label: "{{ item.item.json.name }}"
-
-- name: "GL – Build repo name to project data lookup"
+- name: "GL - Compute high-to-low branch topology"
   ansible.builtin.set_fact:
-    _gl_tenant_lookup: "{{ _gl_tenant_lookup | default({}) | combine({item.json.name: {'id': item.json.id, 'branch': item.json.default_branch | default('main')}}) }}"
-  loop: "{{ _gl_tenant_projects.results }}"
-  loop_control:
-    label: "{{ item.json.name }}"
-
-- name: "GL – Initialize seed item lists"
-  ansible.builtin.set_fact:
-    _seed_items: []
-    _env_seed_items: []
-
-- name: "GL – Build base/<type>/example.yml.sample seed list"
-  ansible.builtin.set_fact:
-    _seed_items: "{{ _seed_items + [{'project_id': _gl_tenant_lookup[_tenant_repo_by_folder[item.folder]].id, 'branch': _gl_tenant_lookup[_tenant_repo_by_folder[item.folder]].branch, 'path': 'base/' + item.folder + '/example.yml.sample', 'template': item.template, 'folder': item.folder}] }}"
-  loop: "{{ _tenant_types }}"
-
-- name: "GL – Check if base seed files exist"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.project_id }}/repository/files/{{ item.path | urlencode() | replace('/', '%2F') }}?ref={{ item.branch | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
-  loop: "{{ _seed_items }}"
-  loop_control:
-    label: "{{ item.path }}"
-  register: _gl_seed_checks
-
-- name: "GL – Seed example YAML in base/<type>/ folders"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.project_id }}/repository/files/{{ item.item.path | urlencode() | replace('/', '%2F') }}"
-    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ item.item.branch }}"
-      content: "{{ lookup('template', item.item.template) }}"
-      commit_message: "Bootstrap: add {{ item.item.folder }} example YAML (rename to .yml to activate) [skip ci]"
-    status_code: [200, 201]
-  loop: "{{ _gl_seed_checks.results }}"
-  loop_control:
-    label: "{{ item.item.path }}"
-
-# --- Seed <env>/<type>/.gitkeep for multi-env layout (from env_branch_map) ---
-
-- name: "GL – Build <env>/<type>/.gitkeep seed list"
-  ansible.builtin.set_fact:
-    _env_seed_items: "{{ _env_seed_items + [{'project_id': _gl_tenant_lookup[_tenant_repo_by_folder[item.0.folder]].id, 'branch': _gl_tenant_lookup[_tenant_repo_by_folder[item.0.folder]].branch, 'path': item.1 + '/' + item.0.folder + '/.gitkeep', 'label': item.1 + '/' + item.0.folder}] }}"
-  loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
-  loop_control:
-    label: "{{ item.1 }}/{{ item.0.folder }}"
-
-- name: "GL – Check if env folder .gitkeep files exist"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.project_id }}/repository/files/{{ item.path | urlencode() | replace('/', '%2F') }}?ref={{ item.branch | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
-  loop: "{{ _env_seed_items }}"
-  loop_control:
-    label: "{{ item.path }}"
-  register: _gl_env_seed_checks
-
-- name: "GL – Seed .gitkeep in <env>/<type>/ folders"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.project_id }}/repository/files/{{ item.item.path | urlencode() | replace('/', '%2F') }}"
-    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ item.item.branch }}"
-      content: ""
-      commit_message: "Bootstrap: create {{ item.item.label }}/ env folder [skip ci]"
-    status_code: [200, 201]
-  loop: "{{ _gl_env_seed_checks.results }}"
-  loop_control:
-    label: "{{ item.item.path }}"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 3b: Create environment branches high-to-low (if enabled)
-#   Seed content lands on the default branch tip. Ensure the highest mapped
-#   branch points at that tip, then create each lower branch from the seeded
-#   high branch tip so promotion topology matches Genesis/docs.
-# ═══════════════════════════════════════════════════════════════════════════
-
-- name: "GL – Compute tenant env branches high-to-low"
-  ansible.builtin.set_fact:
-    _tenant_env_branches_high_to_low: "{{ _env_branch_map.values() | list | reverse | list }}"
-    _tenant_highest_env_branch: "{{ _env_branch_map.values() | list | last }}"
-    _tenant_lower_env_branches: "{{ (_env_branch_map.values() | list | reverse | list)[1:] }}"
+    _tenant_highest_env_branch: "{{ _mapped_branches | last }}"
+    _tenant_lower_env_branches: "{{ (_mapped_branches | reverse | list)[1:] }}"
   when: _create_missing_env_branches | bool
 
-- name: "GL – Ensure highest mapped branch exists from seeded tip"
+- name: "GL - Initialize empty tenant projects with their immutable marker"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ _tenant_highest_env_branch }}"
+      content: "{{ _marker_content }}"
+      commit_message: "Bootstrap: initialize tenant scaffold identity [skip ci]"
+    status_code: [200, 201]
+  vars:
+    _current_scaffold_marker: "{{ _scaffold_markers[item.item] }}"
+    _marker_content: "{{ lookup('template', 'templates/tenant-scaffold.yml.j2') }}"
+  loop: "{{ _gl_tenant_projects.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - _create_missing_env_branches | bool
+    - item.json.empty_repo | default(false) | bool
+
+- name: "GL - Refresh initialized tenant projects"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ (tenant_scm_org ~ '/' ~ item) | urlencode() | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  loop: "{{ _tenant_repositories }}"
+  register: _gl_tenant_projects
+  retries: 5
+  delay: 1
+  until: not (_gl_tenant_projects.json.empty_repo | default(false) | bool)
+  when: _create_missing_env_branches | bool
+
+- name: "GL - Ensure highest environment branch from seeded tip"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/branches"
     method: POST
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: form-urlencoded
+    body_format: json
     body:
       branch: "{{ _tenant_highest_env_branch }}"
-      ref: "{{ item.json.default_branch | default('main') }}"
+      ref: "{{ item.json.default_branch }}"
     status_code: [200, 201, 400]
   failed_when: >-
     _gl_high_branch_result.status == 400 and
-    'already exists' not in (_gl_high_branch_result.json.message | default(''))
+    'already exists' not in (_gl_high_branch_result.json.message | default('') | lower)
   loop: "{{ _gl_tenant_projects.results }}"
-  loop_control:
-    label: "{{ item.json.name }}:{{ _tenant_highest_env_branch }}"
   register: _gl_high_branch_result
   when:
     - _create_missing_env_branches | bool
-    - (item.json.default_branch | default('main')) != _tenant_highest_env_branch
+    - item.json.default_branch != _tenant_highest_env_branch
 
-- name: "GL – Create lower environment branches from seeded high branch tip"
+- name: "GL - Create lower branches from the highest branch"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.json.id }}/repository/branches"
     method: POST
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: form-urlencoded
+    body_format: json
     body:
       branch: "{{ item.1 }}"
       ref: "{{ _tenant_highest_env_branch }}"
     status_code: [200, 201, 400]
   failed_when: >-
-    _gl_env_branch_result.status == 400 and
-    'already exists' not in (_gl_env_branch_result.json.message | default(''))
-  loop: "{{ _gl_tenant_projects.results | product(_tenant_lower_env_branches) | list }}"
-  loop_control:
-    label: "{{ item.0.json.name }}:{{ item.1 }}"
-  register: _gl_env_branch_result
+    _gl_lower_branch_result.status == 400 and
+    'already exists' not in (_gl_lower_branch_result.json.message | default('') | lower)
+  loop: "{{ _gl_tenant_projects.results | product(_tenant_lower_env_branches | default([])) | list }}"
+  register: _gl_lower_branch_result
   when: _create_missing_env_branches | bool
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 4: Set repository permissions (tolerates already-member)
-# ═══════════════════════════════════════════════════════════════════════════
-
-- name: "GL – Grant tenant team maintainer access"
+- name: "GL - Recheck scaffold markers after branch convergence"
   ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/members"
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0.name] }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _tenant_repo_records | product(_mapped_branches) | list }}"
+  register: _gl_marker_checks
+
+- name: "GL - Write missing immutable scaffold markers before content scaffolding"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.item.0.name] }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}"
     method: POST
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
     body_format: json
     body:
-      user_id: "{{ team_lead_user_id }}"
-      access_level: 40
-    status_code: [200, 201, 409]
-  loop: "{{ _gl_tenant_projects.results }}"
-  loop_control:
-    label: "{{ item.json.name }}"
-  when: team_lead_user_id | default('') | length > 0
+      branch: "{{ item.item.1 }}"
+      content: "{{ _marker_content }}"
+      commit_message: "Bootstrap: record tenant scaffold identity [skip ci]"
+    status_code: [200, 201]
+  vars:
+    _current_scaffold_marker: "{{ _scaffold_markers[item.item.0.name] }}"
+    _marker_content: "{{ lookup('template', 'templates/tenant-scaffold.yml.j2') }}"
+  loop: "{{ _gl_marker_checks.results }}"
+  when: item.status == 404
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 5: Update tenants.yml in the control repo (dedup-safe)
-# ═══════════════════════════════════════════════════════════════════════════
+- name: "GL - Build tenant scaffold file inventory"
+  ansible.builtin.set_fact:
+    _tenant_scaffold_files: []
 
-- name: "GL – Resolve control repository project ID"
+- name: "GL - Add examples to scaffold inventory"
+  ansible.builtin.set_fact:
+    _tenant_scaffold_files: >-
+      {{ _tenant_scaffold_files
+         + [{'repo': _tenant_repo_by_folder[item.folder],
+             'path': ('base/' + item.folder + '/example.yml.sample'
+                      if repo_pattern == 'combined' else 'base/example.yml.sample'),
+             'content': lookup('template', item.template),
+             'kind': 'example'}] }}
+  loop: "{{ _tenant_types }}"
+
+- name: "GL - Add environment folders to scaffold inventory"
+  ansible.builtin.set_fact:
+    _tenant_scaffold_files: >-
+      {{ _tenant_scaffold_files
+         + [{'repo': _tenant_repo_by_folder[item.0.folder],
+             'path': (item.1 + '/' + item.0.folder + '/.gitkeep'
+                      if repo_pattern == 'combined' else item.1 + '/.gitkeep'),
+             'content': '',
+             'kind': 'folder'}] }}
+  loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
+
+- name: "GL - Check thin callers on every mapped branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0] }}/repository/files/{{ '.gitlab-ci.yml' | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _tenant_repositories | product(_mapped_branches) | list }}"
+  register: _gl_caller_checks
+
+- name: "GL - Converge thin callers on every mapped branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.item.0] }}/repository/files/{{ '.gitlab-ci.yml' | urlencode() | replace('/', '%2F') }}"
+    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ item.item.1 }}"
+      content: "{{ _caller_content }}"
+      commit_message: "Bootstrap: converge CasC thin caller [skip ci]"
+    status_code: [200, 201]
+  vars:
+    caller_role: tenant
+    _caller_content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
+  loop: "{{ _gl_caller_checks.results }}"
+  when: item.status == 404 or (item.json.content | b64decode) != _caller_content
+
+- name: "GL - Check scaffold examples and folders on every branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0.repo] }}/repository/files/{{ item.0.path | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _tenant_scaffold_files | product(_mapped_branches) | list }}"
+  register: _gl_scaffold_checks
+
+- name: "GL - Create missing scaffold examples and folders"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.item.0.repo] }}/repository/files/{{ item.item.0.path | urlencode() | replace('/', '%2F') }}"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ item.item.1 }}"
+      content: "{{ item.item.0.content }}"
+      commit_message: "Bootstrap: add managed {{ item.item.0.kind }} scaffold [skip ci]"
+    status_code: [200, 201]
+  loop: "{{ _gl_scaffold_checks.results }}"
+  when: item.status == 404
+
+- name: "GL - Write missing Greenfield foundation files on every mapped branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.0.json.id }}/repository/files/{{ item.item.0.item.path | urlencode() | replace('/', '%2F') }}"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ item.item.1 }}"
+      content: "{{ item.item.0.item.content }}"
+      commit_message: "Bootstrap: add {{ item.item.0.item.label }} foundation for {{ _effective_tenant_id }} [skip ci]"
+    status_code: [200, 201]
+  loop: "{{ _gl_foundation_preflight.results | default([]) }}"
+  when:
+    - onboarding_mode == 'greenfield'
+    - item.status == 404
+
+- name: "GL - Verify final scaffold markers"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0.name] }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  loop: "{{ _tenant_repo_records | product(_mapped_branches) | list }}"
+  register: _gl_final_marker_checks
+
+- name: "GL - Validate final scaffold marker content"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ playbook_dir }}/scripts/pipeline/casc_runtime.py"
+      - scaffold-marker
+      - --tenant-json
+      - "{{ _tenant_runtime | to_json }}"
+      - --repository
+      - "{{ item.item.0.name }}"
+      - --resource-type
+      - "{{ item.item.0.resource_type }}"
+      - --actual-json
+      - "{{ (item.json.content | b64decode | from_yaml) | to_json }}"
+  loop: "{{ _gl_final_marker_checks.results }}"
+  changed_when: false
+
+- name: "GL - Verify final thin caller content"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0] }}/repository/files/{{ '.gitlab-ci.yml' | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  loop: "{{ _tenant_repositories | product(_mapped_branches) | list }}"
+  register: _gl_final_caller_checks
+
+- name: "GL - Assert final thin callers match the engine template"
+  ansible.builtin.assert:
+    that:
+      - (item.json.content | b64decode) == _caller_content
+    fail_msg: "Thin caller convergence failed for {{ item.item.0 }}@{{ item.item.1 }}."
+  vars:
+    caller_role: tenant
+    _caller_content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
+  loop: "{{ _gl_final_caller_checks.results }}"
+
+- name: "GL - Verify required scaffold files exist"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0.repo] }}/repository/files/{{ item.0.path | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  loop: "{{ _tenant_scaffold_files | product(_mapped_branches) | list }}"
+
+- name: "GL - Verify final Greenfield foundation content"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.0.json.id }}/repository/files/{{ item.0.item.path | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+  loop: "{{ (_gl_foundation_projects.results | default([])) | product(_mapped_branches) | list }}"
+  register: _gl_final_foundation_checks
+  when: onboarding_mode == 'greenfield'
+
+- name: "GL - Assert final Greenfield foundation content"
+  ansible.builtin.assert:
+    that:
+      - (item.json.content | b64decode) == item.item.0.item.content
+    fail_msg: >-
+      Foundation convergence failed for
+      {{ item.item.0.item.repo }}@{{ item.item.1 }}:{{ item.item.0.item.path }}.
+  loop: "{{ _gl_final_foundation_checks.results | default([]) }}"
+  when: onboarding_mode == 'greenfield'
+
+- name: "GL - Resolve control project for survey fallback"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects/{{ (control_scm_org ~ '/' ~ control_repo) | urlencode() | replace('/', '%2F') }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
   register: _gl_control_project
+  when: not _tenant_registered | bool
 
-- name: "GL – Get current tenants.yml from control repo"
+- name: "GL - Read current tenant registry for survey fallback"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project.json.id }}/repository/files/tenants.yml?ref={{ control_branch | urlencode }}"
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
   register: _gl_tenants_file
+  when: not _tenant_registered | bool
 
-- name: "GL – Parse current tenants.yml"
-  ansible.builtin.set_fact:
-    _current_tenants: "{{ (_gl_tenants_file.json.content | b64decode) | from_yaml }}"
+- name: "GL - Build and validate survey registry candidate"
+  when: not _tenant_registered | bool
+  block:
+    - name: "GL - Build survey registry candidate"
+      ansible.builtin.set_fact:
+        _survey_registry_candidate: >-
+          {{ _current_tenants
+             | combine({'tenants': _current_tenants.tenants | default([])
+                                    + [_tenant_registry_entry]}) }}
+      vars:
+        _current_tenants: "{{ (_gl_tenants_file.json.content | b64decode) | from_yaml }}"
 
-- name: "GL – Check if tenant already registered"
-  ansible.builtin.set_fact:
-    _existing_org_ids: "{{ _current_tenants.tenants | default([]) | map(attribute='org_id') | list }}"
+    - name: "GL - Write survey registry candidate for validation"
+      ansible.builtin.copy:
+        dest: "{{ bootstrap_clone_dir }}/survey-registry-candidate.yml"
+        content: "{{ _survey_registry_candidate | to_nice_yaml(indent=2) }}"
+        mode: "0600"
 
-- name: "GL – Build new tenant entry"
-  ansible.builtin.set_fact:
-    _new_tenant_entry:
-      org_id: "{{ org_id }}"
-      team_name: "{{ team_name }}"
-      team_lead: "{{ team_lead }}"
-      tenant_scm_org: "{{ tenant_scm_org }}"
-      tenant_scm_namespace_id: "{{ tenant_scm_namespace_id }}"
-      repo_pattern: "{{ repo_pattern }}"
-      repo_mode: "{{ repo_mode }}"
-      onboarding_mode: "{{ onboarding_mode }}"
-      dispatch_enabled: "{{ dispatch_enabled | bool }}"
-      tenant_repos: "{{ tenant_repos }}"
-      status: active
-  when: org_id not in _existing_org_ids
+    - name: "GL - Validate latest survey registry candidate"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/scripts/pipeline/casc_runtime.py"
+          - validate-registry
+          - --config
+          - "{{ bootstrap_clone_dir }}/{{ control_repo }}/config.yml"
+          - --tenants
+          - "{{ bootstrap_clone_dir }}/survey-registry-candidate.yml"
+      changed_when: false
 
-- name: "GL – Update tenants.yml with new tenant"
+- name: "GL - Register successful survey Bootstrap"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project.json.id }}/repository/files/tenants.yml"
     method: PUT
@@ -403,150 +562,8 @@
     body_format: json
     body:
       branch: "{{ control_branch }}"
-      content: "{{ _updated_tenants | to_nice_yaml(indent=2) }}"
-      commit_message: "Bootstrap: register tenant {{ org_id }} [skip ci]"
+      content: "{{ _survey_registry_candidate | to_nice_yaml(indent=2) }}"
+      commit_message: "Bootstrap: register tenant {{ _effective_tenant_id }} [skip ci]"
+      last_commit_id: "{{ _gl_tenants_file.json.last_commit_id }}"
     status_code: [200, 201]
-  vars:
-    _updated_tenants: "{{ _current_tenants | combine({'tenants': _current_tenants.tenants | default([]) + [_new_tenant_entry]}) }}"
-  when: _new_tenant_entry is defined
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Step 6: Push RBAC YAML to platform repo(s) on _effective_platform_branch
-#   Uses name-based assignment (no AAP API lookup needed).
-# ═══════════════════════════════════════════════════════════════════════════
-
-- name: "GL – Compute RBAC and user target repos and paths"
-  ansible.builtin.set_fact:
-    _rbac_user_repo: "{{ _platform_repo_lookup.rbac_user_assignments | default('gateway-role_user_assignments-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-    _rbac_team_repo: "{{ _platform_repo_lookup.rbac_team_assignments | default('gateway-role_team_assignments-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-    _user_account_repo: "{{ _platform_repo_lookup.users | default('aap-users-global') if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-    _rbac_user_path: "{{ 'base/rbac-user-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/rbac_user_assignments/rbac-user-' + org_id + '.yml' }}"
-    _rbac_team_path: "{{ 'base/rbac-team-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/rbac_team_assignments/rbac-team-' + org_id + '.yml' }}"
-    _user_account_path: "{{ 'base/user-' + org_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/users/user-' + org_id + '.yml' }}"
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Resolve RBAC user target project ID"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ _rbac_user_repo) | urlencode() | replace('/', '%2F') }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-  register: _gl_rbac_user_project
-  when:
-    - onboarding_mode == 'greenfield'
-    - platform_repo_pattern == 'per-resource-type'
-
-- name: "GL – Resolve RBAC team target project ID"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ _rbac_team_repo) | urlencode() | replace('/', '%2F') }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-  register: _gl_rbac_team_project
-  when:
-    - onboarding_mode == 'greenfield'
-    - platform_repo_pattern == 'per-resource-type'
-
-- name: "GL – Set effective RBAC project IDs"
-  ansible.builtin.set_fact:
-    _rbac_user_project_id: "{{ _gl_rbac_user_project.json.id if platform_repo_pattern == 'per-resource-type' else _effective_platform_id }}"
-    _rbac_team_project_id: "{{ _gl_rbac_team_project.json.id if platform_repo_pattern == 'per-resource-type' else _effective_platform_id }}"
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Check if RBAC user YAML already exists"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _rbac_user_project_id }}/repository/files/{{ _rbac_user_path | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
-  register: _gl_rbac_user_file
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Push RBAC user assignments"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _rbac_user_project_id }}/repository/files/{{ _rbac_user_path | urlencode() | replace('/', '%2F') }}"
-    method: "{{ 'PUT' if _gl_rbac_user_file.status == 200 else 'POST' }}"
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ _desired_state_seed_branch }}"
-      content: "{{ lookup('template', 'templates/rbac-user-template.yml.j2') }}"
-      commit_message: "Bootstrap: RBAC user assignments for org-{{ org_id }} [skip ci]"
-    status_code: [200, 201]
-  vars:
-    admin_user: "{{ team_lead }}"
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Check if RBAC team YAML already exists"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _rbac_team_project_id }}/repository/files/{{ _rbac_team_path | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
-  register: _gl_rbac_team_file
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Push RBAC team assignments"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _rbac_team_project_id }}/repository/files/{{ _rbac_team_path | urlencode() | replace('/', '%2F') }}"
-    method: "{{ 'PUT' if _gl_rbac_team_file.status == 200 else 'POST' }}"
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ _desired_state_seed_branch }}"
-      content: "{{ lookup('template', 'templates/rbac-team-template.yml.j2') }}"
-      commit_message: "Bootstrap: RBAC team assignments for org-{{ org_id }} [skip ci]"
-    status_code: [200, 201]
-  vars:
-    dev_team: "{{ _effective_team_group }}"
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Resolve user account target project ID"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ (platform_scm_org ~ '/' ~ _user_account_repo) | urlencode() | replace('/', '%2F') }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-  register: _gl_user_account_project
-  when:
-    - onboarding_mode == 'greenfield'
-    - platform_repo_pattern == 'per-resource-type'
-
-- name: "GL – Set effective user account project ID"
-  ansible.builtin.set_fact:
-    _user_account_project_id: "{{ _gl_user_account_project.json.id if platform_repo_pattern == 'per-resource-type' else _effective_platform_id }}"
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Check if user account YAML already exists"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _user_account_project_id }}/repository/files/{{ _user_account_path | urlencode() | replace('/', '%2F') }}?ref={{ _desired_state_seed_branch | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
-  register: _gl_user_account_file
-  when: onboarding_mode == 'greenfield'
-
-- name: "GL – Push user account YAML"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _user_account_project_id }}/repository/files/{{ _user_account_path | urlencode() | replace('/', '%2F') }}"
-    method: "{{ 'PUT' if _gl_user_account_file.status == 200 else 'POST' }}"
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ _desired_state_seed_branch }}"
-      content: "{{ lookup('template', 'templates/user-template.yml.j2') }}"
-      commit_message: "Bootstrap: user account for {{ team_lead }} in org-{{ org_id }} [skip ci]"
-    status_code: [200, 201]
-  vars:
-    admin_user: "{{ team_lead }}"
-    admin_password: "{{ team_lead_password }}"
-    admin_email: "{{ team_lead_email }}"
-    admin_first_name: "{{ team_lead_first_name }}"
-    admin_last_name: "{{ team_lead_last_name }}"
-  when: onboarding_mode == 'greenfield'
+  when: not _tenant_registered | bool

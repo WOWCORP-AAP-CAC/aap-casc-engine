@@ -1,288 +1,235 @@
 # aap-casc-engine
 
-**AAP Multi-Tenant CasC Engine** — combining **YAML-as-Interface** for tenant self-service with **`infra.aap_configuration`** as the platform backend. A reusable Red Hat Professional Services offering for governed, multi-tenant AAP management at enterprise scale.
+**AAP Multi-Tenant CasC Engine** provides a simple flat-YAML interface for
+multi-team, multi-environment AAP Configuration-as-Code. It keeps
+`infra.aap_configuration` as the supported apply backend while centralizing the
+repository scaffolding, validation, environment overlays, dispatch, onboarding,
+and drift workflows that customers would otherwise build themselves.
 
-## Overview
+## What the engine provides
 
-The `aap-casc-engine` is the core deliverable of the **AAP Multi-Tenant CasC Framework**. It provides:
+- One central pipeline service for GitHub Actions and GitLab CI.
+- Separate control, platform desired-state, and tenant desired-state repositories.
+- Multiple YAML files per resource type, merged by the engine before dispatch.
+- `base/` plus environment-overlay folders driven by `env_branch_map`.
+- Repository creation or governed pre-created repository scaffolding.
+- Combined or per-resource-type repository layouts with customer-selected names.
+- Greenfield and Brownfield tenant onboarding.
+- Optional, customer-owned naming policy.
+- Scoped platform or tenant dispatch through `infra.aap_configuration.dispatch`.
+- Report-mode drift detection and optional remediation.
 
-- **Dispatcher playbook** — Clones the dedicated control repo for `config.yml` + `tenants.yml` + naming rules, clones desired-state CasC repos, processes YAML (folder-based environment layering with base/env merge), and applies configuration to AAP via the `infra.aap_configuration.dispatch` role
-- **Drift detection** — Compares Git desired state vs AAP live state, generates drift reports (persisted as AAP job artifacts via `set_stats`), and optionally auto-remediates
-- **Platform genesis** — Automated one-time setup of the control repository plus platform desired-state repos (combined or per-resource-type), CI/CD seeding, and control-file generation
-- **Bootstrap automation** — SCM-only tenant onboarding (repo creation, greenfield foundation YAML, environment branch creation, `tenants.yml` registration). Bootstrap runs as an AAP JT but uses only SCM credentials — the dispatcher is the sole mechanism for applying desired state to AAP
-- **Pipeline-as-a-Service** — Shared CI/CD templates (GitLab CI + GitHub Actions) for validation and deployment
-- **Governance policies** — OPA policies and naming convention enforcement
-- **Multi-environment model** — `env_branch_map` defines a strict 1:1 mapping from environment to Git branch. Missing desired-state branches are created high-to-low; promotion is low-to-high. CI/CD fan-out dispatches across all environments after greenfield bootstrap when enabled
-- **GitOps lifecycle** — Genesis is imperative (Day 0); all subsequent operations are commit-driven (Day 1+)
+## Architecture
 
-## Two-Persona Architecture
+| Repository | Purpose |
+|---|---|
+| `aap-casc-engine` | Playbooks, schemas, reusable pipelines, and templates |
+| `casc-platform-control` | Mandatory `config.yml` and `tenants.yml`; optional `naming-rules.yml` |
+| Platform desired-state repo(s) | Shared Organization, Team, RBAC, settings, and other platform YAML |
+| Tenant desired-state repo(s) | Tenant projects, inventories, credentials, templates, workflows, schedules, and notifications |
 
-| Persona | Responsibility | Interface |
-|---------|---------------|-----------|
-| **Platform Team** | Manage engine, governance, shared resources, onboarding | This repo + platform CasC repos |
-| **Tenant Teams** | Define their AAP resources (projects, credentials, templates, etc.) | Declarative YAML files — engine and collection complexity abstracted |
+The control repository never contains AAP desired-state YAML. Normal platform
+and tenant pushes dispatch only their own scope; a tenant dispatch does not
+reapply platform desired state.
 
-Tenant teams commit YAML files to their dedicated repos using a folder-based structure (`base/` + `<env>/` directories). The platform-managed pipeline validates and triggers the dispatcher, which applies configuration to AAP. Tenants never interact with the dispatch role, collection internals, or this engine directly.
+## Consumer interface
 
-## Repository Structure
+A tenant can keep each object in a separate file:
 
-```
-aap-casc-engine/
-├── site.yml                          # Dispatcher playbook (main entry point)
-├── drift-detect.yml                  # Drift detection playbook
-├── remediate.yml                     # Drift remediation tasks
-├── genesis.yml                       # Platform genesis playbook
-├── bootstrap.yml                     # Tenant onboarding playbook
-├── ansible.cfg                       # Ansible configuration
-├── inventory/
-│   ├── dev.yml                       # Dev AAP environment
-│   ├── tst.yml                       # Test AAP environment
-│   ├── npr.yml                       # Pre-production AAP environment
-│   └── prd.yml                       # Production AAP environment
-├── roles/
-│   ├── git_clone_repos/              # Clone CasC repos from Git
-│   └── process_casc_config/          # Folder-based YAML processing + env merge
-├── schemas/
-│   ├── resource-types.yml            # Per-resource-type validation & merge config
-│   ├── validate_naming.py            # Naming convention validator (YAML)
-│   ├── naming-rules.yml              # Naming convention rules
-│   └── policies/                     # OPA governance policies
-├── pipeline-templates/
-│   ├── gitlab/                       # GitLab CI shared template
-│   └── github/                       # GitHub Actions standalone workflow
-├── templates/                        # Jinja2 templates (YAML seeds, bootstrap resources)
-├── collections/
-│   └── requirements.yml              # Ansible collection dependencies
-└── examples/
-    └── v2/                           # Example folder-based YAML configs
-        ├── platform/                 # Platform repo example
-        └── tenant/                   # Tenant repo example (base + env overrides)
+```text
+casc-tenant-stores/
+├── base/
+│   ├── projects/project-deploy.yml
+│   ├── inventories/inventory-dev.yml
+│   └── templates/job-template-deploy.yml
+├── dev/inventories/inventory-dev.yml
+├── prd/inventories/inventory-dev.yml
+└── .github/workflows/casc.yml
 ```
 
-## Tenant Repo Structure
-
-Tenants use a folder-based structure with `base/` for all-environment configs and optional `<env>/` directories for overrides:
-
-```
-casc-tenant-myorg01/
-  base/                          # applies to ALL environments
-    projects/
-      prj-myorg01-db_patching.yml
-    templates/
-      jt-myorg01-db_patching.yml
-    credentials/
-      crd-myorg01-machine_demo.yml
-    inventories/
-      inv-myorg01-db_servers.yml
-  dev/                           # env-specific overrides
-    inventories/
-      inv-myorg01-db_servers.yml
-  prd/
-    inventories/
-      inv-myorg01-db_servers.yml
-  .github/workflows/casc.yml    # CI/CD thin caller
-```
-
-Each YAML file uses a single top-level dispatch variable key:
+Each file uses an `infra.aap_configuration` variable key:
 
 ```yaml
+---
 controller_projects:
-  - name: prj-myorg01-db_patching
-    description: Database patching automation
+  - name: Stores Deployment
+    organization: WW Stores Automation
     scm_type: git
-    scm_url: https://github.com/example/repo.git
-    organization: org-myorg01
+    scm_url: https://github.example/ww/stores-automation.git
+    scm_branch: main
 ```
 
-## Quick Start
+Filenames are organizational only. Optional naming policy validates resource
+identities inside YAML, not filenames.
+
+## Quick start
 
 ### Prerequisites
 
-- **AAP 2.5+** with Gateway, Controller, Hub, and (optionally) EDA
-- **Git SCM** (GitLab, GitHub, or compatible) with API access
-- **CI/CD platform** (GitLab CI, GitHub Actions, or compatible)
-- **`infra.aap_configuration`** collection v4.x (>=4.0.0, <5.0.0) installed in the Execution Environment
-- Python 3.9+ (for local validation)
+- Red Hat Ansible Automation Platform with an execution environment containing
+  `infra.aap_configuration >=4.0.0,<5.0.0`.
+- GitHub or GitLab API access.
+- AAP Job Templates for Genesis, Bootstrap, Dispatcher, and Drift Detection.
+- SCM and AAP credentials described in the
+  [Setup and Operations Guide](docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md).
 
-### 1. Run Platform Genesis
+### 1. Run Genesis
 
-Genesis creates or scaffolds the dedicated control repository plus the platform
-desired-state repository (or repositories). `config.yml`, `tenants.yml`, and
-`naming-rules.yml` belong only in the control repository.
+Genesis creates repositories when `repo_mode=create`, or scaffolds repositories
+that already exist when `repo_mode=existing`. Pre-created repositories may be
+empty when branch creation is enabled; the engine initializes them with final
+managed content before creating the high-to-low environment branch topology.
 
 ```bash
-export SCM_TOKEN="<your-scm-token>"
+export SCM_TOKEN='<scm-api-token>'
+export SCM_BASE_URL='https://github.com'
+
 ansible-playbook genesis.yml \
-  -e control_scm_org=<your-platform-org> \
+  -e platform_scm_org=ww-platform \
+  -e control_scm_org=ww-platform \
   -e control_repo=casc-platform-control \
-  -e platform_scm_org=<your-platform-org> \
-  -e scm_base_url=https://github.com \
-  -e engine_repo=aap-casc-engine \
-  -e default_organization=MyOrg \
-  -e repo_pattern=combined
+  -e platform_repo=casc-platform-global \
+  -e platform_repo_pattern=combined \
+  -e repo_mode=existing
 ```
 
-**Repo patterns:**
+Genesis seeds `config.yml` and `tenants.yml` in the control repository. It does
+not activate a naming policy by default.
 
-| Pattern | Repos Created | Best For |
-|---------|--------------|----------|
-| `combined` (default) | 1 platform repo (`casc-platform-global`) | Most deployments |
-| `per-resource-type` | Separate per-type desired-state repos + dedicated control repo | Large teams wanting fine-grained access |
-
-The control repository is the operational source of truth for engine metadata.
-Platform and tenant desired-state repositories contain only `base/` and
-environment-overlay YAML.
-
-### 2. Configure Connection
-
-**Via AAP Job Templates (production):** AAP credentials inject `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, and `SCM_TOKEN` automatically.
-
-**Via CLI (local testing):**
-
-```bash
-export CONTROLLER_HOST="aap-controller.dev.example.com"
-export CONTROLLER_USERNAME="admin"
-export CONTROLLER_PASSWORD="<your-password>"
-export SCM_BASE_URL="https://github.com"
-export SCM_TOKEN="<your-scm-token>"
-```
-
-### 3. Run the Dispatcher
-
-```bash
-# Full apply (all repos from tenants.yml)
-ansible-playbook site.yml -e target_env=dev
-
-# Targeted tenant apply
-ansible-playbook site.yml \
-  -e target_env=dev \
-  -e dispatch_scope=tenant \
-  -e tenant_org_id=myorg01
-```
-
-### 4. Bootstrap a New Tenant
-
-```bash
-ansible-playbook bootstrap.yml \
-  -e org_id=newteam01 \
-  -e team_name="New Team" \
-  -e team_lead=newteam_lead \
-  -e tenant_scm_org=aap-casc-tenant-newteam01 \
-  -e repo_pattern=combined
-```
-
-Bootstrap is SCM-only: it creates or scaffolds the tenant repositories, seeds
-them with CI/CD and example files, creates environment branches (per
-`env_branch_map`), and registers the tenant in control `tenants.yml`.
-Greenfield onboarding writes the required platform foundation YAML; brownfield
-onboarding scaffolds SCM only. AAP resource creation is handled later by the
-scoped dispatcher.
-
-### 5. Run Drift Detection
-
-```bash
-# Report mode
-ansible-playbook drift-detect.yml -e target_env=dev -e drift_mode=report
-
-# Remediate mode
-ansible-playbook drift-detect.yml -e target_env=prd -e drift_mode=remediate
-```
-
-## How It Works
-
-1. **Tenant teams** commit YAML files to their repos using the `base/` + `<env>/` folder structure
-2. **The shared CI/CD pipeline** validates YAML files (structural, naming, OPA policy) and triggers the dispatcher
-3. **The dispatcher** (`site.yml`) clones the dedicated control repo to read `config.yml` + `tenants.yml`, then clones only the requested platform, tenant, or full desired-state scope and applies via `infra.aap_configuration.dispatch`
-4. **Scheduled reconciliation** runs drift detection to catch manual changes
-
-## Key Design Principles
-
-- **YAML-as-Interface** — All AAP resources are defined as YAML files with standard `infra.aap_configuration` variable names
-- **Folder-based environments** — `base/` for universal config, `<env>/` for environment-specific overrides (like Ansible `group_vars` or Kustomize overlays)
-- **Control/state separation** — The control repo contains orchestration metadata only; platform and tenant desired-state repositories contain AAP resource YAML only
-- **GitOps lifecycle** — Genesis is imperative (Day 0); everything after is commit-driven (Day 1+)
-- **No JSON schemas** — Structural validation uses `resource-types.yml`; field-level validation deferred to apply-time collection modules
-
-## Control Repository
-
-Genesis creates a dedicated `casc-platform-control` repository. It contains
-control metadata only, never platform or tenant desired-state folders.
-
-**`config.yml`** — Platform configuration:
+### 2. Register a Greenfield tenant
 
 ```yaml
-default_organization: Default
-scm_provider: github
-platform_scm_org: my-platform-org
-control_scm_org: my-platform-org
-control_repo: casc-platform-control
-control_branch: main
-platform_repo_pattern: combined
-platform_repo: casc-platform-global
-repo_mode: create
-create_missing_env_branches: true
-bootstrap_dispatch_fanout: true
-env_branch_map:
-  dev: develop
-  tst: release/tst
-  npr: release/npr
-  prd: main
-```
-
-`env_branch_map` enforces a strict 1:1 mapping — each branch value must be unique (one branch per environment). Environment names must match `^[a-z][a-z0-9_]*$`. `create_missing_env_branches` controls desired-state branch topology. `bootstrap_dispatch_fanout` (default `true`) enables bounded greenfield onboarding reconciliation only.
-
-**`tenants.yml`** — Tenant registry:
-
-```yaml
+---
 tenants:
-  - org_id: myorg01
-    team_name: Platform Engineering
-    team_lead: jsmith
-    tenant_scm_org: aap-casc-tenant-myorg01
+  - tenant_id: stores
+    aap_organization: WW Stores Automation  # optional; defaults to tenant_id
+    team_name: Stores Automation
+    tenant_scm_org: ww-tenants
     repo_pattern: combined
+    repo_name: stores-aap-casc               # optional
+    repo_mode: existing
     onboarding_mode: greenfield
-    dispatch_enabled: true
     status: active
 ```
 
-## AAP Job Templates
+Greenfield Bootstrap scaffolds tenant repositories and writes only two platform
+foundation declarations on every mapped branch:
 
-| Job Template | Playbook | Purpose |
-|-------------|----------|---------|
-| `jt-platform-genesis` | `genesis.yml` | One-time platform repo creation |
-| `jt-platform-casc_dispatcher` | `site.yml` | Main dispatcher — apply CasC configuration |
-| `jt-platform-drift_detection` | `drift-detect.yml` | Drift detection and reconciliation |
-| `jt-platform-bootstrap_tenant` | `bootstrap.yml` | Onboard new tenant organizations |
+- `base/organizations/stores.yml`
+- `base/teams/stores.yml`
 
-## Local Validation
+Users, IdP mappings, RBAC assignments, credentials, Galaxy associations, and
+execution-environment associations remain normal customer desired state.
 
-```bash
-# Install
-pip install pyyaml
+### 3. Register a Brownfield tenant
 
-# Validate naming conventions
-python3 schemas/validate_naming.py --config-dir . --rules schemas/naming-rules.yml
+```yaml
+---
+tenants:
+  - tenant_id: legacy_app
+    aap_organization: Existing LDAP/SAML Organization
+    tenant_scm_org: ww-tenants
+    repo_pattern: combined
+    repo_name: legacy-app-aap-casc
+    repo_mode: existing
+    onboarding_mode: brownfield
+    status: active
 ```
 
-## Dependencies
+Brownfield Bootstrap is SCM-only. It requires the exact existing AAP
+Organization name, rejects `team_name`, writes no foundation YAML, and performs
+no onboarding dispatch. Existing AAP objects remain unchanged until the customer
+declares them in desired-state YAML.
 
-- [infra.aap_configuration](https://github.com/redhat-cop/infra.aap_configuration) >= 4.0.0, < 5.0.0
-- Red Hat Ansible Automation Platform 2.5+
-- Python 3.9+
+### 4. Apply one scope
+
+```bash
+ansible-playbook site.yml \
+  -e target_env=dev \
+  -e dispatch_scope=tenant \
+  -e tenant_id=stores
+```
+
+## Tenant identity
+
+| Field | Meaning |
+|---|---|
+| `tenant_id` | Required stable engine key. Must match `^[a-z][a-z0-9_]*$`, maximum 64 characters. |
+| `aap_organization` | Exact AAP Organization name. Optional for Greenfield; required for Brownfield. |
+| `team_name` | Exact Team created by Greenfield Bootstrap. Required for Greenfield; forbidden for Brownfield. |
+
+Repository routing is `repository -> tenants.yml -> tenant_id`. It never infers
+the AAP Organization from a repository name.
+
+## Repository layouts and names
+
+| Option | Combined | Per-resource-type |
+|---|---|---|
+| Platform | `platform_repo` | `platform_repo_names` folder-to-name mapping |
+| Tenant | optional `repo_name` | optional partial `repo_names` folder-to-name mapping |
+
+Unknown folders, blank names, duplicate effective names, or collisions with
+control/platform ownership fail before SCM mutation. Ordered name lists are not
+supported.
+
+## Environment branches
+
+`env_branch_map` is ordered from lowest to highest environment:
+
+```yaml
+env_branch_map:
+  dev: develop
+  tst: release/tst
+  prd: main
+```
+
+Missing branches are created from high to low so lower environments start from
+the approved higher-environment baseline. Changes are promoted low to high.
+Feature-branch pushes and pull/merge requests validate only; mapped-branch
+pushes dispatch to the corresponding environment.
+
+## Optional naming policy
+
+Naming validation is inactive when control-root `naming-rules.yml` is missing or
+empty. To activate it, start from:
+
+- `examples/naming-rules.yml.sample` for a customer policy.
+- `examples/naming-rules-type-prefixed.yml.sample` for the optional type-prefixed example.
+
+Commit the policy to the control branch before Bootstrap. The exact rendered
+Greenfield Organization and Team are validated before any SCM mutation. A rule
+applies only to resource types explicitly present in the policy.
+
+## Safety boundaries
+
+- Scaffold markers make tenant identity and repository topology immutable after
+  scaffolding starts; pre-scaffold corrections remain allowed.
+- `status` and `dispatch_enabled` are mutable operational controls.
+- A paused new Greenfield tenant is still scaffolded and receives its
+  platform-owned Organization/Team foundation; tenant desired state waits until
+  `dispatch_enabled` is re-enabled.
+- Absence from SCM is never interpreted as deletion.
+- Generated user examples contain no password, and apply paths disable the
+  collection's `change_me` fallback.
+- The production baseline is serialized and requires Dispatcher
+  `allow_simultaneous=false`.
+
+## Current limitations
+
+- Scoped Dispatcher concurrency is a separate future enhancement.
+- Composite overlay identities for selected RBAC/role/input-source resources are
+  not yet universally supported.
+- Drift comparison currently covers Organizations, credential types, projects,
+  and job templates; undeclared live objects can appear as `extra_in_live` in
+  reports. See the setup guide before using remediation in Brownfield adoption.
+
+## Documentation
+
+- [Setup and Operations Guide](docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md)
+- [Pipeline Trigger Logic](docs/pipeline-trigger-logic.md)
+- [Nonproduction Validation](docs/NONPRODUCTION_VALIDATION.md)
+- [Resource Deletion Capabilities](docs/resource-deletion-capabilities.md)
 
 ## License
 
 [GPL-3.0](LICENSE)
-
-## Documentation
-
-- [Setup and Operations Guide](docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md) — progressive Part A–D guide
-- [Pipeline Trigger Logic](docs/pipeline-trigger-logic.md) — GitHub/GitLab dispatch contracts
-- [Resource Deletion Capabilities](docs/resource-deletion-capabilities.md)
-- [Nonproduction Validation](docs/NONPRODUCTION_VALIDATION.md)
-
-## Related Resources
-
-- [infra.aap_configuration documentation](https://github.com/redhat-cop/infra.aap_configuration)
-- [Ansible Automation Platform documentation](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/)
-- [Red Hat Communities of Practice](https://github.com/redhat-cop)

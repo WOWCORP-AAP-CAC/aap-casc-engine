@@ -3,9 +3,9 @@
 # This file belongs in base/notifications/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/notifications/.
 controller_notifications:
-  - name: ntf-{{ org_id }}-example-email
+  - name: ntf-{{ tenant_id }}-example-email
     description: "Example email notification — replace with your integration"
-    organization: org-{{ org_id }}
+    organization: {{ _effective_aap_organization | to_json }}
     notification_type: email
     notification_configuration:
       host: smtp.example.com
@@ -13,6 +13,6 @@ controller_notifications:
       username: notifications@example.com
       sender: aap-notifications@example.com
       recipients:
-        - "team-{{ org_id }}@example.com"
+        - "team-{{ tenant_id }}@example.com"
       use_tls: true
       use_ssl: false

@@ -5,8 +5,9 @@
 # Control files are never written to desired-state repositories.
 #
 # Required variables: control_scm_org, control_repo, control_branch, genesis_repos,
-#   platform_repos, platform_namespace_id, control_namespace_id, scm_api_token,
-#   repo_visibility, _config_yml_content, _tenants_yml_content, _naming_rules_yml_content
+#   platform_repos, scm_api_token, and, for repo_mode=create, the platform and
+#   control namespace IDs,
+#   repo_visibility, _config_yml_content, _tenants_yml_content
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 1: Create all platform repos (tolerates already-exists)
@@ -58,7 +59,7 @@
 - name: "GL – Store control repo default branch"
   ansible.builtin.set_fact:
     _gl_control_default_branch: >-
-      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', control_repo) | first).json.default_branch | default('main') }}
+      {{ (_gl_project_lookups.results | selectattr('item.name', 'equalto', control_repo) | first).json.default_branch | default('main', true) }}
 
 - name: "GL – Store combined platform desired-state project ID"
   ansible.builtin.set_fact:
@@ -72,7 +73,7 @@
     method: GET
     headers:
       PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
+    status_code: [200, 404, 409]
   loop: >-
     {{ (_gl_project_lookups.results | selectattr('item.repository_class', 'equalto', 'platform') | list)
        | product(env_branch_map.values() | list) | list }}
@@ -83,9 +84,31 @@
 
 - name: "GL – Fail existing-repository Genesis before scaffolding when branches are missing"
   ansible.builtin.assert:
-    that: _gl_existing_branch_checks.results | selectattr('status', 'equalto', 404) | list | length == 0
+    that:
+      - _gl_existing_branch_checks.results | rejectattr('status', 'equalto', 200) | list | length == 0
     fail_msg: "repo_mode=existing with create_missing_env_branches=false requires every mapped branch in every platform desired-state repository."
   when: not (create_missing_env_branches | bool)
+
+- name: "GL - Initialize empty repositories with their final README"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/README.md"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ control_branch if item.item.repository_class == 'control' else _desired_state_seed_branch }}"
+      content: "{{ lookup('template', 'templates/genesis-readme.md.j2') }}"
+      commit_message: "Genesis: initialize managed repository [skip ci]"
+    status_code: [200, 201]
+  vars:
+    repo: "{{ item.item }}"
+  loop: "{{ _gl_project_lookups.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - item.json.empty_repo | default(false) | bool
+    - item.item.repository_class == 'control' or create_missing_env_branches | bool
 
 - name: "GL – Create control branch if not default"
   when: control_branch != _gl_control_default_branch
@@ -158,35 +181,12 @@
     status_code: [200, 201]
   when: _gl_tenants_check.status == 404
 
-- name: "GL – Check if naming-rules.yml already exists"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/files/naming-rules.yml?ref={{ control_branch | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
-  register: _gl_naming_rules_check
-
-- name: "GL – Push naming-rules.yml (first-time only)"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_control_project_id }}/repository/files/naming-rules.yml"
-    method: POST
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ control_branch }}"
-      content: "{{ _naming_rules_yml_content }}"
-      commit_message: "Genesis: initialize naming policy [skip ci]"
-    status_code: [200, 201]
-  when: _gl_naming_rules_check.status == 404
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3: Seed CI/CD include in each repo
 # ═══════════════════════════════════════════════════════════════════════════
 
 - name: "GL – Create desired-state seed branch in platform repositories"
-  when: _desired_state_seed_branch != 'main' and create_missing_env_branches | bool
+  when: create_missing_env_branches | bool
   block:
     - name: "GL – Check if platform branch exists in each repo"
       ansible.builtin.uri:
@@ -457,3 +457,104 @@
     label: "{{ item.0.item.name }}:{{ item.1 }}"
   register: _gl_lower_branch_result
   when: create_missing_env_branches | bool
+
+# Existing branches do not inherit later scaffold commits. Converge only
+# engine-managed callers, empty folders, and examples on every mapped branch.
+- name: "GL - Index platform project IDs"
+  ansible.builtin.set_fact:
+    _gl_platform_project_by_name: >-
+      {{ _gl_platform_project_by_name | default({}) | combine({item.item.name: item.json.id}) }}
+  loop: "{{ _gl_project_lookups.results | selectattr('item.repository_class', 'equalto', 'platform') | list }}"
+
+- name: "GL - Check platform CI includes on every mapped branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_platform_project_by_name[item.0.name] }}/repository/files/.gitlab-ci.yml?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ platform_repos | product(env_branch_map.values() | list) | list }}"
+  register: _gl_platform_caller_convergence_checks
+
+- name: "GL - Converge platform CI includes on every mapped branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_platform_project_by_name[item.item.0.name] }}/repository/files/.gitlab-ci.yml"
+    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ item.item.1 }}"
+      content: "{{ _platform_caller_content }}"
+      commit_message: "Genesis: converge CasC thin caller [skip ci]"
+    status_code: [200, 201]
+  vars:
+    caller_role: platform
+    _platform_caller_content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
+  loop: "{{ _gl_platform_caller_convergence_checks.results }}"
+  when: item.status == 404 or (item.json.content | b64decode) != _platform_caller_content
+
+- name: "GL - Initialize platform branch scaffold inventory"
+  ansible.builtin.set_fact:
+    _platform_branch_scaffold: []
+
+- name: "GL - Add combined folder scaffolds"
+  ansible.builtin.set_fact:
+    _platform_branch_scaffold: >-
+      {{ _platform_branch_scaffold
+         + [{'repo': platform_repo, 'path': item + '/.gitkeep', 'content': ''}] }}
+  loop: "{{ _genesis_seed_paths | default([]) }}"
+  when: repo_pattern == 'combined'
+
+- name: "GL - Add combined examples"
+  ansible.builtin.set_fact:
+    _platform_branch_scaffold: >-
+      {{ _platform_branch_scaffold
+         + [{'repo': platform_repo,
+             'path': 'base/' + item.folder + '/example.yml.sample',
+             'content': lookup('template', item.template)}] }}
+  loop: "{{ _platform_type_metadata }}"
+  when: repo_pattern == 'combined'
+
+- name: "GL - Add per-resource folder scaffolds"
+  ansible.builtin.set_fact:
+    _platform_branch_scaffold: >-
+      {{ _platform_branch_scaffold
+         + [{'repo': item.0.name, 'path': item.1 + '/.gitkeep', 'content': ''}] }}
+  loop: "{{ platform_repos | product(_genesis_folder_prefixes | default([])) | list }}"
+  when: repo_pattern == 'per-resource-type'
+
+- name: "GL - Add per-resource examples"
+  ansible.builtin.set_fact:
+    _platform_branch_scaffold: >-
+      {{ _platform_branch_scaffold
+         + [{'repo': item.name,
+             'path': 'base/example.yml.sample',
+             'content': lookup('template', item.template)}] }}
+  loop: "{{ platform_repos }}"
+  when: repo_pattern == 'per-resource-type'
+
+- name: "GL - Check platform scaffold on every mapped branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_platform_project_by_name[item.0.repo] }}/repository/files/{{ item.0.path | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 404]
+  loop: "{{ _platform_branch_scaffold | product(env_branch_map.values() | list) | list }}"
+  register: _gl_platform_scaffold_convergence_checks
+
+- name: "GL - Create missing platform scaffold on every mapped branch"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_platform_project_by_name[item.item.0.repo] }}/repository/files/{{ item.item.0.path | urlencode() | replace('/', '%2F') }}"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    body_format: json
+    body:
+      branch: "{{ item.item.1 }}"
+      content: "{{ item.item.0.content }}"
+      commit_message: "Genesis: converge managed platform scaffold [skip ci]"
+    status_code: [200, 201]
+  loop: "{{ _gl_platform_scaffold_convergence_checks.results }}"
+  when: item.status == 404

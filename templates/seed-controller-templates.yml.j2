@@ -3,13 +3,13 @@
 # This file belongs in base/templates/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/templates/.
 controller_templates:
-  - name: jt-{{ org_id }}-example
+  - name: jt-{{ tenant_id }}-example
     description: "Example job template — replace with your automation use-case"
-    organization: org-{{ org_id }}
-    project: prj-{{ org_id }}-example
+    organization: {{ _effective_aap_organization | to_json }}
+    project: prj-{{ tenant_id }}-example
     playbook: site.yml
-    inventory: inv-{{ org_id }}-src-dev-example
+    inventory: inv-{{ tenant_id }}-src-dev-example
     credentials:
-      - crd-{{ org_id }}-mch-example
+      - crd-{{ tenant_id }}-mch-example
     ask_variables_on_launch: false
     verbosity: 0

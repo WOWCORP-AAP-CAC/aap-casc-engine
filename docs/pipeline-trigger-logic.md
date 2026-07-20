@@ -1,84 +1,98 @@
 # Pipeline Trigger Logic Reference
 
-> Authoritative CI/CD behavior for the GitHub reusable workflow, GitHub standalone
-> template, and GitLab template. The control repository owns onboarding metadata;
-> desired-state repositories own normal environment deployments.
+Authoritative behavior for the GitHub reusable workflow, GitHub standalone
+workflow, and GitLab template.
 
-## Caller Events
-
-| Event | Result |
-|---|---|
-| Push to an environment-mapped branch | Validate, then dispatch that repository's scope to its mapped environment. |
-| Push to an unmapped feature branch | Validate only; no AAP dispatch. |
-| Pull request / merge request to any branch | Validate only. No AAP launcher credentials and no dispatch. |
-| Manual dispatch on an environment-mapped branch | Validate, then dispatch the caller scope to its mapped environment. |
-| Protected control manual `onboarding_dispatch` | Validate onboarding preflight, then bounded platform + that tenant dispatch. |
-| Push with `[skip dispatch]` | Validate only. |
-
-## Jobs and Ownership
-
-| Job | Runs when | Outcome |
-|---|---|---|
-| `validate` | Every supported event | Validates YAML, control files, naming rules from the control revision, and policy. On a push, also detects an exact `tenants.yml` change. |
-| `bootstrap` | Control-repo push to `control_branch` that changes `tenants.yml` | Launches the Bootstrap JT sequentially for added or changed active tenants, pinning `control_revision`. |
-| `fanout` | Bootstrap found actionable greenfield tenants and `bootstrap_dispatch_fanout: true` | Launches dispatcher work in each configured environment: `platform` first, then only each newly onboarded `tenant:<org_id>`. Never `full`. |
-| `onboarding_dispatch` | Protected control manual operation only | Continues a pending greenfield onboarding for one `tenant_org_id` with the same bounded platform-then-tenant sequence. |
-| `trigger` | Normal mapped-branch push or manual run from a platform or tenant desired-state repo | Launches a single scoped dispatcher run and fails closed if polling times out. Control-repo pushes never take this path. |
-
-## Onboarding Continuation Contract
-
-Greenfield onboarding is intentionally bounded:
-
-1. Bootstrap scaffolds tenant repos and writes foundation files on every mapped branch.
-2. When `bootstrap_dispatch_fanout: true`, CI launches `platform` then only that `tenant:<org_id>` in each configured environment.
-3. When `bootstrap_dispatch_fanout: false`, Bootstrap still completes SCM/foundation work, fan-out records that initial reconciliation remains pending, and the normal `trigger` path stays suppressed for that control event.
-4. The only continuation for pending onboarding is protected control manual operation:
-   - GitHub: `workflow_dispatch` with `operation=onboarding_dispatch` and `tenant_org_id`
-   - GitLab: web pipeline with `CASC_OPERATION=onboarding_dispatch` and `TENANT_ORG_ID`
-5. Preflight requires: control caller/repo/branch, explicit manual operation, active registered greenfield tenant, complete scaffold marker, foundation files on every mapped branch, current control revision, and all target credentials.
-6. This path never accepts `dispatch_scope=full`.
-
-Brownfield Bootstrap is SCM-only and never auto-fanouts.
-
-## GitOps Action Matrix
+## User action matrix
 
 | User action | Pipeline path | AAP effect |
 |---|---|---|
-| Push a desired-state change to a branch mapped in `env_branch_map` | `validate -> trigger` | Applies only that platform or tenant caller scope to its mapped AAP environment. |
-| Push a desired-state change to a feature branch | `validate` | No apply. Merge through an environment branch to deploy. |
-| Open a PR/MR | `validate` | No apply and no AAP deploy credentials. |
-| Add or change an active greenfield tenant in control `tenants.yml` | `validate -> bootstrap -> fanout` | Bootstrap scaffolds the tenant. Fan-out applies platform then that tenant in every enabled environment when fan-out is enabled. |
-| Add an active greenfield tenant with fan-out disabled | `validate -> bootstrap` + pending notice | No automatic dispatcher launch. Continue with protected `onboarding_dispatch`. |
-| Change only an inactive tenant or make a non-actionable control edit | `validate -> bootstrap` | No tenant bootstrap action. The control repository itself never performs normal desired-state dispatch. |
-| Run protected control `onboarding_dispatch` | `validate -> onboarding_dispatch` | Bounded platform then that tenant only. |
-| Run manually on an environment branch from platform/tenant repo | `validate -> trigger` | Re-applies the selected caller scope to the branch-mapped environment. |
+| Push to an environment-mapped platform branch | `validate -> trigger` | Applies platform scope to that environment |
+| Push to an environment-mapped tenant branch | `validate -> trigger` | Resolves repository to `tenant_id` and applies only that tenant scope |
+| Push to an unmapped feature branch | `validate` | None |
+| Pull request / merge request to any target branch | `validate` | None; deploy credentials are not exposed |
+| Control-branch push adding/correcting active Greenfield tenant | `validate -> bootstrap -> fanout` | SCM scaffold, two-file foundation, then bounded platform + changed tenant when enabled |
+| Control-branch push adding Brownfield tenant | `validate -> bootstrap` | SCM scaffold only; no foundation and no onboarding dispatch |
+| Control change to mutable `status` / `dispatch_enabled` only | `validate` | No Bootstrap action |
+| Protected control `onboarding_dispatch` | `validate -> onboarding_dispatch` | Preflight, then bounded platform + one Greenfield tenant |
+| Push containing `[skip dispatch]` | `validate` | None |
+| Manual platform/tenant run on a mapped branch | `validate -> trigger` | Reapplies caller scope to mapped environment |
+
+## Jobs
+
+| Job | Gate | Responsibility |
+|---|---|---|
+| `validate` | Every supported event | Structural YAML, control registry, optional naming policy, and OPA checks |
+| `bootstrap` | Control caller, control branch, exact `tenants.yml` change, actionable lifecycle diff | Launches Bootstrap JT sequentially for actionable tenants |
+| `fanout` | Successful actionable Greenfield Bootstrap and fan-out enabled | Runs `platform`, then only changed `tenant:<tenant_id>` in every environment; never `full` |
+| `onboarding_dispatch` | Protected manual control operation | Resumes one pending Greenfield tenant after complete marker/foundation preflight |
+| `trigger` | Mapped platform/tenant push or manual run | Launches one scoped Dispatcher and polls to terminal |
+
+## Tenant lifecycle diff
+
+The three pipeline implementations use `scripts/pipeline/casc_runtime.py` for the
+same behavior:
+
+- Validate all tenant IDs, exact AAP Organization bindings, and repository ownership.
+- Resolve custom combined or per-resource repository names from the tenant record.
+- Inspect markers across every mapped branch.
+- Allow identity/topology corrections or removal before any marker exists.
+- Reject identity/topology changes or removal after any marker exists.
+- Do not rerun Bootstrap for `status` or `dispatch_enabled` changes alone.
+- During Greenfield onboarding, `dispatch_enabled=false` still allows the
+  platform-owned Organization/Team foundation apply but suppresses tenant scope.
+- Greenfield requires `team_name`; Brownfield requires `aap_organization` and rejects `team_name`.
+
+## Optional naming policy
+
+Control `config.yml` and `tenants.yml` are mandatory. Root
+`naming-rules.yml` is optional:
+
+- missing or empty: naming policy inactive;
+- present: validate its schema, then enforce only listed resource types;
+- no engine policy is copied as a fallback;
+- `naming-rules.yml` itself is excluded from desired-state scanning.
+
+Bootstrap validates the exact rendered Greenfield Organization and Team before
+SCM mutation. Dispatcher and Drift have no naming-policy runtime dependency.
 
 ## Credentials
 
-| Purpose | Required secret | Use |
-|---|---|---|
-| Per-environment dispatcher access | `AAP_ENV_TARGETS_JSON` | JSON mapping of environment name to `{host, token}`. This is the sole dispatcher credential model. |
-| Bootstrap JT launcher access | `AAP_ENGINE_TOKEN` plus `aap_engine_host` / `AAP_ENGINE_HOST` | Execute-only bearer token for the engine AAP host. Passed only by the control caller. |
-| Engine workflow/schema access | `ENGINE_REPO_TOKEN` | Allows a caller to fetch reusable workflow or validation assets when cross-repository access requires it. |
-| Control metadata access | `CONTROL_REPO_TOKEN` | Read access to the control repository for `config.yml`, `tenants.yml`, and naming rules at the resolved control revision. |
+| Secret/variable | Use |
+|---|---|
+| `AAP_ENV_TARGETS_JSON` | Environment -> `{host, token}` execute-only Dispatcher access |
+| `AAP_ENGINE_TOKEN` and engine host | Control-only Bootstrap JT launch |
+| `ENGINE_REPO_TOKEN` | Private engine workflow/helper access |
+| `CONTROL_REPO_TOKEN` | Pinned control metadata and marker reads |
 
-No basic-auth, per-environment `AAP_<ENV>_*`, or global fallback paths are accepted at runtime. Parsed launcher tokens are masked in CI logs. Checkout steps use `persist-credentials: false` on GitHub. Secrets are step-scoped: PR/MR validation never receives deployment credentials.
+Runtime deployment credentials are bearer-token only. GitHub checkout uses
+`persist-credentials: false`, parsed tokens are masked, and pull/merge-request
+validation does not receive AAP deployment credentials.
 
-## Control Revision Contract
+## Control revision
 
-- Pipelines resolve an authoritative `control_revision` (explicit pin or control-branch HEAD SHA).
-- Bootstrap, Dispatcher, Drift, GitHub, and GitLab all consume the same revision semantics.
-- Validation fetches `config.yml`, `tenants.yml`, and `naming-rules.yml` from that revision and fails closed if unavailable.
-- Job Template names are resolved from control `config.yml` `job_templates.*` when present.
+Validation resolves an explicit `control_revision` or control-branch HEAD. The
+same revision is forwarded to Bootstrap, bounded onboarding, Dispatcher, and
+Drift. Missing required control metadata or a pin mismatch fails closed.
 
-## Serialized Release Safeguards
+## Branch behavior
 
-- The Phase 1-3 baseline requires `allow_simultaneous=false` on every dispatcher JT.
-- CI/CD launches are followed by job-completion polling where the caller needs completion semantics; timeout is a nonzero failure.
-- There is no pre-launch global busy probe.
-- GitHub serializes normal trigger launches with its workflow concurrency group. GitLab uses `resource_group` for the trigger path.
-- Tenant-scoped concurrent dispatcher execution is a Phase 4 enhancement, not a baseline requirement.
+- `env_branch_map` values are unique and may use any valid branch names.
+- Generated callers validate pull/merge requests to every target branch.
+- Feature-branch pushes validate only because the branch does not map to an environment.
+- Mapped-branch pushes dispatch only the caller's platform or tenant scope.
+- Genesis and Bootstrap converge callers and required scaffold on every mapped branch.
 
-## GitLab Parity
+## Serialized baseline
 
-GitLab uses `rules:changes` plus an internal `CI_COMMIT_BEFORE_SHA` diff guard for the control-repo bootstrap path. It consumes the bounded tenant identities through the bootstrap dotenv artifact and applies the same token-only credential, control-revision, naming-rules, timeout-fail, and scope contract as GitHub.
+The production baseline requires Dispatcher `allow_simultaneous=false`.
+Launches are polled to terminal and timeout is failure. GitHub normal trigger
+uses workflow concurrency; GitLab normal trigger uses `resource_group`.
+Tenant-scoped concurrent dispatch remains a separate roadmap enhancement.
+
+## GitLab parity
+
+GitLab uses `rules:changes` plus an internal `CI_COMMIT_BEFORE_SHA` exact diff
+guard for `tenants.yml`. Dotenv artifacts carry actionable tenant IDs and
+trigger suppression. Scope, lifecycle, optional naming, token, polling, and
+protected onboarding behavior match GitHub.

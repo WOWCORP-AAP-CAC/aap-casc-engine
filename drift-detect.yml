@@ -45,6 +45,7 @@
             aap_scope: control
         clone_base_dir: "{{ control_dir }}"
         clone_branch: "{{ control_branch }}"
+        clone_depth: 0
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
@@ -62,13 +63,13 @@
 
     - name: "Record effective control revision"
       ansible.builtin.set_fact:
-        effective_control_revision: "{{ control_revision if control_revision | length > 0 else _control_rev_probe.stdout }}"
+        effective_control_revision: "{{ _control_rev_probe.stdout }}"
 
     - name: "Fail closed when requested control revision is unavailable"
       ansible.builtin.assert:
         that:
           - effective_control_revision | length > 0
-          - control_revision | length == 0 or effective_control_revision == control_revision
+          - control_revision | length == 0 or _control_rev_probe.stdout == control_revision
         fail_msg: >-
           Authoritative control revision is unavailable or mismatched.
           requested={{ control_revision }} resolved={{ effective_control_revision }}
@@ -83,26 +84,30 @@
         file: "{{ control_dir }}/{{ control_repo }}/tenants.yml"
         name: tenants_registry
 
-    - name: "Require naming-rules.yml from control revision"
-      ansible.builtin.stat:
-        path: "{{ control_dir }}/{{ control_repo }}/{{ control_config.naming_rules_file | default('naming-rules.yml') }}"
-      register: _control_naming_rules
-
-    - name: "Fail closed when control naming rules are missing"
-      ansible.builtin.assert:
-        that:
-          - _control_naming_rules.stat.exists
-        fail_msg: >-
-          Control revision {{ effective_control_revision }} is missing
-          {{ control_config.naming_rules_file | default('naming-rules.yml') }}.
-
     # ── Phase 1: Resolve the desired-state branch from control metadata ───
     - name: "Compute effective configuration from control metadata"
       ansible.builtin.set_fact:
+        platform_scm_org: "{{ control_config.platform_scm_org }}"
         _repo_pattern: "{{ control_config.platform_repo_pattern | default('combined') }}"
         _platform_repo: "{{ control_config.platform_repo | default('casc-platform-global') }}"
-        naming_rules_file: "{{ control_config.naming_rules_file | default('naming-rules.yml') }}"
         drift_detection_jt_name: "{{ control_config.job_templates.drift_detection | default('jt-platform-drift_detection', true) }}"
+
+    - name: "Validate and normalize the tenant registry"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/scripts/pipeline/casc_runtime.py"
+          - validate-registry
+          - --config
+          - "{{ control_dir }}/{{ control_repo }}/config.yml"
+          - --tenants
+          - "{{ control_dir }}/{{ control_repo }}/tenants.yml"
+      register: _tenant_registry_validation
+      changed_when: false
+
+    - name: "Record normalized tenant runtime data"
+      ansible.builtin.set_fact:
+        _normalized_tenants: "{{ (_tenant_registry_validation.stdout | from_json).tenants }}"
 
     - name: "Assert target_env is defined in env_branch_map"
       ansible.builtin.assert:
@@ -119,48 +124,45 @@
     - name: "Filter active tenants"
       ansible.builtin.set_fact:
         _active_tenants: >-
-          {{ tenants_registry.tenants | default([])
-             | rejectattr('status', 'defined')
-             | list
-             + tenants_registry.tenants | default([])
-               | selectattr('status', 'defined')
-               | selectattr('status', 'equalto', 'active')
-               | list }}
+          {{ _normalized_tenants
+             | selectattr('status', 'equalto', 'active')
+             | selectattr('dispatch_enabled', 'equalto', true)
+             | list }}
 
     - name: "Build platform repos list for drift check"
       ansible.builtin.set_fact:
         _platform_repos: >-
-          {{ [{'name': _platform_repo, 'aap_scope': 'platform', 'scm_org': platform_scm_org}]
-             if _repo_pattern == 'combined'
-             else (control_config.platform_repos | default([])
-                   | map('combine', {'aap_scope': 'platform', 'scm_org': platform_scm_org})
-                   | list) }}
+          {% if _repo_pattern == 'combined' %}
+          {{ [{'name': _platform_repo,
+               'clone_name': 'platform__' + _platform_repo,
+               'aap_scope': 'platform',
+               'scm_org': platform_scm_org}] }}
+          {% else %}
+          {% set repos = [] %}
+          {% for repo in control_config.platform_repos | default([]) %}
+          {% set _ = repos.append(repo | combine({
+               'clone_name': 'platform__' + repo.name,
+               'aap_scope': 'platform',
+               'scm_org': platform_scm_org})) %}
+          {% endfor %}
+          {{ repos }}
+          {% endif %}
 
     - name: "Initialize tenant repos list for drift check"
       ansible.builtin.set_fact:
         _tenant_repos: []
 
-    - name: "Build tenant repos list for drift check"
+    - name: "Build tenant repos list from the canonical registry resolver"
       ansible.builtin.set_fact:
-        _tenant_repos: "{{ _tenant_repos + _entries }}"
-      vars:
-        _pattern: "{{ item.repo_pattern | default(_repo_pattern) }}"
-        _combined:
-          - name: "casc-tenant-{{ item.org_id }}"
-            aap_scope: "{{ item.org_id }}"
-            scm_org: "{{ item.tenant_scm_org }}"
-        _per_type:
-          - { name: "controller-projects-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
-          - { name: "controller-credentials-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
-          - { name: "controller-inventories-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
-          - { name: "controller-templates-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
-          - { name: "controller-workflows-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
-          - { name: "controller-schedules-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
-          - { name: "controller-notifications-{{ item.org_id }}", aap_scope: "{{ item.org_id }}", scm_org: "{{ item.tenant_scm_org }}" }
-        _entries: "{{ _combined if _pattern == 'combined' else _per_type }}"
-      loop: "{{ _active_tenants }}"
+        _tenant_repos: >-
+          {{ _tenant_repos
+             + [{'name': item.1,
+                 'clone_name': item.0.tenant_id + '__' + item.1,
+                 'aap_scope': item.0.tenant_id,
+                 'scm_org': item.0.tenant_scm_org}] }}
+      loop: "{{ _active_tenants | subelements('repositories') }}"
       loop_control:
-        label: "{{ item.org_id }}"
+        label: "{{ item.0.tenant_id }} -> {{ item.1 }}"
 
     - name: "Combine all repos for processing"
       ansible.builtin.set_fact:
@@ -190,7 +192,7 @@
       ansible.builtin.include_role:
         name: process_casc_config
       vars:
-        repo_clone_dir: "/tmp/drift-repos/{{ casc_repo.name }}"
+        repo_clone_dir: "/tmp/drift-repos/{{ casc_repo.clone_name | default(casc_repo.name) }}"
         repo_scope: "{{ casc_repo.aap_scope }}"
         output_dir: "/tmp/drift-staging"
         env_filter: "{{ target_env }}"

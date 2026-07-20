@@ -1,8 +1,4 @@
 ---
 aap_organizations:
-  - name: "{{ org_name }}"
-    description: "{{ org_description }}"
-    max_hosts: 0
-    default_environment: "{{ org_default_ee }}"
-    galaxy_credentials:
-      - Ansible Galaxy
+  - name: {{ _effective_aap_organization | to_json }}
+    description: {{ (_effective_team_name ~ ' automation organization') | to_json }}

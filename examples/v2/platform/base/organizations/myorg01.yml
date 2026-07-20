@@ -1,0 +1,5 @@
+---
+aap_organizations:
+  - name: MyOrg01 Automation
+    description: MyOrg01 automation organization
+    max_hosts: 0

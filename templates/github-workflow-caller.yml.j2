@@ -21,7 +21,7 @@ on:
         options:
           - ""
           - onboarding_dispatch
-      tenant_org_id:
+      tenant_id:
         description: "Required when operation=onboarding_dispatch"
         required: false
         type: string
@@ -44,7 +44,7 @@ jobs:
 {% if caller_role | default('tenant') == 'control' %}
       aap_engine_host: {% raw %}${{ vars.AAP_ENGINE_HOST }}{% endraw %}
       operation: {% raw %}${{ github.event.inputs.operation || '' }}{% endraw %}
-      tenant_org_id: {% raw %}${{ github.event.inputs.tenant_org_id || '' }}{% endraw %}
+      tenant_id: {% raw %}${{ github.event.inputs.tenant_id || '' }}{% endraw %}
       control_revision: {% raw %}${{ github.event.inputs.control_revision || '' }}{% endraw %}
 {% endif %}
     secrets:

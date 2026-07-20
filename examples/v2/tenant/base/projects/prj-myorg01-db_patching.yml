@@ -5,4 +5,4 @@ controller_projects:
     scm_type: git
     scm_url: https://github.com/example/db-patching.git
     scm_branch: main
-    organization: org-myorg01
+    organization: MyOrg01 Automation

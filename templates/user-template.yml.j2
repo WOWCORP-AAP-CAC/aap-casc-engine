@@ -1,9 +1,0 @@
----
-aap_user_accounts:
-  - username: "{{ admin_user }}"
-    password: "{{ admin_password | default('change_me') }}"
-    email: "{{ admin_email | default(omit) }}"
-    first_name: "{{ admin_first_name | default(omit) }}"
-    last_name: "{{ admin_last_name | default(omit) }}"
-    is_superuser: false
-    organization: "org-{{ org_id }}"

@@ -10,7 +10,7 @@
 #
 # Control protected onboarding continuation (Run pipeline / web):
 #   CASC_OPERATION=onboarding_dispatch
-#   TENANT_ORG_ID=<org_id>
+#   TENANT_ID=<tenant_id>
 #   CONTROL_REVISION=<optional sha>
 #   CASC_CALLER_ROLE=control
 
@@ -33,7 +33,7 @@ variables:
   CONTROL_REPO: "casc-platform-control"
   CONTROL_BRANCH: "main"
   CASC_OPERATION: ""
-  TENANT_ORG_ID: ""
+  TENANT_ID: ""
   CONTROL_REVISION: ""
 
 # ── Pre-stage: Fetch schemas from engine repo ────────────────────────────────
@@ -53,7 +53,6 @@ fetch:schemas:
       mkdir -p .schemas .scripts/pipeline
       [ -f /tmp/engine/schemas/resource-types.yml ] && cp /tmp/engine/schemas/resource-types.yml .schemas/ || true
       [ -f /tmp/engine/schemas/validate_naming.py ] && cp /tmp/engine/schemas/validate_naming.py .schemas/ || true
-      [ -f /tmp/engine/schemas/naming-rules.yml ] && cp /tmp/engine/schemas/naming-rules.yml .schemas/ || true
       [ -d /tmp/engine/schemas/policies ] && cp -r /tmp/engine/schemas/policies .schemas/ || true
       if [ -f /tmp/engine/roles/process_casc_config/defaults/main.yml ]; then
         cp /tmp/engine/roles/process_casc_config/defaults/main.yml .schemas/engine_defaults.yml
@@ -61,12 +60,15 @@ fetch:schemas:
       if [ -f /tmp/engine/scripts/pipeline/casc_runtime.py ]; then
         cp /tmp/engine/scripts/pipeline/casc_runtime.py .scripts/pipeline/
       fi
+      if [ -f /tmp/engine/scripts/pipeline/repo_name_overrides.py ]; then
+        cp /tmp/engine/scripts/pipeline/repo_name_overrides.py .scripts/pipeline/
+      fi
   artifacts:
     paths:
       - .schemas/
       - .scripts/pipeline/
 
-# Fetch authoritative control metadata (fail-closed; required for naming validation).
+# Fetch authoritative control metadata. Naming policy is optional.
 fetch:control-metadata:
   stage: .pre
   image: python:3.11-slim
@@ -85,21 +87,35 @@ fetch:control-metadata:
         echo "ERROR: CONTROL_REPO_TOKEN and CONTROL_SCM_ORG are required for authoritative control metadata"
         exit 1
       fi
+      REQUESTED_CONTROL_REVISION="${CONTROL_REVISION}"
+      if [ -z "${REQUESTED_CONTROL_REVISION}" ] \
+         && [ "${CASC_CALLER_ROLE}" = "control" ] \
+         && [ "${CI_PROJECT_PATH}" = "${CONTROL_SCM_ORG}/${CONTROL_REPO}" ] \
+         && [ "${CI_COMMIT_BRANCH:-}" = "${CONTROL_BRANCH}" ]; then
+        REQUESTED_CONTROL_REVISION="${CI_COMMIT_SHA}"
+      fi
       python3 .scripts/pipeline/casc_runtime.py ensure-control \
         --provider gitlab \
         --control-scm-org "${CONTROL_SCM_ORG}" \
         --control-repo "${CONTROL_REPO}" \
         --control-branch "${CONTROL_BRANCH}" \
         --token "${CONTROL_REPO_TOKEN}" \
-        --control-revision "${CONTROL_REVISION}" \
+        --control-revision "${REQUESTED_CONTROL_REVISION}" \
         --gitlab-api "${CI_API_V4_URL}" \
-        --dest-dir .control
-      if [ ! -f .control/naming-rules.yml ]; then
-        echo "ERROR: naming-rules.yml missing from control revision"
+        --dest-dir .control | tee /tmp/ensure-control.out
+      RESOLVED_LINE=$(grep '^control_revision=' /tmp/ensure-control.out)
+      if [ -z "$RESOLVED_LINE" ]; then
+        echo "ERROR: authoritative control revision was not resolved"
         exit 1
       fi
-      cp .control/naming-rules.yml .schemas/naming-rules.yml
-      echo "Using naming-rules.yml from control revision"
+      printf 'CONTROL_REVISION=%s\n' "${RESOLVED_LINE#control_revision=}" > control.env
+      rm -f .schemas/naming-rules.yml
+      if [ -f .control/naming-rules.yml ]; then
+        cp .control/naming-rules.yml .schemas/naming-rules.yml
+        echo "Using optional naming-rules.yml from control revision"
+      else
+        echo "Naming policy not active."
+      fi
       python3 .scripts/pipeline/casc_runtime.py resolve-jt-names \
         --config .control/config.yml
   artifacts:
@@ -107,6 +123,8 @@ fetch:control-metadata:
       - .schemas/
       - .scripts/pipeline/
       - .control/
+    reports:
+      dotenv: control.env
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -139,14 +157,23 @@ validate:yaml-structure:
           ak = yaml.safe_load(open('.schemas/engine_defaults.yml'))
           allowed_keys = set(ak.get('casc_allowed_resource_keys', []))
 
-      skip_dirs = {'.schemas', '.engine', '.git', '.scripts', '.control'}
+      skip_files = {'config.yml', 'tenants.yml', 'naming-rules.yml'}
+      skip_dirs = {'.schemas', '.engine', '.engine-runtime', '.git', '.scripts', '.control', '.aap-casc-engine'}
       errors = []
 
-      for search_dir in ['base'] + [d for d in os.listdir('.') if os.path.isdir(d) and d not in skip_dirs and d != 'base']:
+      search_dirs = (
+          ['base'] + [d for d in os.listdir('.') if os.path.isdir(d) and d not in skip_dirs and d != 'base']
+          if os.path.isdir('base') else ['.']
+      )
+      for search_dir in search_dirs:
           if not os.path.isdir(search_dir):
               continue
-          for root, _, files in os.walk(search_dir):
+          for root, dirs, files in os.walk(search_dir):
+              if search_dir == '.':
+                  dirs[:] = []
               for fname in files:
+                  if fname.startswith('.') or fname in skip_files:
+                      continue
                   if not fname.endswith(('.yml', '.yaml')) or fname.endswith('.sample'):
                       continue
                   fpath = os.path.join(root, fname)
@@ -184,6 +211,9 @@ validate:yaml-structure:
       else:
           print('=== ALL YAML FILES PASSED STRUCTURAL VALIDATION ===')
       "
+      python3 .scripts/pipeline/casc_runtime.py validate-deletions \
+        --root . \
+        --resource-types .schemas/resource-types.yml
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -206,7 +236,7 @@ validate:control-files:
       if os.path.exists('config.yml'):
           try:
               cfg = yaml.safe_load(open('config.yml'))
-              for key in ['env_branch_map', 'scm_provider', 'platform_scm_org', 'repo_pattern']:
+              for key in ['env_branch_map', 'scm_provider', 'platform_scm_org', 'platform_repo_pattern']:
                   if key not in cfg:
                       errors.append(f'config.yml: missing required key \"{key}\"')
               for required in ('control_scm_org', 'control_repo', 'control_branch', 'platform_repo_pattern'):
@@ -235,28 +265,16 @@ validate:control-files:
           except Exception as e:
               errors.append(f'config.yml: Failed to parse — {e}')
 
-      if os.path.exists('tenants.yml'):
-          try:
-              t = yaml.safe_load(open('tenants.yml'))
-              tenants = t.get('tenants', [])
-              if not isinstance(tenants, list):
-                  errors.append('tenants.yml: \"tenants\" must be a list')
-              else:
-                  for i, entry in enumerate(tenants):
-                      for req in ['org_id', 'team_name', 'team_lead', 'tenant_scm_org']:
-                          if req not in entry:
-                              errors.append(f'tenants.yml: tenant {i} missing required field \"{req}\"')
-                      if 'status' in entry and entry['status'] not in ('active', 'inactive'):
-                          errors.append(f'tenants.yml: tenant {i} has invalid status \"{entry[\"status\"]}\"')
-          except Exception as e:
-              errors.append(f'tenants.yml: Failed to parse — {e}')
-
       if errors:
           for e in errors: print(f'  ERROR: {e}')
           sys.exit(1)
       else:
           print('=== CONTROL FILES VALID (or not present) ===')
       "
+    - >-
+      python3 .scripts/pipeline/casc_runtime.py validate-registry
+      --config .control/config.yml
+      --tenants .control/tenants.yml > /dev/null
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -275,12 +293,16 @@ validate:naming-convention:
     - pip install pyyaml
   script:
     - |
-      if [ -f ".schemas/validate_naming.py" ] && [ -f ".schemas/naming-rules.yml" ]; then
+      if [ -f ".schemas/naming-rules.yml" ]; then
         echo "=== Checking naming conventions ==="
-        python3 .schemas/validate_naming.py --config-dir . --rules .schemas/naming-rules.yml
+        python3 .schemas/validate_naming.py \
+          --config-dir . \
+          --rules .schemas/naming-rules.yml \
+          --resource-types .schemas/resource-types.yml \
+          --allowed-keys .schemas/engine_defaults.yml
         echo "=== NAMING CONVENTIONS PASSED ==="
       else
-        echo "No naming validation scripts found — skipping."
+        echo "Naming policy not active."
       fi
   rules:
     - if: '$CI_PIPELINE_SOURCE == "web"'
@@ -307,7 +329,7 @@ validate:policy-compliance:
         SCAN_DIRS=""
         for d in $(ls -d */ 2>/dev/null); do
           case "$d" in
-            .schemas/|.engine/|.git/|.scripts/|.control/) continue ;;
+            .schemas/|.engine/|.engine-runtime/|.git/|.scripts/|.control/|.aap-casc-engine/) continue ;;
             *) SCAN_DIRS="$SCAN_DIRS $d" ;;
           esac
         done
@@ -339,6 +361,7 @@ bootstrap:tenants:
   script:
     - |
       NULL_SHA="0000000000000000000000000000000000000000"
+      : > bootstrap.env
 
       # Guard 1: non-push pipelines (manual/web/scheduled/MR) — skip bootstrap
       if [ "${CI_PIPELINE_SOURCE}" != "push" ]; then
@@ -365,58 +388,35 @@ bootstrap:tenants:
         exit 0
       fi
 
-      echo "tenants.yml was modified — running tenant diff..."
+      echo "tenants.yml was modified; enforcing tenant lifecycle..."
 
-      python3 -c "
-      import yaml, json, subprocess, sys, os
+      if [ -z "${CI_COMMIT_BEFORE_SHA:-}" ] || [ "${CI_COMMIT_BEFORE_SHA}" = "${NULL_SHA}" ]; then
+        printf '%s\n' 'tenants: []' > /tmp/previous-tenants.yml
+      else
+        if ! git cat-file -e "${CI_COMMIT_BEFORE_SHA}^{commit}" 2>/dev/null; then
+          echo "ERROR: previous push commit ${CI_COMMIT_BEFORE_SHA} is unavailable; refusing an unsafe tenant lifecycle diff"
+          exit 1
+        fi
+        if git cat-file -e "${CI_COMMIT_BEFORE_SHA}:tenants.yml" 2>/dev/null; then
+          git show "${CI_COMMIT_BEFORE_SHA}:tenants.yml" > /tmp/previous-tenants.yml
+        else
+          printf '%s\n' 'tenants: []' > /tmp/previous-tenants.yml
+        fi
+      fi
+      if [ -z "${CONTROL_REPO_TOKEN:-}" ]; then
+        echo "ERROR: CONTROL_REPO_TOKEN is required for tenant lifecycle validation"
+        exit 1
+      fi
+      python3 .scripts/pipeline/casc_runtime.py diff-tenants \
+        --provider gitlab \
+        --config config.yml \
+        --previous /tmp/previous-tenants.yml \
+        --current tenants.yml \
+        --scm-token "${CONTROL_REPO_TOKEN}" \
+        --gitlab-api "${CI_API_V4_URL}" \
+        --output tenant_actions.json > /dev/null
 
-      if not os.path.exists('tenants.yml'):
-          print('No tenants.yml — skipping bootstrap')
-          sys.exit(0)
-
-      try:
-          current = yaml.safe_load(open('tenants.yml'))
-      except Exception:
-          print('Invalid tenants.yml — skipping bootstrap')
-          sys.exit(0)
-
-      NULL_SHA = '0000000000000000000000000000000000000000'
-      before = os.environ.get('CI_COMMIT_BEFORE_SHA', '')
-
-      if not before or before == NULL_SHA:
-          previous = {'tenants': []}
-      else:
-          result = subprocess.run(['git', 'show', f'{before}:tenants.yml'], capture_output=True, text=True)
-          if result.returncode != 0:
-              previous = {'tenants': []}
-          else:
-              previous = yaml.safe_load(result.stdout) or {'tenants': []}
-
-      prev_map = {t['org_id']: t for t in previous.get('tenants', [])}
-      curr_map = {t['org_id']: t for t in current.get('tenants', [])}
-
-      actions = []
-      for oid, tenant in curr_map.items():
-          if tenant.get('status') == 'inactive':
-              continue
-          if oid not in prev_map:
-              actions.append({'action': 'added', 'tenant': tenant})
-          elif tenant != prev_map[oid]:
-              actions.append({'action': 'modified', 'tenant': tenant})
-
-      if not actions:
-          print('No new or modified active tenants — skipping bootstrap')
-          sys.exit(0)
-
-      print(f'Found {len(actions)} tenant(s) to bootstrap:')
-      for a in actions:
-          print(f'  {a[\"action\"]}: {a[\"tenant\"][\"org_id\"]}')
-
-      with open('tenant_actions.json', 'w') as f:
-          json.dump(actions, f)
-      "
-
-      if [ ! -f tenant_actions.json ]; then
+      if [ "$(python3 -c 'import json; print(len(json.load(open("tenant_actions.json"))))')" -eq 0 ]; then
         echo "No actionable tenant bootstrap; normal dispatcher may proceed."
         echo "BOOTSTRAP_BLOCK_DISPATCH=false" >> bootstrap.env
         echo "BOOTSTRAP_ACTIONABLE=false" >> bootstrap.env
@@ -425,8 +425,10 @@ bootstrap:tenants:
 
       echo "BOOTSTRAP_BLOCK_DISPATCH=true" >> bootstrap.env
       echo "BOOTSTRAP_ACTIONABLE=true" >> bootstrap.env
-      TENANT_ORG_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["org_id"] for a in json.load(open("tenant_actions.json"))]))')
-      echo "BOOTSTRAP_TENANT_ORG_IDS=${TENANT_ORG_IDS}" >> bootstrap.env
+      TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json"))]))')
+      DISPATCH_TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("dispatch_enabled", True)]))')
+      echo "BOOTSTRAP_TENANT_IDS=${TENANT_IDS}" >> bootstrap.env
+      echo "BOOTSTRAP_DISPATCH_TENANT_IDS=${DISPATCH_TENANT_IDS}" >> bootstrap.env
 
       # Engine credential resolution with host normalization (token-only)
       normalize_aap_host() {
@@ -452,6 +454,7 @@ bootstrap:tenants:
       else
         export CONTROL_REVISION="${CI_COMMIT_SHA}"
       fi
+      echo "CONTROL_REVISION=${CONTROL_REVISION}" >> bootstrap.env
       echo "control_revision=${CONTROL_REVISION}"
 
       JT_NAME="${BOOTSTRAP_JT_NAME}"
@@ -495,7 +498,7 @@ bootstrap:tenants:
       actions = json.load(open('tenant_actions.json'))
       jt_id = os.environ['JT_ID']
       engine_host = os.environ['ENGINE_HOST']
-      control_revision = os.environ.get('CONTROL_REVISION', '')
+      control_revision = os.environ.get('CONTROL_REVISION') or os.environ.get('CI_COMMIT_SHA', '')
       poll_timeout = int(os.environ.get('POLL_TIMEOUT', '15'))
       poll_interval = 10
       max_polls = (poll_timeout * 60) // poll_interval
@@ -505,24 +508,21 @@ bootstrap:tenants:
 
       def build_bootstrap_extra_vars(tenant):
           extra = {
-              'org_id': tenant['org_id'],
-              'team_name': tenant['team_name'],
-              'team_lead': tenant['team_lead'],
+              'tenant_id': tenant['tenant_id'],
+              'aap_organization': tenant['aap_organization'],
               'tenant_scm_org': tenant['tenant_scm_org'],
               'repo_pattern': tenant.get('repo_pattern', 'combined'),
               'control_revision': control_revision,
           }
-          for opt in ('repo_mode', 'onboarding_mode', 'dispatch_enabled', 'repo_name', 'tenant_scm_namespace_id'):
+          for opt in ('team_name', 'repo_mode', 'onboarding_mode', 'dispatch_enabled', 'repo_name', 'repo_names', 'tenant_scm_namespace_id', 'repo_visibility'):
               if opt in tenant and tenant[opt] is not None and tenant[opt] != '':
                   extra[opt] = tenant[opt]
-          if tenant.get('repo_names'):
-              extra['repo_names'] = tenant['repo_names']
           return extra
 
       for action in actions:
           tenant = action['tenant']
-          org_id = tenant['org_id']
-          print(f'Bootstrapping tenant: {org_id} ({action["action"]})')
+          tenant_id = tenant['tenant_id']
+          print(f'Bootstrapping tenant: {tenant_id} ({action["action"]})')
 
           extra_vars = json.dumps(build_bootstrap_extra_vars(tenant))
 
@@ -540,7 +540,7 @@ bootstrap:tenants:
 
           job_id = response.get('id')
           if not job_id:
-              print(f'  ERROR: Failed to launch bootstrap JT for {org_id}')
+              print(f'  ERROR: Failed to launch bootstrap JT for {tenant_id}')
               sys.exit(1)
 
           print(f'  Job launched: ID={job_id}')
@@ -556,13 +556,13 @@ bootstrap:tenants:
                   status = 'unknown'
               print(f'    Status: {status} ({i}/{max_polls})')
               if status == 'successful':
-                  print(f'  Bootstrap JT for {org_id} completed successfully.')
+                  print(f'  Bootstrap JT for {tenant_id} completed successfully.')
                   break
               elif status in ('failed', 'error', 'canceled'):
-                  print(f'  ERROR: Bootstrap JT job {job_id} for tenant {org_id} {status}.')
+                  print(f'  ERROR: Bootstrap JT job {job_id} for tenant {tenant_id} {status}.')
                   sys.exit(1)
           else:
-              print(f'  ERROR: Bootstrap JT job {job_id} for tenant \'{org_id}\' did not complete within {poll_timeout} minutes.')
+              print(f'  ERROR: Bootstrap JT job {job_id} for tenant \'{tenant_id}\' did not complete within {poll_timeout} minutes.')
               sys.exit(1)
       print('All bootstrap JTs completed successfully.')
       BOOTSTRAP_PY
@@ -587,6 +587,8 @@ fanout:dispatcher:
     - job: "bootstrap:tenants"
       artifacts: true
       optional: true
+    - job: "fetch:control-metadata"
+      artifacts: true
   before_script:
     - apt-get update -qq && apt-get install -y -qq curl > /dev/null
     - pip install pyyaml
@@ -598,27 +600,9 @@ fanout:dispatcher:
         exit 0
       fi
 
-      # Fetch config.yml from control repo if not local
-      if [ ! -f "config.yml" ]; then
-        echo "Fetching config.yml from control repo..."
-        CONTROL_PROJECT=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${CONTROL_SCM_ORG}/${CONTROL_REPO}', safe=''))")
-        CONTROL_BRANCH_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${CONTROL_BRANCH}', safe=''))")
-
-        if [ -n "${CONTROL_REPO_TOKEN:-}" ]; then
-          AUTH_HEADER="PRIVATE-TOKEN: ${CONTROL_REPO_TOKEN}"
-        else
-          AUTH_HEADER="JOB-TOKEN: ${CI_JOB_TOKEN}"
-        fi
-
-        curl -sf \
-          --header "${AUTH_HEADER}" \
-          "${CI_API_V4_URL}/projects/${CONTROL_PROJECT}/repository/files/config.yml/raw?ref=${CONTROL_BRANCH_ENC}" \
-          -o config.yml
-
-        if [ ! -f "config.yml" ]; then
-          echo "ERROR: Could not fetch config.yml"
-          exit 1
-        fi
+      if [ ! -f ".control/config.yml" ]; then
+        echo "ERROR: pinned control config artifact is unavailable"
+        exit 1
       fi
 
       python3 <<'FANOUT_PY'
@@ -654,18 +638,18 @@ fanout:dispatcher:
                   raise RuntimeError(f'Dispatcher job {job_id} ended {status}')
           raise RuntimeError(f'Dispatcher job {job_id} did not complete within {timeout_minutes} minutes')
 
-      cfg = yaml.safe_load(open('config.yml')) or {}
+      cfg = yaml.safe_load(open('.control/config.yml')) or {}
       if not cfg.get('bootstrap_dispatch_fanout', True):
           print('Fan-out disabled by bootstrap_dispatch_fanout=false.')
           print('Onboarding dispatch remains pending.')
           print('Continue with protected control web pipeline:')
-          print('  CASC_OPERATION=onboarding_dispatch TENANT_ORG_ID=<org_id> [CONTROL_REVISION=<sha>]')
+          print('  CASC_OPERATION=onboarding_dispatch TENANT_ID=<tenant_id> [CONTROL_REVISION=<sha>]')
           print('Normal trigger dispatch is suppressed for this control-repo event.')
           # Exit success so dotenv BOOTSTRAP_BLOCK_DISPATCH continues to suppress normal trigger.
           sys.exit(0)
       environments = list(cfg.get('env_branch_map', {}).keys())
-      onboarding_tenants = json.loads(os.environ.get('BOOTSTRAP_TENANT_ORG_IDS', '[]'))
-      jt_name = os.environ.get('DISPATCHER_JT_NAME', 'jt-platform-casc_dispatcher')
+      onboarding_tenants = json.loads(os.environ.get('BOOTSTRAP_DISPATCH_TENANT_IDS', '[]'))
+      jt_name = (cfg.get('job_templates') or {}).get('dispatcher') or os.environ.get('DISPATCHER_JT_NAME', 'jt-platform-casc_dispatcher')
       poll_timeout = int(os.environ.get('POLL_TIMEOUT_MINUTES', '30'))
       control_revision = os.environ.get('CONTROL_REVISION', '')
       resolved, errors = {}, []
@@ -696,13 +680,13 @@ fanout:dispatcher:
               print('ERROR: serialized rollout requires dispatcher allow_simultaneous=false')
               sys.exit(1)
           # Bounded onboarding: platform first, then only changed tenants. No full reconciliation.
-          for scope, tenant_org_id in [('platform', '')] + [('tenant', oid) for oid in onboarding_tenants]:
+          for scope, tenant_id in [('platform', '')] + [('tenant', oid) for oid in onboarding_tenants]:
               if scope == 'full':
                   raise RuntimeError('Refusing full scope during bounded onboarding')
               extra_vars = json.dumps({
                   'target_env': env,
                   'dispatch_scope': scope,
-                  'tenant_org_id': tenant_org_id,
+                  'tenant_id': tenant_id,
                   'control_revision': control_revision,
                   'trigger_commit': os.environ.get('CI_COMMIT_SHA', ''),
                   'trigger_source': 'bootstrap-onboarding',
@@ -719,7 +703,7 @@ fanout:dispatcher:
               if not job_id:
                   print(f'ERROR: Failed to launch dispatcher for env={env}, scope={scope}')
                   sys.exit(1)
-              print(f'Dispatcher launched: id={job_id}, env={env}, scope={scope}, tenant={tenant_org_id or "-"}')
+              print(f'Dispatcher launched: id={job_id}, env={env}, scope={scope}, tenant={tenant_id or "-"}')
               wait_for_terminal(host, auth_args, job_id, poll_timeout)
       FANOUT_PY
   rules:
@@ -739,6 +723,8 @@ onboarding:dispatch:
   needs:
     - job: "fetch:schemas"
       artifacts: true
+    - job: "fetch:control-metadata"
+      artifacts: true
     - job: "validate:yaml-structure"
     - job: "validate:control-files"
   before_script:
@@ -750,8 +736,8 @@ onboarding:dispatch:
         echo "ERROR: onboarding_dispatch requires CASC_CALLER_ROLE=control"
         exit 1
       fi
-      if [ -z "${TENANT_ORG_ID:-}" ]; then
-        echo "ERROR: TENANT_ORG_ID is required for onboarding_dispatch"
+      if [ -z "${TENANT_ID:-}" ]; then
+        echo "ERROR: TENANT_ID is required for onboarding_dispatch"
         exit 1
       fi
       HELPER=""
@@ -777,9 +763,8 @@ onboarding:dispatch:
         --control-repo "${CONTROL_REPO}" \
         --control-branch "${CONTROL_BRANCH}" \
         --control-token "${CONTROL_REPO_TOKEN}" \
-        --tenant-org-id "${TENANT_ORG_ID}" \
+        --tenant-id "${TENANT_ID}" \
         --control-revision "${CONTROL_REVISION}" \
-        --dispatcher-jt-name "${DISPATCHER_JT_NAME}" \
         --poll-timeout "${POLL_TIMEOUT_MINUTES}" \
         --gitlab-api "${CI_API_V4_URL}"
   rules:
@@ -799,6 +784,8 @@ trigger:dispatcher:
     - job: "fetch:schemas"
       artifacts: true
       optional: true
+    - job: "fetch:control-metadata"
+      artifacts: true
   before_script:
     - apt-get update -qq && apt-get install -y -qq curl > /dev/null
     - pip install pyyaml
@@ -825,43 +812,39 @@ trigger:dispatcher:
         HELPER="scripts/pipeline/casc_runtime.py"
       fi
 
-      # Prefer casc_runtime ensure-control when available; else raw API fetch.
-      if [ -n "$HELPER" ] && [ -n "${CONTROL_REPO_TOKEN:-}" ] && [ -n "${CONTROL_SCM_ORG:-}" ]; then
-        python3 "$HELPER" ensure-control \
-          --provider gitlab \
-          --control-scm-org "${CONTROL_SCM_ORG}" \
-          --control-repo "${CONTROL_REPO}" \
-          --control-branch "${CONTROL_BRANCH}" \
-          --token "${CONTROL_REPO_TOKEN}" \
-          --control-revision "${CONTROL_REVISION}" \
-          --gitlab-api "${CI_API_V4_URL}" \
-          --dest-dir . | tee /tmp/ensure-control.out
-        RESOLVED_LINE=$(grep '^control_revision=' /tmp/ensure-control.out || true)
-        if [ -n "$RESOLVED_LINE" ]; then
-          export CONTROL_REVISION="${RESOLVED_LINE#control_revision=}"
-        fi
-      elif [ ! -f "config.yml" ]; then
-        echo "Fetching config.yml from control repo..."
-        CONTROL_PROJECT=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${CONTROL_SCM_ORG}/${CONTROL_REPO}', safe=''))")
-        export REF_FOR_FETCH="${CONTROL_REVISION:-${CONTROL_BRANCH}}"
-        REF_ENC=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['REF_FOR_FETCH'], safe=''))")
-
-        if [ -n "${CONTROL_REPO_TOKEN:-}" ]; then
-          AUTH_HEADER="PRIVATE-TOKEN: ${CONTROL_REPO_TOKEN}"
-        else
-          AUTH_HEADER="JOB-TOKEN: ${CI_JOB_TOKEN}"
-        fi
-
-        curl -sf \
-          --header "${AUTH_HEADER}" \
-          "${CI_API_V4_URL}/projects/${CONTROL_PROJECT}/repository/files/config.yml/raw?ref=${REF_ENC}" \
-          -o config.yml
-
-        if [ ! -f "config.yml" ]; then
-          echo "ERROR: Could not fetch config.yml"
-          exit 1
-        fi
+      # Resolve and fetch one authoritative control revision. No branch-head or
+      # job-token fallback is allowed after validation.
+      if [ -z "$HELPER" ]; then
+        echo "ERROR: casc_runtime.py missing from engine checkout artifacts"
+        exit 1
       fi
+      if [ -z "${CONTROL_REPO_TOKEN:-}" ] || [ -z "${CONTROL_SCM_ORG:-}" ]; then
+        echo "ERROR: CONTROL_REPO_TOKEN and CONTROL_SCM_ORG are required"
+        exit 1
+      fi
+      python3 "$HELPER" ensure-control \
+        --provider gitlab \
+        --control-scm-org "${CONTROL_SCM_ORG}" \
+        --control-repo "${CONTROL_REPO}" \
+        --control-branch "${CONTROL_BRANCH}" \
+        --token "${CONTROL_REPO_TOKEN}" \
+        --control-revision "${CONTROL_REVISION}" \
+        --gitlab-api "${CI_API_V4_URL}" \
+        --dest-dir . | tee /tmp/ensure-control.out
+      RESOLVED_LINE=$(grep '^control_revision=' /tmp/ensure-control.out)
+      if [ -z "$RESOLVED_LINE" ]; then
+        echo "ERROR: authoritative control revision was not resolved"
+        exit 1
+      fi
+      export CONTROL_REVISION="${RESOLVED_LINE#control_revision=}"
+      export DISPATCHER_JT_NAME=$(python3 -c "
+      import yaml
+      cfg = yaml.safe_load(open('config.yml')) or {}
+      jt = (cfg.get('job_templates') or {}).get('dispatcher')
+      if not isinstance(jt, str) or not jt.strip():
+          raise SystemExit('ERROR: config.yml job_templates.dispatcher must be a non-empty string')
+      print(jt.strip())
+      ")
 
       # Config-driven env resolution
       export BRANCH="${CI_COMMIT_BRANCH}"
@@ -942,7 +925,7 @@ trigger:dispatcher:
           'target_env': target_env,
           'dispatch_scope': dispatch_scope,
           'trigger_commit': os.environ.get('CI_COMMIT_SHA', ''),
-          'triggered_repo': os.environ.get('CI_PROJECT_NAME', ''),
+          'triggered_repo': os.environ.get('CI_PROJECT_PATH', ''),
           'control_revision': control_revision,
           'trigger_source': 'ci-cd-pipeline',
       }

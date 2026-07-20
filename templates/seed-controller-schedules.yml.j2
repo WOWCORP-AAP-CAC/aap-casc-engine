@@ -3,9 +3,9 @@
 # This file belongs in base/schedules/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/schedules/.
 controller_schedules:
-  - name: sch-{{ org_id }}-example
+  - name: sch-{{ tenant_id }}-example
     description: "Example schedule — replace with your schedule"
-    unified_job_template: jt-{{ org_id }}-example
-    organization: org-{{ org_id }}
+    unified_job_template: jt-{{ tenant_id }}-example
+    organization: {{ _effective_aap_organization | to_json }}
     rrule: "DTSTART;TZID=UTC:20260101T060000 RRULE:FREQ=WEEKLY;BYDAY=MO"
     enabled: false

@@ -14,8 +14,13 @@
 defaults:
   value_type: list
   identity_field: name
+  identity_scalar: true
   # Brownfield-safe default: absence from YAML never deletes a live object.
   deletion_supported: false
+  deletion_field: state
+  deletion_values:
+    - absent
+  deletion_evidence: ""
 
 # Seeded platform/tenant inventory explicitly audited as non-deleting until a
 # collection-role evidence review flips a key to true. Missing keys inherit
@@ -92,6 +97,7 @@ exceptions:
   hub_group_roles:
     value_type: list
     identity_field: groups
+    identity_scalar: false
     deletion_supported: false
   gateway_users:
     value_type: list
