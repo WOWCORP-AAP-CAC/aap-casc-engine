@@ -112,10 +112,15 @@
       - "{{ (_tenant_repo_records | selectattr('name', 'equalto', item.item.name) | first).resource_type }}"
       - --actual-json
       - "{{ (item.json.content | b64decode | from_yaml) | to_json }}"
-  loop: "{{ _gl_default_marker_preflight.results | default([]) }}"
+  loop: >-
+    {{ (_gl_default_marker_preflight.results | default([]))
+       | selectattr('skipped', 'undefined')
+       | selectattr('status', 'defined')
+       | selectattr('status', 'equalto', 200)
+       | list }}
   loop_control:
-    label: "{{ item.item.name }}@{{ item.item.default_branch }}"
-  when: (item.status | default(0)) == 200
+    label: "{{ item.item.name }}@{{ item.item.default_branch | default('-') }}"
+  when: (_gl_default_marker_preflight.results | default([]) | length) > 0
   changed_when: false
 
 - name: "GL - Check existing environment branches"

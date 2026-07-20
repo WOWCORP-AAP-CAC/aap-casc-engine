@@ -638,6 +638,12 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             content = task.read_text()
             self.assertIn("product(_mapped_branches)", content, task)
             self.assertIn("before content scaffolding", content, task)
+
+    def test_default_branch_marker_validation_skips_missing_repos(self):
+        for task in PROVIDER_TASKS:
+            content = task.read_text()
+            self.assertIn("selectattr('status', 'equalto', 200)", content, task)
+            self.assertIn("default_branch | default('-')", content, task)
             self.assertIn("Verify final scaffold marker", content, task)
             self.assertIn("Verify final thin caller", content, task)
             self.assertIn("Verify required scaffold files", content, task)
