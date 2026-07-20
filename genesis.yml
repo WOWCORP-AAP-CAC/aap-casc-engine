@@ -179,12 +179,15 @@
              if repo_pattern == 'combined'
              else _per_type_platform_repos }}
 
-    - name: "Build complete Genesis repository inventory"
+    - name: "Build control repository inventory record"
       ansible.builtin.set_fact:
         control_repo_record:
           name: "{{ control_repo }}"
           description: "AAP CasC control plane: configuration, tenant registry, and naming policy"
           repository_class: control
+
+    - name: "Build complete Genesis repository inventory"
+      ansible.builtin.set_fact:
         genesis_repos: "{{ [control_repo_record] + (platform_repos | map('combine', {'repository_class': 'platform'}) | list) }}"
 
     # ── Render control file content ────────────────────────────────────────

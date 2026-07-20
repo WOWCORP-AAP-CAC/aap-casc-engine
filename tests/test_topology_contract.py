@@ -657,6 +657,19 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("platform branch scaffold", content, task)
             self.assertIn("Converge platform", content, task)
 
+    def test_genesis_builds_control_repo_record_before_inventory(self):
+        """Ansible cannot reference a key set in the same set_fact task."""
+        content = (ROOT / "genesis.yml").read_text()
+        control_idx = content.index("Build control repository inventory record")
+        inventory_idx = content.index("Build complete Genesis repository inventory")
+        self.assertLess(control_idx, inventory_idx)
+        control_block = content[control_idx:inventory_idx]
+        inventory_block = content[inventory_idx : inventory_idx + 400]
+        self.assertIn("control_repo_record:", control_block)
+        self.assertNotIn("genesis_repos:", control_block)
+        self.assertIn("genesis_repos:", inventory_block)
+        self.assertIn("control_repo_record", inventory_block)
+
     def test_precreated_empty_repositories_use_existing_managed_content(self):
         gh_genesis = (ROOT / "tasks/genesis_scm_github.yml").read_text()
         gl_genesis = (ROOT / "tasks/genesis_scm_gitlab.yml").read_text()
