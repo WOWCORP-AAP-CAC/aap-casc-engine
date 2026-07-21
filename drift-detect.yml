@@ -123,30 +123,34 @@
 
     - name: "Filter active tenants"
       ansible.builtin.set_fact:
-        _active_tenants: >-
-          {{ _normalized_tenants
-             | selectattr('status', 'equalto', 'active')
-             | selectattr('dispatch_enabled', 'equalto', true)
-             | list }}
+        _active_tenants: "{{ _normalized_tenants | selectattr('status', 'equalto', 'active') | selectattr('dispatch_enabled', 'equalto', true) | list }}"
 
-    - name: "Build platform repos list for drift check"
+    - name: "Build platform repos list for drift check (combined)"
+      ansible.builtin.set_fact:
+        _platform_repos:
+          - name: "{{ _platform_repo }}"
+            clone_name: "platform__{{ _platform_repo }}"
+            aap_scope: platform
+            scm_org: "{{ platform_scm_org }}"
+      when: _repo_pattern == 'combined'
+
+    - name: "Build platform repos list for drift check (per-resource)"
       ansible.builtin.set_fact:
         _platform_repos: >-
-          {% if _repo_pattern == 'combined' %}
-          {{ [{'name': _platform_repo,
-               'clone_name': 'platform__' + _platform_repo,
-               'aap_scope': 'platform',
-               'scm_org': platform_scm_org}] }}
-          {% else %}
-          {% set repos = [] %}
-          {% for repo in control_config.platform_repos | default([]) %}
-          {% set _ = repos.append(repo | combine({
+          {%- set repos = [] -%}
+          {%- for repo in control_config.platform_repos | default([]) -%}
+          {%- set _ = repos.append(repo | combine({
                'clone_name': 'platform__' + repo.name,
                'aap_scope': 'platform',
-               'scm_org': platform_scm_org})) %}
-          {% endfor %}
-          {{ repos }}
-          {% endif %}
+               'scm_org': platform_scm_org})) -%}
+          {%- endfor -%}
+          {{ repos | to_json }}
+      when: _repo_pattern != 'combined'
+
+    - name: "Decode per-resource platform repos list for drift check"
+      ansible.builtin.set_fact:
+        _platform_repos: "{{ _platform_repos | from_json }}"
+      when: _repo_pattern != 'combined'
 
     - name: "Initialize tenant repos list for drift check"
       ansible.builtin.set_fact:
@@ -154,12 +158,7 @@
 
     - name: "Build tenant repos list from the canonical registry resolver"
       ansible.builtin.set_fact:
-        _tenant_repos: >-
-          {{ _tenant_repos
-             + [{'name': item.1,
-                 'clone_name': item.0.tenant_id + '__' + item.1,
-                 'aap_scope': item.0.tenant_id,
-                 'scm_org': item.0.tenant_scm_org}] }}
+        _tenant_repos: "{{ _tenant_repos + [{'name': item.1, 'clone_name': item.0.tenant_id + '__' + item.1, 'aap_scope': item.0.tenant_id, 'scm_org': item.0.tenant_scm_org}] }}"
       loop: "{{ _active_tenants | subelements('repositories') }}"
       loop_control:
         label: "{{ item.0.tenant_id }} -> {{ item.1 }}"
@@ -175,6 +174,7 @@
         repos_to_clone: "{{ _platform_repos }}"
         clone_base_dir: "/tmp/drift-repos"
         clone_branch: "{{ target_branch }}"
+        clone_depth: 0
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
@@ -185,6 +185,7 @@
         repos_to_clone: "{{ _tenant_repos }}"
         clone_base_dir: "/tmp/drift-repos"
         clone_branch: "{{ target_branch }}"
+        clone_depth: 0
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 

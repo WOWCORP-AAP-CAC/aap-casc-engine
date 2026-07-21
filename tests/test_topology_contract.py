@@ -638,18 +638,6 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             content = task.read_text()
             self.assertIn("product(_mapped_branches)", content, task)
             self.assertIn("before content scaffolding", content, task)
-
-    def test_default_branch_marker_validation_skips_missing_repos(self):
-        for task in PROVIDER_TASKS:
-            content = task.read_text()
-            self.assertIn("selectattr('status', 'equalto', 200)", content, task)
-            self.assertIn("default_branch | default('-')", content, task)
-
-    def test_dispatcher_selected_repos_preserves_native_lists(self):
-        content = (ENGINE_ROOT / "site.yml").read_text()
-        self.assertNotIn("selected_repos: >-", content)
-        self.assertIn('selected_repos: "{{ _platform_repos if dispatch_scope == \'platform\'', content)
-        self.assertIn("Build platform repos list (combined)", content)
             self.assertIn("Verify final scaffold marker", content, task)
             self.assertIn("Verify final thin caller", content, task)
             self.assertIn("Verify required scaffold files", content, task)
@@ -658,6 +646,30 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("Validate latest survey registry candidate", content, task)
             self.assertNotIn("default('aap-organizations-global')", content, task)
             self.assertNotIn("default('aap-teams-global')", content, task)
+
+    def test_default_branch_marker_validation_skips_missing_repos(self):
+        for task in PROVIDER_TASKS:
+            content = task.read_text()
+            self.assertIn("selectattr('status', 'equalto', 200)", content, task)
+            self.assertIn("default_branch | default('-')", content, task)
+
+    def test_dispatcher_selected_repos_preserves_native_lists(self):
+        content = (ROOT / "site.yml").read_text()
+        self.assertNotIn("selected_repos: >-", content)
+        self.assertIn('selected_repos: "{{ _platform_repos if dispatch_scope == \'platform\'', content)
+        self.assertIn("Build platform repos list (combined)", content)
+
+    def test_drift_platform_repos_preserves_native_lists(self):
+        content = (ROOT / "drift-detect.yml").read_text()
+        self.assertIn("Build platform repos list for drift check (combined)", content)
+        self.assertIn("clone_name: \"platform__{{ _platform_repo }}\"", content)
+        self.assertIn("clone_depth: 0", content)
+
+    def test_brownfield_excluded_from_onboarding_fanout_outputs(self):
+        workflow = (ROOT / ".github/workflows/casc-validate-and-trigger.yml").read_text()
+        self.assertIn('onboarding_mode", "greenfield") == "greenfield"', workflow)
+        self.assertIn("fanout_tenant_ids", workflow)
+        self.assertIn("fanout_tenant_ids != '[]'", workflow)
 
     def test_genesis_converges_platform_scaffold_all_branches(self):
         for task in (

@@ -374,6 +374,7 @@ jobs:
       has_tenants_change: ${{ steps.diff.outputs.has_actions }}
       tenant_ids: ${{ steps.diff.outputs.tenant_ids }}
       dispatch_tenant_ids: ${{ steps.diff.outputs.dispatch_tenant_ids }}
+      fanout_tenant_ids: ${{ steps.diff.outputs.fanout_tenant_ids }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
@@ -441,13 +442,19 @@ jobs:
           if [ "$(python3 -c 'import json; print(len(json.load(open("tenant_actions.json"))))')" -gt 0 ]; then
             echo "has_actions=true" >> "$GITHUB_OUTPUT"
             tenant_ids=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json"))]))')
-            dispatch_tenant_ids=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("dispatch_enabled", True)]))')
+            # Brownfield is SCM-only: never include in onboarding fan-out.
+            # Greenfield with dispatch_enabled=false still needs platform fan-out
+            # so Organization/Team foundation can apply.
+            dispatch_tenant_ids=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("onboarding_mode", "greenfield") == "greenfield" and a["tenant"].get("dispatch_enabled", True)]))')
+            fanout_tenant_ids=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("onboarding_mode", "greenfield") == "greenfield"]))')
             echo "tenant_ids=${tenant_ids}" >> "$GITHUB_OUTPUT"
             echo "dispatch_tenant_ids=${dispatch_tenant_ids}" >> "$GITHUB_OUTPUT"
+            echo "fanout_tenant_ids=${fanout_tenant_ids}" >> "$GITHUB_OUTPUT"
           else
             echo "has_actions=false" >> "$GITHUB_OUTPUT"
             echo "tenant_ids=[]" >> "$GITHUB_OUTPUT"
             echo "dispatch_tenant_ids=[]" >> "$GITHUB_OUTPUT"
+            echo "fanout_tenant_ids=[]" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Trigger bootstrap for each tenant and poll to completion
@@ -592,6 +599,7 @@ jobs:
     if: >-
       needs.bootstrap.result == 'success'
       && needs.bootstrap.outputs.has_tenants_change == 'true'
+      && needs.bootstrap.outputs.fanout_tenant_ids != '[]'
     steps:
       - uses: actions/checkout@v5
         with:

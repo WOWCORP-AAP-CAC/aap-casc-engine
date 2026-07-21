@@ -426,9 +426,11 @@ bootstrap:tenants:
       echo "BOOTSTRAP_BLOCK_DISPATCH=true" >> bootstrap.env
       echo "BOOTSTRAP_ACTIONABLE=true" >> bootstrap.env
       TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json"))]))')
-      DISPATCH_TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("dispatch_enabled", True)]))')
+      DISPATCH_TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("onboarding_mode", "greenfield") == "greenfield" and a["tenant"].get("dispatch_enabled", True)]))')
+      FANOUT_TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("onboarding_mode", "greenfield") == "greenfield"]))')
       echo "BOOTSTRAP_TENANT_IDS=${TENANT_IDS}" >> bootstrap.env
       echo "BOOTSTRAP_DISPATCH_TENANT_IDS=${DISPATCH_TENANT_IDS}" >> bootstrap.env
+      echo "BOOTSTRAP_FANOUT_TENANT_IDS=${FANOUT_TENANT_IDS}" >> bootstrap.env
 
       # Engine credential resolution with host normalization (token-only)
       normalize_aap_host() {
@@ -646,6 +648,10 @@ fanout:dispatcher:
           print('  CASC_OPERATION=onboarding_dispatch TENANT_ID=<tenant_id> [CONTROL_REVISION=<sha>]')
           print('Normal trigger dispatch is suppressed for this control-repo event.')
           # Exit success so dotenv BOOTSTRAP_BLOCK_DISPATCH continues to suppress normal trigger.
+          sys.exit(0)
+      fanout_tenants = json.loads(os.environ.get('BOOTSTRAP_FANOUT_TENANT_IDS', '[]'))
+      if not fanout_tenants:
+          print('No greenfield onboarding tenants — skipping Dispatcher fan-out (brownfield is SCM-only).')
           sys.exit(0)
       environments = list(cfg.get('env_branch_map', {}).keys())
       onboarding_tenants = json.loads(os.environ.get('BOOTSTRAP_DISPATCH_TENANT_IDS', '[]'))
