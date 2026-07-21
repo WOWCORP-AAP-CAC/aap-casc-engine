@@ -4,6 +4,14 @@ Do not use production AAP or production SCM for these tests. Complete all
 scenarios before release or demo cutover. Archive pipeline URLs, AAP job IDs,
 control revisions, API responses, and negative-test output.
 
+**Release-gate topology:** combined only. One control repository, one platform
+desired-state repository, and one desired-state repository per tenant. Custom
+combined `repo_name` / `platform_repo` values and `repo_mode=create|existing`
+remain in scope. Per-resource layout (`platform_repo_pattern` /
+`repo_pattern: per-resource-type`, `platform_repo_names`, `repo_names`) is
+**retired from this release gate** and will be removed by ROADMAP-006. Do not
+spend further validation effort on per-resource scenarios.
+
 ## 0. Preconditions
 
 - Engine project synced to the candidate commit.
@@ -26,16 +34,17 @@ Evidence: Genesis job ID, repository URLs, branch SHAs, tree listings.
 
 ## 2. Genesis existing mode and custom names
 
-1. Pre-create control and platform repos with unrelated files.
-2. Use `repo_mode=existing` and customer-selected names.
+1. Pre-create combined control and platform repos with unrelated files.
+2. Use `repo_mode=existing` and customer-selected combined names
+   (`control_repo`, `platform_repo`).
 3. Include one truly empty pre-created repository for each provider and confirm
    Genesis initializes it with the final README before branch creation. Repeat
    with an empty tenant repository and confirm Bootstrap uses the immutable
    marker as its first commit.
-4. For per-resource layout, supply `platform_repo_names` as a mapping.
-5. Confirm unrelated files and permissions remain unchanged.
-6. Negative-test ordered lists, unknown folders, blanks, duplicates, and missing
-   mapped branches with branch creation disabled.
+4. Confirm unrelated files and repository permissions remain unchanged on the
+   pre-created combined repositories.
+5. Negative-test missing mapped branches with branch creation disabled
+   (`create_missing_env_branches=false`).
 
 ## 3. Greenfield default identity
 
@@ -66,12 +75,12 @@ aap_organization: "WW Stores: Automation #1"
 team_name: Stores Automation
 ```
 
-Use a custom combined `repo_name`, then repeat with a partial per-resource
-`repo_names` mapping.
+Use a custom combined `repo_name`.
 
 Confirm YAML punctuation round-trips unchanged, markers contain the exact
-identity and resolved mapping, Dispatcher and Drift both resolve custom names,
-and bounded onboarding launches `platform` then only `tenant:stores`.
+identity and resolved combined repository, Dispatcher and Drift both resolve
+that custom name, and bounded onboarding launches `platform` then only
+`tenant:stores`.
 
 ## 5. Optional naming policy
 
