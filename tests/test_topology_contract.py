@@ -666,10 +666,20 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         self.assertIn("clone_depth: 0", content)
 
     def test_brownfield_excluded_from_onboarding_fanout_outputs(self):
-        workflow = (ROOT / ".github/workflows/casc-validate-and-trigger.yml").read_text()
-        self.assertIn('onboarding_mode", "greenfield") == "greenfield"', workflow)
-        self.assertIn("fanout_tenant_ids", workflow)
-        self.assertIn("fanout_tenant_ids != '[]'", workflow)
+        workflows = (
+            ROOT / ".github/workflows/casc-validate-and-trigger.yml",
+            ROOT / "pipeline-templates/github/casc-validate-and-trigger.yml",
+        )
+        for workflow_path in workflows:
+            workflow = workflow_path.read_text()
+            self.assertIn('onboarding_mode", "greenfield") == "greenfield"', workflow, workflow_path)
+            self.assertIn("fanout_tenant_ids", workflow, workflow_path)
+            self.assertIn("fanout_tenant_ids != '[]'", workflow, workflow_path)
+
+        gitlab = (ROOT / "pipeline-templates/gitlab/.gitlab-ci-template.yml").read_text()
+        self.assertIn('onboarding_mode", "greenfield") == "greenfield"', gitlab)
+        self.assertIn("BOOTSTRAP_FANOUT_TENANT_IDS", gitlab)
+        self.assertIn("No greenfield onboarding tenants", gitlab)
 
     def test_genesis_converges_platform_scaffold_all_branches(self):
         for task in (
