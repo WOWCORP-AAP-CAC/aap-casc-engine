@@ -143,35 +143,41 @@
           - dispatch_scope != 'tenant' or tenant_id | length > 0 or triggered_repo | length > 0
         fail_msg: "dispatch_scope must be platform, tenant, or full; tenant scope requires TENANT_ID or TRIGGERED_REPO."
 
-    # Phase 2: Build selected repos list
+    # Phase 2: Build selected repos list.
+    # Keep these as native lists — block scalars (>-) stringify Jinja list
+    # output and break selectattr('aap_scope', ...) downstream.
     - name: "Filter active tenants"
       ansible.builtin.set_fact:
-        _active_tenants: >-
-          {{ _normalized_tenants
-             | selectattr('status', 'equalto', 'active')
-             | selectattr('dispatch_enabled', 'equalto', true)
-             | list }}
+        _active_tenants: "{{ _normalized_tenants | selectattr('status', 'equalto', 'active') | selectattr('dispatch_enabled', 'equalto', true) | list }}"
 
-    - name: "Build platform repos list"
+    - name: "Build platform repos list (combined)"
+      ansible.builtin.set_fact:
+        _platform_repos:
+          - name: "{{ _platform_repo }}"
+            clone_name: "platform__{{ _platform_repo }}"
+            repo_path: "{{ platform_scm_org }}/{{ _platform_repo }}"
+            aap_scope: platform
+            scm_org: "{{ platform_scm_org }}"
+      when: _repo_pattern == 'combined'
+
+    - name: "Build platform repos list (per-resource)"
       ansible.builtin.set_fact:
         _platform_repos: >-
-          {% if _repo_pattern == 'combined' %}
-          {{ [{'name': _platform_repo,
-               'clone_name': 'platform__' + _platform_repo,
-               'repo_path': platform_scm_org + '/' + _platform_repo,
-               'aap_scope': 'platform',
-               'scm_org': platform_scm_org}] }}
-          {% else %}
-          {% set repos = [] %}
-          {% for repo in control_config.platform_repos | default([]) %}
-          {% set _ = repos.append(repo | combine({
+          {%- set repos = [] -%}
+          {%- for repo in control_config.platform_repos | default([]) -%}
+          {%- set _ = repos.append(repo | combine({
                'clone_name': 'platform__' + repo.name,
                'repo_path': platform_scm_org + '/' + repo.name,
                'aap_scope': 'platform',
-               'scm_org': platform_scm_org})) %}
-          {% endfor %}
-          {{ repos }}
-          {% endif %}
+               'scm_org': platform_scm_org})) -%}
+          {%- endfor -%}
+          {{ repos | to_json }}
+      when: _repo_pattern != 'combined'
+
+    - name: "Decode per-resource platform repos list"
+      ansible.builtin.set_fact:
+        _platform_repos: "{{ _platform_repos | from_json }}"
+      when: _repo_pattern != 'combined'
 
     - name: "Initialize tenant repos list"
       ansible.builtin.set_fact:
@@ -179,26 +185,14 @@
 
     - name: "Build tenant repos list from the canonical registry resolver"
       ansible.builtin.set_fact:
-        _tenant_repos: >-
-          {{ _tenant_repos
-             + [{'name': item.1,
-                 'clone_name': item.0.tenant_id + '__' + item.1,
-                 'repo_path': item.0.tenant_scm_org + '/' + item.1,
-                 'aap_scope': item.0.tenant_id,
-                 'scm_org': item.0.tenant_scm_org}] }}
+        _tenant_repos: "{{ _tenant_repos + [{'name': item.1, 'clone_name': item.0.tenant_id + '__' + item.1, 'repo_path': item.0.tenant_scm_org + '/' + item.1, 'aap_scope': item.0.tenant_id, 'scm_org': item.0.tenant_scm_org}] }}"
       loop: "{{ _active_tenants | subelements('repositories') }}"
       loop_control:
         label: "{{ item.0.tenant_id }} -> {{ item.1 }}"
 
     - name: "Select only the requested desired-state scope"
       ansible.builtin.set_fact:
-        selected_repos: >-
-          {{ _platform_repos if dispatch_scope == 'platform'
-             else (_tenant_repos | selectattr('aap_scope', 'equalto', tenant_id) | list)
-             if dispatch_scope == 'tenant' and tenant_id | length > 0
-             else (_tenant_repos | selectattr('repo_path', 'equalto', triggered_repo) | list)
-             if dispatch_scope == 'tenant'
-             else _platform_repos + _tenant_repos }}
+        selected_repos: "{{ _platform_repos if dispatch_scope == 'platform' else ((_tenant_repos | selectattr('aap_scope', 'equalto', tenant_id) | list) if dispatch_scope == 'tenant' and (tenant_id | default('', true) | length) > 0 else ((_tenant_repos | selectattr('repo_path', 'equalto', triggered_repo) | list) if dispatch_scope == 'tenant' else (_platform_repos + _tenant_repos))) }}"
 
     - name: "Fail when the requested tenant scope does not resolve"
       ansible.builtin.assert:

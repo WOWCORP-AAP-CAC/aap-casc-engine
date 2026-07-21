@@ -644,6 +644,12 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             content = task.read_text()
             self.assertIn("selectattr('status', 'equalto', 200)", content, task)
             self.assertIn("default_branch | default('-')", content, task)
+
+    def test_dispatcher_selected_repos_preserves_native_lists(self):
+        content = (ENGINE_ROOT / "site.yml").read_text()
+        self.assertNotIn("selected_repos: >-", content)
+        self.assertIn('selected_repos: "{{ _platform_repos if dispatch_scope == \'platform\'', content)
+        self.assertIn("Build platform repos list (combined)", content)
             self.assertIn("Verify final scaffold marker", content, task)
             self.assertIn("Verify final thin caller", content, task)
             self.assertIn("Verify required scaffold files", content, task)
