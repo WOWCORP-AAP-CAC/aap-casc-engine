@@ -808,6 +808,103 @@ class DeletionSafetyTests(unittest.TestCase):
                 str(pinned),
             )
 
+    def test_cli_default_control_config_resolves_under_root_not_cwd(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outer = Path(tmp)
+            cwd = outer / "cwd"
+            root = outer / "desired-state"
+            cwd.mkdir()
+            control = root / ".control"
+            projects = root / "base" / "projects"
+            orgs = root / "base" / "organizations"
+            control.mkdir(parents=True)
+            projects.mkdir(parents=True)
+            orgs.mkdir(parents=True)
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            (projects / "demo.yml").write_text(
+                "controller_projects:\n  - name: demo\n",
+                encoding="utf-8",
+            )
+            (orgs / "org.yml").write_text(
+                "aap_organizations:\n  - name: WW Demo Org\n",
+                encoding="utf-8",
+            )
+            policy = outer / "naming-rules.yml"
+            policy.write_text(
+                "aap_organizations:\n  pattern: '^WW .+$'\n",
+                encoding="utf-8",
+            )
+
+            # No --control-config: must use <root>/.control/config.yml even when
+            # the process cwd is elsewhere and has no .control/ directory.
+            listed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/pipeline/casc_runtime.py"),
+                    "list-desired-state-dirs",
+                    "--root",
+                    str(root),
+                    "--caller-role",
+                    "tenant",
+                ],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(listed.returncode, 0, listed.stderr)
+            self.assertEqual(listed.stdout.strip(), "base")
+
+            structure = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/pipeline/casc_runtime.py"),
+                    "validate-structure",
+                    "--root",
+                    str(root),
+                    "--caller-role",
+                    "tenant",
+                    "--resource-types",
+                    str(ROOT / "schemas/resource-types.yml"),
+                    "--allowed-keys",
+                    str(ROOT / "roles/process_casc_config/defaults/main.yml"),
+                ],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(structure.returncode, 0, structure.stderr + structure.stdout)
+
+            naming = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "schemas/validate_naming.py"),
+                    "--config-dir",
+                    str(root),
+                    "--rules",
+                    str(policy),
+                    "--resource-types",
+                    str(ROOT / "schemas/resource-types.yml"),
+                    "--allowed-keys",
+                    str(ROOT / "roles/process_casc_config/defaults/main.yml"),
+                    "--caller-role",
+                    "tenant",
+                ],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(naming.returncode, 0, naming.stderr + naming.stdout)
+            self.assertIn("All configured naming rules passed", naming.stdout)
+
     def test_env_branch_map_keys_reject_traversal_and_invalid_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

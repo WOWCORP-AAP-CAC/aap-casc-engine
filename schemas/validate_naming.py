@@ -218,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rules", required=True)
     parser.add_argument("--resource-types", required=True)
     parser.add_argument("--allowed-keys", required=True)
-    parser.add_argument("--control-config", default=".control/config.yml")
+    parser.add_argument("--control-config", default="")
     parser.add_argument(
         "--caller-role",
         default="tenant",

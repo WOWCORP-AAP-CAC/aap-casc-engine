@@ -1419,7 +1419,7 @@ def build_parser() -> argparse.ArgumentParser:
     structure.add_argument("--root", default=".")
     structure.add_argument("--resource-types", required=True)
     structure.add_argument("--allowed-keys", default="")
-    structure.add_argument("--control-config", default=".control/config.yml")
+    structure.add_argument("--control-config", default="")
     structure.add_argument(
         "--caller-role",
         default="tenant",
@@ -1432,7 +1432,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     deletions.add_argument("--root", default=".")
     deletions.add_argument("--resource-types", required=True)
-    deletions.add_argument("--control-config", default=".control/config.yml")
+    deletions.add_argument("--control-config", default="")
     deletions.add_argument(
         "--caller-role",
         default="tenant",
@@ -1445,7 +1445,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="List base/ + env_branch_map dirs for desired-state scans",
     )
     list_dirs.add_argument("--root", default=".")
-    list_dirs.add_argument("--control-config", default=".control/config.yml")
+    list_dirs.add_argument("--control-config", default="")
     list_dirs.add_argument(
         "--caller-role",
         default="tenant",
