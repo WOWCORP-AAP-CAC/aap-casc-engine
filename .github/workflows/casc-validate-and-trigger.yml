@@ -4,6 +4,7 @@
 # Generated caller usage (seeded by genesis/bootstrap via caller_role):
 #
 #   Control repo (caller_role=control):
+#     - Ignores unrelated root YAML (control metadata only; not desired state)
 #     secrets:
 #       AAP_ENGINE_TOKEN: ${{ secrets.AAP_ENGINE_TOKEN }}
 #       AAP_ENV_TARGETS_JSON: ${{ secrets.AAP_ENV_TARGETS_JSON }}
@@ -233,81 +234,18 @@ jobs:
         run: pip install pyyaml
 
       - name: Validate YAML structure
+        env:
+          CASC_CALLER_ROLE: ${{ inputs.caller_role }}
         run: |
           echo "=== CasC YAML Structural Validation ==="
-          python3 -c "
-          import yaml, sys, os, glob
-
-          resource_types = yaml.safe_load(open('.schemas/resource-types.yml')) if os.path.exists('.schemas/resource-types.yml') else {'defaults': {'value_type': 'list', 'identity_field': 'name'}, 'exceptions': {}}
-          defaults = resource_types.get('defaults', {})
-          exceptions = resource_types.get('exceptions', {})
-
-          allowed_keys = None
-          for aks in ['.schemas/engine_defaults.yml', os.path.join('.engine', 'roles', 'process_casc_config', 'defaults', 'main.yml')]:
-              if os.path.exists(aks):
-                  ak = yaml.safe_load(open(aks))
-                  allowed_keys = set(ak.get('casc_allowed_resource_keys', []))
-                  break
-
-          skip_files = {'config.yml', 'tenants.yml', 'naming-rules.yml'}
-          skip_dirs = {'.schemas', '.engine', '.engine-runtime', '.scripts', '.control', '.aap-casc-engine', '.git', '.github'}
-          errors = []
-
-          search_dirs = (
-              ['base'] + [d for d in os.listdir('.') if os.path.isdir(d) and d not in skip_dirs and d != 'base']
-              if os.path.isdir('base') else ['.']
-          )
-          for search_dir in search_dirs:
-              if not os.path.isdir(search_dir):
-                  continue
-              for root, dirs, files in os.walk(search_dir):
-                  if search_dir == '.':
-                      dirs[:] = []
-                  for fname in files:
-                      if fname.startswith('.') or fname in skip_files:
-                          continue
-                      if not fname.endswith(('.yml', '.yaml')):
-                          continue
-                      if fname.endswith('.sample'):
-                          continue
-                      fpath = os.path.join(root, fname)
-                      try:
-                          data = yaml.safe_load(open(fpath))
-                      except Exception as e:
-                          errors.append(f'{fpath}: Failed to parse YAML — {e}')
-                          continue
-                      if not isinstance(data, dict):
-                          errors.append(f'{fpath}: Expected a mapping, got {type(data).__name__}')
-                          continue
-                      keys = list(data.keys())
-                      if len(keys) != 1:
-                          errors.append(f'{fpath}: Expected exactly 1 top-level key, got {len(keys)}: {keys}')
-                          continue
-                      key = keys[0]
-                      if allowed_keys and key not in allowed_keys:
-                          errors.append(f'{fpath}: Unknown resource key \"{key}\" (not in casc_allowed_resource_keys)')
-                          continue
-                      exc = exceptions.get(key, {})
-                      vtype = exc.get('value_type', defaults.get('value_type', 'list'))
-                      id_field = exc.get('identity_field', defaults.get('identity_field', 'name'))
-                      value = data[key]
-                      if vtype == 'list':
-                          if not isinstance(value, list):
-                              errors.append(f'{fpath}: Key \"{key}\" expected list, got {type(value).__name__}')
-                              continue
-                          for i, item in enumerate(value):
-                              if isinstance(item, dict) and id_field not in item:
-                                  errors.append(f'{fpath}: Item {i} in \"{key}\" missing identity field \"{id_field}\"')
-          if errors:
-              print('Structural validation errors:')
-              for e in errors:
-                  print(f'  ERROR: {e}')
-              sys.exit(1)
-          else:
-              print('=== ALL YAML FILES PASSED STRUCTURAL VALIDATION ===')
-          "
+          python3 .scripts/pipeline/casc_runtime.py validate-structure \
+            --root . \
+            --caller-role "${CASC_CALLER_ROLE}" \
+            --resource-types .schemas/resource-types.yml \
+            --allowed-keys .schemas/engine_defaults.yml
           python3 .scripts/pipeline/casc_runtime.py validate-deletions \
             --root . \
+            --caller-role "${CASC_CALLER_ROLE}" \
             --resource-types .schemas/resource-types.yml
 
       - name: Validate control files (config.yml / tenants.yml)
@@ -369,7 +307,8 @@ jobs:
               --config-dir . \
               --rules .schemas/naming-rules.yml \
               --resource-types .schemas/resource-types.yml \
-              --allowed-keys .schemas/engine_defaults.yml
+              --allowed-keys .schemas/engine_defaults.yml \
+              --caller-role "${{ inputs.caller_role }}"
             echo "=== NAMING CONVENTIONS PASSED ==="
           else
             echo "Naming policy not active."
@@ -379,7 +318,9 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          if [ -d ".schemas/policies" ]; then
+          if [ "${{ inputs.caller_role }}" = "control" ]; then
+            echo "Control repo: skipping desired-state OPA resource scan"
+          elif [ -d ".schemas/policies" ]; then
             echo "=== Checking OPA policy compliance ==="
             curl -sL -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
             chmod +x opa
@@ -392,11 +333,15 @@ jobs:
               esac
             done
 
-            for yml_file in $(find $SCAN_DIRS -name "*.yml" -o -name "*.yaml" 2>/dev/null | grep -v '.sample$'); do
-              echo "Policy check: $yml_file"
-              python3 -c "import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), open('/tmp/opa_input.json','w'))" "$yml_file"
-              ./opa eval --data .schemas/policies/ --input /tmp/opa_input.json "data.casc.deny" --format pretty
-            done
+            if [ -z "$SCAN_DIRS" ]; then
+              echo "No desired-state directories found — OPA resource scan skipped"
+            else
+              for yml_file in $(find $SCAN_DIRS -name "*.yml" -o -name "*.yaml" 2>/dev/null | grep -v '.sample$'); do
+                echo "Policy check: $yml_file"
+                python3 -c "import yaml,json,sys; json.dump(yaml.safe_load(open(sys.argv[1])), open('/tmp/opa_input.json','w'))" "$yml_file"
+                ./opa eval --data .schemas/policies/ --input /tmp/opa_input.json "data.casc.deny" --format pretty
+              done
+            fi
             echo "=== OPA POLICY CHECK COMPLETE ==="
           else
             echo "No OPA policies found — skipping."

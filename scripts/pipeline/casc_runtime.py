@@ -105,39 +105,169 @@ def load_yaml_file(path: str) -> dict[str, Any]:
     return data
 
 
-def iter_resource_yaml_files(root: str) -> list[str]:
-    """Return customer resource YAML while excluding engine/control metadata."""
-    excluded_dirs = {
-        ".git",
-        ".github",
-        ".schemas",
-        ".engine",
-        ".engine-runtime",
-        ".scripts",
-        ".control",
-        ".aap-casc-engine",
-    }
-    excluded_files = {"config.yml", "tenants.yml", "naming-rules.yml"}
+EXCLUDED_RESOURCE_DIRS = {
+    ".git",
+    ".github",
+    ".schemas",
+    ".engine",
+    ".engine-runtime",
+    ".scripts",
+    ".control",
+    ".aap-casc-engine",
+}
+EXCLUDED_RESOURCE_FILES = {"config.yml", "tenants.yml", "naming-rules.yml"}
+
+
+def desired_state_search_dirs(root: str) -> list[str]:
+    """Return top-level desired-state directories (base/ + env dirs), never repo root."""
+    dirs: list[str] = []
+    base = os.path.join(root, "base")
+    if os.path.isdir(base):
+        dirs.append("base")
+    try:
+        names = sorted(os.listdir(root))
+    except FileNotFoundError:
+        return dirs
+    for name in names:
+        if name == "base" or name in EXCLUDED_RESOURCE_DIRS:
+            continue
+        path = os.path.join(root, name)
+        if os.path.isdir(path):
+            dirs.append(name)
+    return dirs
+
+
+def iter_resource_yaml_files(root: str, caller_role: str = "tenant") -> list[str]:
+    """Return desired-state resource YAML for platform/tenant callers.
+
+    Control repositories hold control metadata (config.yml, tenants.yml, optional
+    naming-rules.yml), not AAP desired state. Arbitrary root YAML in a control
+    repo must not be treated as CasC resources.
+    """
+    role = (caller_role or "tenant").strip().lower()
+    if role == "control":
+        return []
+
     paths: list[str] = []
-    for current, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if name not in excluded_dirs]
-        for name in files:
-            if name in excluded_files or name.endswith(".sample"):
-                continue
-            if not name.endswith((".yml", ".yaml")):
-                continue
-            paths.append(os.path.join(current, name))
+    for search_dir in desired_state_search_dirs(root):
+        start = os.path.join(root, search_dir)
+        for current, dirs, files in os.walk(start):
+            dirs[:] = [name for name in dirs if name not in EXCLUDED_RESOURCE_DIRS]
+            for name in files:
+                if name in EXCLUDED_RESOURCE_FILES or name.endswith(".sample"):
+                    continue
+                if not name.endswith((".yml", ".yaml")):
+                    continue
+                paths.append(os.path.join(current, name))
     return sorted(paths)
 
 
-def validate_explicit_deletions(root: str, resource_types_path: str) -> None:
+def validate_structure(
+    root: str,
+    resource_types_path: str,
+    allowed_keys_path: str = "",
+    caller_role: str = "tenant",
+) -> None:
+    """Validate desired-state YAML shape for platform/tenant callers."""
+    role = (caller_role or "tenant").strip().lower()
+    if role == "control":
+        print("Control repo: skipping desired-state structural validation")
+        return
+
+    resource_types: dict[str, Any] = {
+        "defaults": {"value_type": "list", "identity_field": "name"},
+        "exceptions": {},
+    }
+    if os.path.exists(resource_types_path):
+        loaded = load_yaml_file(resource_types_path)
+        resource_types.update(loaded)
+    defaults = resource_types.get("defaults") or {}
+    exceptions = resource_types.get("exceptions") or {}
+
+    allowed_keys = None
+    key_candidates = []
+    if allowed_keys_path:
+        key_candidates.append(allowed_keys_path)
+    key_candidates.extend(
+        [
+            os.path.join(root, ".schemas", "engine_defaults.yml"),
+            os.path.join(
+                root, ".engine", "roles", "process_casc_config", "defaults", "main.yml"
+            ),
+        ]
+    )
+    for candidate in key_candidates:
+        if candidate and os.path.exists(candidate):
+            allowed_keys = set(
+                (load_yaml_file(candidate).get("casc_allowed_resource_keys") or [])
+            )
+            break
+
+    errors: list[str] = []
+    paths = iter_resource_yaml_files(root, caller_role=role)
+    if not paths:
+        print("No desired-state YAML found — structural validation skipped")
+        return
+
+    for fpath in paths:
+        try:
+            data = load_yaml_file(fpath)
+        except Exception as exc:  # noqa: BLE001 - surface parse errors to CI
+            errors.append(f"{fpath}: Failed to parse YAML — {exc}")
+            continue
+        keys = list(data.keys())
+        if len(keys) != 1:
+            errors.append(
+                f"{fpath}: Expected exactly 1 top-level key, got {len(keys)}: {keys}"
+            )
+            continue
+        key = keys[0]
+        if allowed_keys is not None and key not in allowed_keys:
+            errors.append(
+                f'{fpath}: Unknown resource key "{key}" (not in casc_allowed_resource_keys)'
+            )
+            continue
+        exc_meta = exceptions.get(key) or {}
+        vtype = exc_meta.get("value_type", defaults.get("value_type", "list"))
+        id_field = exc_meta.get(
+            "identity_field", defaults.get("identity_field", "name")
+        )
+        value = data[key]
+        if vtype == "list":
+            if not isinstance(value, list):
+                errors.append(
+                    f'{fpath}: Key "{key}" expected list, got {type(value).__name__}'
+                )
+                continue
+            for index, item in enumerate(value):
+                if isinstance(item, dict) and id_field not in item:
+                    errors.append(
+                        f'{fpath}: Item {index} in "{key}" missing identity field '
+                        f'"{id_field}"'
+                    )
+
+    if errors:
+        raise ValueError(
+            "Structural validation errors:\n  " + "\n  ".join(errors)
+        )
+    print("=== ALL YAML FILES PASSED STRUCTURAL VALIDATION ===")
+
+
+def validate_explicit_deletions(
+    root: str, resource_types_path: str, caller_role: str = "tenant"
+) -> None:
     """Fail closed when YAML requests deletion without audited schema support."""
+    role = (caller_role or "tenant").strip().lower()
+    if role == "control":
+        print("Control repo: skipping desired-state deletion validation")
+        return
+
     schema = load_yaml_file(resource_types_path)
     defaults = schema.get("defaults") or {}
     exceptions = schema.get("exceptions") or {}
     errors: list[str] = []
 
-    for path in iter_resource_yaml_files(root):
+    for path in iter_resource_yaml_files(root, caller_role=role):
         document = load_yaml_file(path)
         if len(document) != 1:
             continue  # Structural validation reports this with better context.
@@ -168,7 +298,6 @@ def validate_explicit_deletions(root: str, resource_types_path: str) -> None:
 
     if errors:
         raise ValueError("Unsupported explicit deletion:\n  " + "\n  ".join(errors))
-
 
 def resolve_jt_names(cfg: dict[str, Any]) -> dict[str, str]:
     configured = cfg.get("job_templates") or {}
@@ -1096,8 +1225,28 @@ def cmd_validate_registry(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_validate_structure(args: argparse.Namespace) -> int:
+    try:
+        validate_structure(
+            args.root,
+            args.resource_types,
+            allowed_keys_path=args.allowed_keys,
+            caller_role=args.caller_role,
+        )
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    return 0
+
+
 def cmd_validate_deletions(args: argparse.Namespace) -> int:
-    validate_explicit_deletions(args.root, args.resource_types)
+    try:
+        validate_explicit_deletions(
+            args.root, args.resource_types, caller_role=args.caller_role
+        )
+    except ValueError as exc:
+        print(str(exc))
+        return 1
     print("Explicit deletion validation passed")
     return 0
 
@@ -1194,13 +1343,31 @@ def build_parser() -> argparse.ArgumentParser:
     registry.add_argument("--tenants", default="tenants.yml")
     registry.set_defaults(func=cmd_validate_registry)
 
+    structure = sub.add_parser(
+        "validate-structure",
+        help="Validate desired-state YAML structure (role-aware)",
+    )
+    structure.add_argument("--root", default=".")
+    structure.add_argument("--resource-types", required=True)
+    structure.add_argument("--allowed-keys", default="")
+    structure.add_argument(
+        "--caller-role",
+        default="tenant",
+        choices=["control", "platform", "tenant"],
+    )
+    structure.set_defaults(func=cmd_validate_structure)
+
     deletions = sub.add_parser(
         "validate-deletions", help="Reject explicit deletion without audited support"
     )
     deletions.add_argument("--root", default=".")
     deletions.add_argument("--resource-types", required=True)
+    deletions.add_argument(
+        "--caller-role",
+        default="tenant",
+        choices=["control", "platform", "tenant"],
+    )
     deletions.set_defaults(func=cmd_validate_deletions)
-
     bootstrap = sub.add_parser("resolve-bootstrap", help="Resolve one Bootstrap request")
     bootstrap.add_argument("--config", required=True)
     bootstrap.add_argument("--tenants", required=True)

@@ -115,9 +115,48 @@ def validate_file(file_path: str, rules: dict[str, dict[str, Any]]) -> list[str]
     return errors
 
 
-def validate_tree(config_dir: str, rules: dict[str, dict[str, Any]]) -> list[str]:
+def desired_state_search_dirs(config_dir: str) -> list[str]:
+    """Return base/ + env dirs only; never scan control-root loose YAML."""
+    skip_dirs = {
+        ".schemas",
+        ".engine",
+        ".engine-runtime",
+        ".git",
+        ".github",
+        ".scripts",
+        ".control",
+        ".aap-casc-engine",
+    }
+    dirs: list[str] = []
+    base = os.path.join(config_dir, "base")
+    if os.path.isdir(base):
+        dirs.append("base")
+    try:
+        names = sorted(os.listdir(config_dir))
+    except FileNotFoundError:
+        return dirs
+    for name in names:
+        if name == "base" or name in skip_dirs:
+            continue
+        path = os.path.join(config_dir, name)
+        if os.path.isdir(path):
+            dirs.append(name)
+    return dirs
+
+
+def validate_tree(
+    config_dir: str,
+    rules: dict[str, dict[str, Any]],
+    caller_role: str = "tenant",
+) -> list[str]:
     if not rules:
         return []
+    role = (caller_role or "tenant").strip().lower()
+    if role == "control":
+        # Control repos validate the naming-policy definition via load_policy;
+        # they do not host desired-state resource YAML.
+        return []
+
     errors: list[str] = []
     skip_dirs = {
         ".schemas",
@@ -130,14 +169,16 @@ def validate_tree(config_dir: str, rules: dict[str, dict[str, Any]]) -> list[str
         ".aap-casc-engine",
     }
     skip_files = {"config.yml", "tenants.yml", "naming-rules.yml"}
-    for root, dirs, files in os.walk(config_dir):
-        dirs[:] = [directory for directory in dirs if directory not in skip_dirs]
-        for filename in files:
-            if not filename.endswith((".yml", ".yaml")) or filename.endswith(".sample"):
-                continue
-            if filename in skip_files:
-                continue
-            errors.extend(validate_file(os.path.join(root, filename), rules))
+    for search_dir in desired_state_search_dirs(config_dir):
+        start = os.path.join(config_dir, search_dir)
+        for root, dirs, files in os.walk(start):
+            dirs[:] = [directory for directory in dirs if directory not in skip_dirs]
+            for filename in files:
+                if not filename.endswith((".yml", ".yaml")) or filename.endswith(".sample"):
+                    continue
+                if filename in skip_files:
+                    continue
+                errors.extend(validate_file(os.path.join(root, filename), rules))
     return errors
 
 
@@ -147,12 +188,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rules", required=True)
     parser.add_argument("--resource-types", required=True)
     parser.add_argument("--allowed-keys", required=True)
+    parser.add_argument(
+        "--caller-role",
+        default="tenant",
+        choices=["control", "platform", "tenant"],
+    )
     args = parser.parse_args(argv)
     try:
         rules, _exceptions, _defaults = load_policy(
             args.rules, args.resource_types, args.allowed_keys
         )
-        errors = validate_tree(args.config_dir, rules)
+        if args.caller_role == "control":
+            print(
+                "Control repo: naming-policy definition loaded; "
+                "skipping desired-state naming scan"
+            )
+            return 0
+        errors = validate_tree(args.config_dir, rules, caller_role=args.caller_role)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

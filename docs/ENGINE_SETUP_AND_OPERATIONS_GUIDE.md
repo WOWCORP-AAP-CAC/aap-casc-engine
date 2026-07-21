@@ -53,6 +53,23 @@ AAP; pipelines receive only execute-level launcher tokens.
 | Dispatcher | Control repo coordinates | `target_env`, `dispatch_scope`, `tenant_id` or `triggered_repo`, `control_revision` | SCM read credential plus target AAP connection credential |
 | Drift | Control repo coordinates | `target_env`, `drift_mode`, optional `control_revision` | SCM read credential plus target AAP connection credential |
 
+#### Job Template to control-plane binding
+
+Bootstrap, Dispatcher, and Drift Job Templates are intentionally bound to **one**
+trusted control plane through their fixed AAP extra vars
+(`control_scm_org`, `control_repo`, `control_branch`, and related coordinates).
+
+This is a trust boundary, not a missing CI feature:
+
+- Caller workflows (including tenant-controlled pipelines) must **not** be able to
+  override `control_repo` / control coordinates on privileged Job Template launches.
+- CI may supply tenant fields and a pinned `control_revision` for the bound control
+  repo; it must not redirect privileged execution to different control content.
+- One Bootstrap/Dispatcher/Drift JT set serves one control plane.
+- Parallel independent control planes require separately configured JT sets (or an
+  intentional operator retarget of the JT fixed vars for a controlled validation
+  window), not dynamic forwarding from an editable caller workflow.
+
 Recommended Bootstrap survey schema:
 
 | Field | Survey required? | Runtime rule |
