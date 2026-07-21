@@ -187,6 +187,10 @@ Dispatcher run fail before `infra.aap_configuration.dispatch` is invoked.
 
 ## 11. Final evidence package
 
+Archive run-specific evidence **outside** this reusable engine repository
+(engagement workspace or project vault). Do not commit customer/demo SCM org
+names, AAP URLs, pipeline URLs, or job IDs into product docs.
+
 Record:
 
 - candidate engine SHA;
