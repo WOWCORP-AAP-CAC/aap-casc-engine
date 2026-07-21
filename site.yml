@@ -219,6 +219,8 @@
         repos_to_clone: "{{ selected_repos | selectattr('aap_scope', 'equalto', 'platform') | list }}"
         clone_base_dir: "{{ clone_dir }}"
         clone_branch: "{{ target_branch }}"
+        # Full history: shallow clones of non-default env branches fail in some EEs.
+        clone_depth: 0
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
@@ -229,6 +231,7 @@
         repos_to_clone: "{{ selected_repos | rejectattr('aap_scope', 'equalto', 'platform') | list }}"
         clone_base_dir: "{{ clone_dir }}"
         clone_branch: "{{ target_branch }}"
+        clone_depth: 0
         git_base_url: "{{ scm_base_url }}"
         git_token: "{{ scm_token }}"
 
