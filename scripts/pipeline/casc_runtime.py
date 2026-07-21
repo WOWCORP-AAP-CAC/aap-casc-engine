@@ -118,38 +118,75 @@ EXCLUDED_RESOURCE_DIRS = {
 EXCLUDED_RESOURCE_FILES = {"config.yml", "tenants.yml", "naming-rules.yml"}
 
 
-def desired_state_search_dirs(root: str) -> list[str]:
-    """Return top-level desired-state directories (base/ + env dirs), never repo root."""
+def resolve_control_config_path(root: str, control_config: str = "") -> str:
+    """Resolve pinned control config used for env_branch_map directory scope."""
+    candidates: list[str] = []
+    if control_config:
+        candidates.append(control_config)
+    candidates.extend(
+        [
+            os.path.join(root, ".control", "config.yml"),
+            os.path.join(root, "config.yml"),
+        ]
+    )
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return ""
+
+
+def load_env_names(root: str, control_config: str = "") -> list[str]:
+    """Return env_branch_map keys (environment directory names) from pinned control config."""
+    path = resolve_control_config_path(root, control_config)
+    if not path:
+        raise ValueError(
+            "Pinned control config with env_branch_map is required to resolve "
+            "desired-state directories (.control/config.yml)"
+        )
+    cfg = load_yaml_file(path)
+    ebm = cfg.get("env_branch_map")
+    if not isinstance(ebm, dict) or not ebm:
+        raise ValueError(f"{path}: env_branch_map must be a non-empty mapping")
+    names: list[str] = []
+    for key in ebm:
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{path}: env_branch_map keys must be non-empty strings")
+        names.append(key.strip())
+    return names
+
+
+def desired_state_search_dirs(root: str, control_config: str = "") -> list[str]:
+    """Return only base/ plus env_branch_map environment directories that exist.
+
+    Unrelated top-level directories (docs/, governance/, etc.) are never scanned.
+    """
     dirs: list[str] = []
-    base = os.path.join(root, "base")
-    if os.path.isdir(base):
+    if os.path.isdir(os.path.join(root, "base")):
         dirs.append("base")
-    try:
-        names = sorted(os.listdir(root))
-    except FileNotFoundError:
-        return dirs
-    for name in names:
-        if name == "base" or name in EXCLUDED_RESOURCE_DIRS:
-            continue
-        path = os.path.join(root, name)
-        if os.path.isdir(path):
-            dirs.append(name)
+    for env_name in load_env_names(root, control_config):
+        if os.path.isdir(os.path.join(root, env_name)):
+            dirs.append(env_name)
     return dirs
 
 
-def iter_resource_yaml_files(root: str, caller_role: str = "tenant") -> list[str]:
+def iter_resource_yaml_files(
+    root: str, caller_role: str = "tenant", control_config: str = ""
+) -> list[str]:
     """Return desired-state resource YAML for platform/tenant callers.
 
     Control repositories hold control metadata (config.yml, tenants.yml, optional
     naming-rules.yml), not AAP desired state. Arbitrary root YAML in a control
     repo must not be treated as CasC resources.
+
+    Platform/tenant scans are limited to base/ and env_branch_map environment
+    directories from the pinned control config.
     """
     role = (caller_role or "tenant").strip().lower()
     if role == "control":
         return []
 
     paths: list[str] = []
-    for search_dir in desired_state_search_dirs(root):
+    for search_dir in desired_state_search_dirs(root, control_config=control_config):
         start = os.path.join(root, search_dir)
         for current, dirs, files in os.walk(start):
             dirs[:] = [name for name in dirs if name not in EXCLUDED_RESOURCE_DIRS]
@@ -167,6 +204,7 @@ def validate_structure(
     resource_types_path: str,
     allowed_keys_path: str = "",
     caller_role: str = "tenant",
+    control_config: str = "",
 ) -> None:
     """Validate desired-state YAML shape for platform/tenant callers."""
     role = (caller_role or "tenant").strip().lower()
@@ -204,7 +242,9 @@ def validate_structure(
             break
 
     errors: list[str] = []
-    paths = iter_resource_yaml_files(root, caller_role=role)
+    paths = iter_resource_yaml_files(
+        root, caller_role=role, control_config=control_config
+    )
     if not paths:
         print("No desired-state YAML found — structural validation skipped")
         return
@@ -254,7 +294,10 @@ def validate_structure(
 
 
 def validate_explicit_deletions(
-    root: str, resource_types_path: str, caller_role: str = "tenant"
+    root: str,
+    resource_types_path: str,
+    caller_role: str = "tenant",
+    control_config: str = "",
 ) -> None:
     """Fail closed when YAML requests deletion without audited schema support."""
     role = (caller_role or "tenant").strip().lower()
@@ -267,7 +310,9 @@ def validate_explicit_deletions(
     exceptions = schema.get("exceptions") or {}
     errors: list[str] = []
 
-    for path in iter_resource_yaml_files(root, caller_role=role):
+    for path in iter_resource_yaml_files(
+        root, caller_role=role, control_config=control_config
+    ):
         document = load_yaml_file(path)
         if len(document) != 1:
             continue  # Structural validation reports this with better context.
@@ -1232,6 +1277,7 @@ def cmd_validate_structure(args: argparse.Namespace) -> int:
             args.resource_types,
             allowed_keys_path=args.allowed_keys,
             caller_role=args.caller_role,
+            control_config=args.control_config,
         )
     except ValueError as exc:
         print(str(exc))
@@ -1242,12 +1288,30 @@ def cmd_validate_structure(args: argparse.Namespace) -> int:
 def cmd_validate_deletions(args: argparse.Namespace) -> int:
     try:
         validate_explicit_deletions(
-            args.root, args.resource_types, caller_role=args.caller_role
+            args.root,
+            args.resource_types,
+            caller_role=args.caller_role,
+            control_config=args.control_config,
         )
     except ValueError as exc:
         print(str(exc))
         return 1
     print("Explicit deletion validation passed")
+    return 0
+
+
+def cmd_list_desired_state_dirs(args: argparse.Namespace) -> int:
+    role = (args.caller_role or "tenant").strip().lower()
+    if role == "control":
+        return 0
+    try:
+        for directory in desired_state_search_dirs(
+            args.root, control_config=args.control_config
+        ):
+            print(directory)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     return 0
 
 
@@ -1350,6 +1414,7 @@ def build_parser() -> argparse.ArgumentParser:
     structure.add_argument("--root", default=".")
     structure.add_argument("--resource-types", required=True)
     structure.add_argument("--allowed-keys", default="")
+    structure.add_argument("--control-config", default=".control/config.yml")
     structure.add_argument(
         "--caller-role",
         default="tenant",
@@ -1362,12 +1427,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     deletions.add_argument("--root", default=".")
     deletions.add_argument("--resource-types", required=True)
+    deletions.add_argument("--control-config", default=".control/config.yml")
     deletions.add_argument(
         "--caller-role",
         default="tenant",
         choices=["control", "platform", "tenant"],
     )
     deletions.set_defaults(func=cmd_validate_deletions)
+
+    list_dirs = sub.add_parser(
+        "list-desired-state-dirs",
+        help="List base/ + env_branch_map dirs for desired-state scans",
+    )
+    list_dirs.add_argument("--root", default=".")
+    list_dirs.add_argument("--control-config", default=".control/config.yml")
+    list_dirs.add_argument(
+        "--caller-role",
+        default="tenant",
+        choices=["control", "platform", "tenant"],
+    )
+    list_dirs.set_defaults(func=cmd_list_desired_state_dirs)
+
     bootstrap = sub.add_parser("resolve-bootstrap", help="Resolve one Bootstrap request")
     bootstrap.add_argument("--config", required=True)
     bootstrap.add_argument("--tenants", required=True)

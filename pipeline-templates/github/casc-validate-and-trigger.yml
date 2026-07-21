@@ -195,11 +195,13 @@ jobs:
           echo "=== CasC YAML Structural Validation ==="
           python3 .scripts/pipeline/casc_runtime.py validate-structure \
             --root . \
+            --control-config .control/config.yml \
             --caller-role "${CASC_CALLER_ROLE}" \
             --resource-types .schemas/resource-types.yml \
             --allowed-keys .schemas/engine_defaults.yml
           python3 .scripts/pipeline/casc_runtime.py validate-deletions \
             --root . \
+            --control-config .control/config.yml \
             --caller-role "${CASC_CALLER_ROLE}" \
             --resource-types .schemas/resource-types.yml
 
@@ -263,6 +265,7 @@ jobs:
               --rules .schemas/naming-rules.yml \
               --resource-types .schemas/resource-types.yml \
               --allowed-keys .schemas/engine_defaults.yml \
+              --control-config .control/config.yml \
               --caller-role "${CASC_CALLER_ROLE}"
             echo "=== NAMING CONVENTIONS PASSED ==="
           else
@@ -280,13 +283,11 @@ jobs:
             curl -sL -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static
             chmod +x opa
 
-            SCAN_DIRS=""
-            for d in $(ls -d */ 2>/dev/null); do
-              case "$d" in
-                .schemas/|.engine/|.engine-runtime/|.scripts/|.control/|.aap-casc-engine/|.git/|.github/) continue ;;
-                *) SCAN_DIRS="$SCAN_DIRS $d" ;;
-              esac
-            done
+            SCAN_DIRS=$(python3 .scripts/pipeline/casc_runtime.py list-desired-state-dirs \
+              --root . \
+              --control-config .control/config.yml \
+              --caller-role "${CASC_CALLER_ROLE}" | tr '
+' ' ')
 
             if [ -z "$SCAN_DIRS" ]; then
               echo "No desired-state directories found — OPA resource scan skipped"

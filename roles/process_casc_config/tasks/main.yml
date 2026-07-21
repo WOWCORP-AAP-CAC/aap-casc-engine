@@ -37,6 +37,10 @@
       - validate-deletions
       - --root
       - "{{ repo_clone_dir }}"
+      - --control-config
+      - "{{ casc_control_config | default(control_dir ~ '/' ~ control_repo ~ '/config.yml') }}"
+      - --caller-role
+      - "{{ casc_caller_role | default('tenant') }}"
       - --resource-types
       - "{{ casc_resource_types_file }}"
   changed_when: false

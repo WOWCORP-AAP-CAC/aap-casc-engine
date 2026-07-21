@@ -115,32 +115,53 @@ def validate_file(file_path: str, rules: dict[str, dict[str, Any]]) -> list[str]
     return errors
 
 
-def desired_state_search_dirs(config_dir: str) -> list[str]:
-    """Return base/ + env dirs only; never scan control-root loose YAML."""
-    skip_dirs = {
-        ".schemas",
-        ".engine",
-        ".engine-runtime",
-        ".git",
-        ".github",
-        ".scripts",
-        ".control",
-        ".aap-casc-engine",
-    }
+def resolve_control_config_path(config_dir: str, control_config: str = "") -> str:
+    candidates: list[str] = []
+    if control_config:
+        candidates.append(control_config)
+    candidates.extend(
+        [
+            os.path.join(config_dir, ".control", "config.yml"),
+            os.path.join(config_dir, "config.yml"),
+        ]
+    )
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return ""
+
+
+def load_env_names(config_dir: str, control_config: str = "") -> list[str]:
+    """Return env_branch_map keys (environment directory names)."""
+    path = resolve_control_config_path(config_dir, control_config)
+    if not path:
+        raise ValueError(
+            "Pinned control config with env_branch_map is required to resolve "
+            "desired-state directories (.control/config.yml)"
+        )
+    with open(path, encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle) or {}
+    if not isinstance(cfg, dict):
+        raise ValueError(f"{path} must contain a YAML mapping")
+    ebm = cfg.get("env_branch_map")
+    if not isinstance(ebm, dict) or not ebm:
+        raise ValueError(f"{path}: env_branch_map must be a non-empty mapping")
+    names: list[str] = []
+    for key in ebm:
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError(f"{path}: env_branch_map keys must be non-empty strings")
+        names.append(key.strip())
+    return names
+
+
+def desired_state_search_dirs(config_dir: str, control_config: str = "") -> list[str]:
+    """Return only base/ plus env_branch_map environment directories that exist."""
     dirs: list[str] = []
-    base = os.path.join(config_dir, "base")
-    if os.path.isdir(base):
+    if os.path.isdir(os.path.join(config_dir, "base")):
         dirs.append("base")
-    try:
-        names = sorted(os.listdir(config_dir))
-    except FileNotFoundError:
-        return dirs
-    for name in names:
-        if name == "base" or name in skip_dirs:
-            continue
-        path = os.path.join(config_dir, name)
-        if os.path.isdir(path):
-            dirs.append(name)
+    for env_name in load_env_names(config_dir, control_config):
+        if os.path.isdir(os.path.join(config_dir, env_name)):
+            dirs.append(env_name)
     return dirs
 
 
@@ -148,6 +169,7 @@ def validate_tree(
     config_dir: str,
     rules: dict[str, dict[str, Any]],
     caller_role: str = "tenant",
+    control_config: str = "",
 ) -> list[str]:
     if not rules:
         return []
@@ -169,7 +191,9 @@ def validate_tree(
         ".aap-casc-engine",
     }
     skip_files = {"config.yml", "tenants.yml", "naming-rules.yml"}
-    for search_dir in desired_state_search_dirs(config_dir):
+    for search_dir in desired_state_search_dirs(
+        config_dir, control_config=control_config
+    ):
         start = os.path.join(config_dir, search_dir)
         for root, dirs, files in os.walk(start):
             dirs[:] = [directory for directory in dirs if directory not in skip_dirs]
@@ -188,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rules", required=True)
     parser.add_argument("--resource-types", required=True)
     parser.add_argument("--allowed-keys", required=True)
+    parser.add_argument("--control-config", default=".control/config.yml")
     parser.add_argument(
         "--caller-role",
         default="tenant",
@@ -204,7 +229,12 @@ def main(argv: list[str] | None = None) -> int:
                 "skipping desired-state naming scan"
             )
             return 0
-        errors = validate_tree(args.config_dir, rules, caller_role=args.caller_role)
+        errors = validate_tree(
+            args.config_dir,
+            rules,
+            caller_role=args.caller_role,
+            control_config=args.control_config,
+        )
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

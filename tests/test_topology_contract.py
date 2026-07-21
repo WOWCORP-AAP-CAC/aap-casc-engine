@@ -534,6 +534,12 @@ class NamingPolicyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             desired = root / "desired"
+            control = desired / ".control"
+            control.mkdir(parents=True)
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
             org_dir = desired / "base" / "organizations"
             team_dir = desired / "base" / "teams"
             org_dir.mkdir(parents=True)
@@ -556,6 +562,20 @@ class NamingPolicyTests(unittest.TestCase):
             )
             self.assertTrue(validate_naming.validate_tree(str(desired), rules))
 
+            # Restore a valid team, then prove unrelated docs/ YAML is ignored.
+            context["_effective_team_name"] = "Stores Automation"
+            (team_dir / "teams.yml").write_text(
+                jinja.get_template("templates/team-template.yml.j2").render(**context),
+                encoding="utf-8",
+            )
+            docs = desired / "docs"
+            docs.mkdir()
+            (docs / "notes.yml").write_text(
+                "aap_organizations:\n  - name: BAD NAME\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(validate_naming.validate_tree(str(desired), rules), [])
+
     def test_policy_schema_fails_closed(self):
         cases = {
             "list": "- aap_organizations\n",
@@ -577,6 +597,12 @@ class NamingPolicyTests(unittest.TestCase):
     def test_naming_rules_control_file_is_not_scanned_as_desired_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
             policy = Path(tmp) / "policy-source.txt"
             policy.write_text("aap_organizations:\n  pattern: '^WW .+$'\n", encoding="utf-8")
             (root / "naming-rules.yml").write_text(
@@ -596,9 +622,27 @@ class NamingPolicyTests(unittest.TestCase):
 
 
 class DeletionSafetyTests(unittest.TestCase):
+    @staticmethod
+    def _write_pinned_control(root: Path) -> Path:
+        control = root / ".control"
+        control.mkdir(parents=True, exist_ok=True)
+        cfg = control / "config.yml"
+        cfg.write_text(
+            "scm_provider: github\n"
+            "control_scm_org: org\n"
+            "control_repo: control\n"
+            "control_branch: main\n"
+            "platform_scm_org: org\n"
+            "platform_repo_pattern: combined\n"
+            "env_branch_map:\n  poc: dev\n  prod: main\n",
+            encoding="utf-8",
+        )
+        return cfg
+
     def test_unsupported_explicit_deletion_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            self._write_pinned_control(root)
             base = root / "base" / "projects"
             base.mkdir(parents=True)
             target = base / "project.yml"
@@ -622,16 +666,7 @@ class DeletionSafetyTests(unittest.TestCase):
     def test_control_repo_ignores_unrelated_root_yaml(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "config.yml").write_text(
-                "scm_provider: github\n"
-                "control_scm_org: org\n"
-                "control_repo: control\n"
-                "control_branch: main\n"
-                "platform_scm_org: org\n"
-                "platform_repo_pattern: combined\n"
-                "env_branch_map:\n  poc: dev\n  prod: main\n",
-                encoding="utf-8",
-            )
+            self._write_pinned_control(root)
             (root / "platform-policy.yml").write_text(
                 "unrelated-platform-policy:\n  owner: platform-governance\n",
                 encoding="utf-8",
@@ -657,18 +692,92 @@ class DeletionSafetyTests(unittest.TestCase):
                 caller_role="control",
             )
 
-            # Platform/tenant callers still validate desired-state directories only.
+    def test_platform_tenant_scan_only_base_and_env_branch_map_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_pinned_control(root)
+
             base = root / "base" / "projects"
-            base.mkdir(parents=True)
-            (base / "demo.yml").write_text(
-                "controller_projects:\n  - name: demo\n",
+            poc = root / "poc" / "projects"
+            prod = root / "prod" / "projects"
+            docs = root / "docs"
+            governance = root / "governance"
+            for path in (base, poc, prod, docs, governance):
+                path.mkdir(parents=True)
+
+            (base / "valid.yml").write_text(
+                "controller_projects:\n  - name: base-demo\n",
                 encoding="utf-8",
             )
-            paths = casc_runtime.iter_resource_yaml_files(
-                str(root), caller_role="platform"
+            (poc / "valid.yml").write_text(
+                "controller_projects:\n  - name: poc-demo\n",
+                encoding="utf-8",
             )
-            self.assertEqual([Path(p).name for p in paths], ["demo.yml"])
-            self.assertNotIn("platform-policy.yml", "".join(paths))
+            (prod / "valid.yml").write_text(
+                "controller_projects:\n  - name: prod-demo\n",
+                encoding="utf-8",
+            )
+            (docs / "notes.yml").write_text(
+                "unrelated-docs:\n  keep: true\n",
+                encoding="utf-8",
+            )
+            (governance / "policy.yml").write_text(
+                "unrelated-governance:\n  keep: true\n",
+                encoding="utf-8",
+            )
+
+            for role in ("platform", "tenant"):
+                with self.subTest(role=role):
+                    paths = casc_runtime.iter_resource_yaml_files(
+                        str(root), caller_role=role
+                    )
+                    names = sorted(Path(p).name for p in paths)
+                    self.assertEqual(names, ["valid.yml", "valid.yml", "valid.yml"])
+                    joined = "\n".join(paths)
+                    self.assertIn("/base/", joined)
+                    self.assertIn("/poc/", joined)
+                    self.assertIn("/prod/", joined)
+                    self.assertNotIn("/docs/", joined)
+                    self.assertNotIn("/governance/", joined)
+
+                    casc_runtime.validate_structure(
+                        str(root),
+                        str(ROOT / "schemas/resource-types.yml"),
+                        allowed_keys_path=str(
+                            ROOT / "roles/process_casc_config/defaults/main.yml"
+                        ),
+                        caller_role=role,
+                    )
+
+            # Invalid YAML under a mapped env directory must fail closed.
+            (poc / "bad.yml").write_text(
+                "not_a_casc_resource:\n  - name: nope\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Unknown resource key"):
+                casc_runtime.validate_structure(
+                    str(root),
+                    str(ROOT / "schemas/resource-types.yml"),
+                    allowed_keys_path=str(
+                        ROOT / "roles/process_casc_config/defaults/main.yml"
+                    ),
+                    caller_role="tenant",
+                )
+
+            # Invalid YAML under docs/ must remain ignored.
+            (poc / "bad.yml").unlink()
+            (docs / "also-bad.yml").write_text(
+                "not_a_casc_resource:\n  - name: ignored\n",
+                encoding="utf-8",
+            )
+            casc_runtime.validate_structure(
+                str(root),
+                str(ROOT / "schemas/resource-types.yml"),
+                allowed_keys_path=str(
+                    ROOT / "roles/process_casc_config/defaults/main.yml"
+                ),
+                caller_role="platform",
+            )
 
     def test_every_allowed_key_resolves_fail_closed_deletion_metadata(self):
         schema = yaml.safe_load((ROOT / "schemas/resource-types.yml").read_text())
@@ -810,14 +919,21 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             content = pipeline.read_text()
             self.assertIn("validate-structure", content, pipeline)
             self.assertIn("--caller-role", content, pipeline)
+            self.assertIn("--control-config .control/config.yml", content, pipeline)
+            self.assertIn("list-desired-state-dirs", content, pipeline)
             self.assertIn("Control repo: skipping desired-state", content, pipeline)
             self.assertNotIn("if os.path.isdir('base') else ['.']", content, pipeline)
-            self.assertIn(".aap-casc-engine", content, pipeline)
+            self.assertNotIn("ls -d */", content, pipeline)
 
         naming_validator = (ROOT / "schemas/validate_naming.py").read_text()
         self.assertIn('".aap-casc-engine"', naming_validator)
         self.assertIn("caller_role", naming_validator)
         self.assertIn("desired_state_search_dirs", naming_validator)
+        self.assertIn("env_branch_map", naming_validator)
+        runtime = (ROOT / "scripts/pipeline/casc_runtime.py").read_text()
+        self.assertIn("load_env_names", runtime)
+        self.assertIn("env_branch_map", runtime)
+        self.assertIn(".aap-casc-engine", runtime)
     def test_tenant_lifecycle_diff_fails_when_previous_commit_is_unavailable(self):
         for pipeline in PIPELINES:
             content = pipeline.read_text()
