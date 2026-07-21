@@ -620,6 +620,27 @@ class NamingPolicyTests(unittest.TestCase):
         self.assertFalse((ROOT / "schemas/naming-rules.yml").exists())
         self.assertFalse((ROOT / "templates/naming-rules.yml.j2").exists())
 
+    def test_bootstrap_naming_preflight_uses_base_layout_and_pinned_control(self):
+        bootstrap = (ROOT / "bootstrap.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            'path: "base/organizations/{{ _effective_tenant_id }}.yml"',
+            bootstrap,
+        )
+        self.assertIn(
+            'path: "base/teams/{{ _effective_tenant_id }}.yml"',
+            bootstrap,
+        )
+        self.assertIn("--control-config", bootstrap)
+        self.assertIn(
+            "{{ bootstrap_clone_dir }}/{{ control_repo }}/config.yml",
+            bootstrap,
+        )
+        # Flat root foundation files are not scanned by desired_state_search_dirs.
+        self.assertNotIn(
+            '{ name: organizations.yml, content: "{{ _org_foundation_content | default(\'\') }}" }',
+            bootstrap,
+        )
+
 
 class DeletionSafetyTests(unittest.TestCase):
     @staticmethod

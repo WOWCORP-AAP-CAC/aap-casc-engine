@@ -263,19 +263,25 @@
 
     - name: "Prepare foundation validation directory"
       ansible.builtin.file:
-        path: "{{ bootstrap_validation_dir }}"
+        path: "{{ item }}"
         state: directory
         mode: '0700'
+      loop:
+        - "{{ bootstrap_validation_dir }}"
+        - "{{ bootstrap_validation_dir }}/base/organizations"
+        - "{{ bootstrap_validation_dir }}/base/teams"
       when: onboarding_mode == 'greenfield'
 
     - name: "Write rendered foundation for preflight validation"
       ansible.builtin.copy:
-        dest: "{{ bootstrap_validation_dir }}/{{ item.name }}"
+        dest: "{{ bootstrap_validation_dir }}/{{ item.path }}"
         content: "{{ item.content }}"
         mode: '0600'
       loop:
-        - { name: organizations.yml, content: "{{ _org_foundation_content | default('') }}" }
-        - { name: teams.yml, content: "{{ _team_foundation_content | default('') }}" }
+        - path: "base/organizations/{{ _effective_tenant_id }}.yml"
+          content: "{{ _org_foundation_content | default('') }}"
+        - path: "base/teams/{{ _effective_tenant_id }}.yml"
+          content: "{{ _team_foundation_content | default('') }}"
       when: onboarding_mode == 'greenfield'
 
     - name: "Check for optional customer naming policy"
@@ -290,6 +296,10 @@
           - "{{ playbook_dir }}/schemas/validate_naming.py"
           - --config-dir
           - "{{ bootstrap_validation_dir }}"
+          - --control-config
+          - "{{ bootstrap_clone_dir }}/{{ control_repo }}/config.yml"
+          - --caller-role
+          - platform
           - --rules
           - "{{ bootstrap_clone_dir }}/{{ control_repo }}/naming-rules.yml"
           - --resource-types
