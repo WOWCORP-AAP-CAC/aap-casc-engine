@@ -717,6 +717,8 @@ jobs:
                   entry = json.loads(targets).get(env_key, {})
               except json.JSONDecodeError:
                   raise ValueError('AAP_ENV_TARGETS_JSON must be valid JSON')
+              if entry.get('username') or entry.get('password'):
+                  raise ValueError('username/password credentials are rejected; bearer token only')
               if entry.get('host') and entry.get('token'):
                   print(f"::add-mask::{entry['token']}")
                   return normalize_host(entry['host']), ['-H', f'Authorization: Bearer {entry["token"]}']

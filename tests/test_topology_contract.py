@@ -681,6 +681,20 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         self.assertIn("BOOTSTRAP_FANOUT_TENANT_IDS", gitlab)
         self.assertIn("No greenfield onboarding tenants", gitlab)
 
+    def test_pipelines_reject_username_password_creds_twice(self):
+        """Token-only parity: each GitHub workflow and GitLab template reject basic auth twice."""
+        rejection = "username/password credentials are rejected; bearer token only"
+        for workflow_path in (
+            ROOT / ".github/workflows/casc-validate-and-trigger.yml",
+            ROOT / "pipeline-templates/github/casc-validate-and-trigger.yml",
+        ):
+            count = workflow_path.read_text().count(rejection)
+            self.assertEqual(count, 2, f"{workflow_path} expected 2 rejection checks, found {count}")
+
+        gitlab = ROOT / "pipeline-templates/gitlab/.gitlab-ci-template.yml"
+        count = gitlab.read_text().count(rejection)
+        self.assertEqual(count, 2, f"{gitlab} expected 2 rejection checks, found {count}")
+
     def test_genesis_converges_platform_scaffold_all_branches(self):
         for task in (
             ROOT / "tasks/genesis_scm_github.yml",
