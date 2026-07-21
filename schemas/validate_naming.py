@@ -115,19 +115,23 @@ def validate_file(file_path: str, rules: dict[str, dict[str, Any]]) -> list[str]
     return errors
 
 
+ENV_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
 def resolve_control_config_path(config_dir: str, control_config: str = "") -> str:
-    candidates: list[str] = []
+    """Resolve pinned control config for desired-state directory scope.
+
+    An explicitly supplied --control-config path is authoritative and must exist.
+    With no explicit argument, only <config_dir>/.control/config.yml is accepted.
+    """
     if control_config:
-        candidates.append(control_config)
-    candidates.extend(
-        [
-            os.path.join(config_dir, ".control", "config.yml"),
-            os.path.join(config_dir, "config.yml"),
-        ]
-    )
-    for path in candidates:
-        if path and os.path.isfile(path):
-            return path
+        if not os.path.isfile(control_config):
+            raise ValueError(f"Pinned control config not found: {control_config}")
+        return control_config
+
+    pinned = os.path.join(config_dir, ".control", "config.yml")
+    if os.path.isfile(pinned):
+        return pinned
     return ""
 
 
@@ -148,9 +152,11 @@ def load_env_names(config_dir: str, control_config: str = "") -> list[str]:
         raise ValueError(f"{path}: env_branch_map must be a non-empty mapping")
     names: list[str] = []
     for key in ebm:
-        if not isinstance(key, str) or not key.strip():
-            raise ValueError(f"{path}: env_branch_map keys must be non-empty strings")
-        names.append(key.strip())
+        if not isinstance(key, str) or not ENV_NAME_RE.fullmatch(key):
+            raise ValueError(
+                f"{path}: env_branch_map key {key!r} must match ^[a-z][a-z0-9_]*$"
+            )
+        names.append(key)
     return names
 
 

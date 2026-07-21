@@ -331,8 +331,7 @@ jobs:
             SCAN_DIRS=$(python3 .scripts/pipeline/casc_runtime.py list-desired-state-dirs \
               --root . \
               --control-config .control/config.yml \
-              --caller-role "${{ inputs.caller_role }}" | tr '
-' ' ')
+              --caller-role "${{ inputs.caller_role }}" | paste -sd ' ' -)
 
             if [ -z "$SCAN_DIRS" ]; then
               echo "No desired-state directories found — OPA resource scan skipped"

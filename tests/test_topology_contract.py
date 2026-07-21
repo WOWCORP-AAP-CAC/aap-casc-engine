@@ -779,6 +779,66 @@ class DeletionSafetyTests(unittest.TestCase):
                 caller_role="platform",
             )
 
+    def test_explicit_control_config_is_authoritative_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Legacy root config.yml must not be used as a fallback.
+            (root / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Pinned control config"):
+                casc_runtime.desired_state_search_dirs(str(root))
+
+            missing = root / "missing-control.yml"
+            with self.assertRaisesRegex(ValueError, "Pinned control config not found"):
+                casc_runtime.resolve_control_config_path(
+                    str(root), control_config=str(missing)
+                )
+
+            pinned = self._write_pinned_control(root)
+            self.assertEqual(
+                casc_runtime.resolve_control_config_path(
+                    str(root), control_config=str(pinned)
+                ),
+                str(pinned),
+            )
+            self.assertEqual(
+                casc_runtime.resolve_control_config_path(str(root)),
+                str(pinned),
+            )
+
+    def test_env_branch_map_keys_reject_traversal_and_invalid_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / ".control"
+            control.mkdir()
+            cfg = control / "config.yml"
+
+            bad_keys = {
+                "../outside": 'env_branch_map:\n  "../outside": main\n',
+                "BadEnv": "env_branch_map:\n  BadEnv: main\n",
+                "poc-1": "env_branch_map:\n  poc-1: main\n",
+                " poc": 'env_branch_map:\n  " poc": main\n',
+                "": 'env_branch_map:\n  "": main\n',
+            }
+            for bad_key, content in bad_keys.items():
+                with self.subTest(bad_key=bad_key):
+                    cfg.write_text(content, encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, r"must match \^\[a-z\]"):
+                        casc_runtime.load_env_names(str(root))
+                    with self.assertRaisesRegex(ValueError, r"must match \^\[a-z\]"):
+                        validate_naming.load_env_names(str(root))
+
+            cfg.write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                casc_runtime.load_env_names(str(root)),
+                ["poc", "prod"],
+            )
+
     def test_every_allowed_key_resolves_fail_closed_deletion_metadata(self):
         schema = yaml.safe_load((ROOT / "schemas/resource-types.yml").read_text())
         role_defaults = yaml.safe_load(
@@ -921,9 +981,13 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("--caller-role", content, pipeline)
             self.assertIn("--control-config .control/config.yml", content, pipeline)
             self.assertIn("list-desired-state-dirs", content, pipeline)
+            self.assertIn("paste -sd ' ' -", content, pipeline)
+            self.assertNotIn("| tr '", content, pipeline)
             self.assertIn("Control repo: skipping desired-state", content, pipeline)
             self.assertNotIn("if os.path.isdir('base') else ['.']", content, pipeline)
             self.assertNotIn("ls -d */", content, pipeline)
+            # All pipeline entrypoints must remain valid YAML.
+            yaml.safe_load(content)
 
         naming_validator = (ROOT / "schemas/validate_naming.py").read_text()
         self.assertIn('".aap-casc-engine"', naming_validator)
@@ -934,6 +998,8 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         self.assertIn("load_env_names", runtime)
         self.assertIn("env_branch_map", runtime)
         self.assertIn(".aap-casc-engine", runtime)
+        self.assertIn("ENV_NAME_RE", runtime)
+
     def test_tenant_lifecycle_diff_fails_when_previous_commit_is_unavailable(self):
         for pipeline in PIPELINES:
             content = pipeline.read_text()
