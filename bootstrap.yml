@@ -35,13 +35,11 @@
     aap_organization: "{{ lookup('env', 'AAP_ORGANIZATION') | default('', true) }}"
     team_name: "{{ lookup('env', 'TEAM_NAME') | default('', true) }}"
     tenant_scm_org: "{{ lookup('env', 'TENANT_SCM_ORG') | default('', true) }}"
-    repo_pattern: "{{ lookup('env', 'REPO_PATTERN') | default('', true) }}"
     repo_mode: "{{ lookup('env', 'REPO_MODE') | default('', true) }}"
     onboarding_mode: "{{ lookup('env', 'ONBOARDING_MODE') | default('', true) }}"
     dispatch_enabled: "{{ lookup('env', 'DISPATCH_ENABLED') | default('', true) }}"
     repo_visibility: "{{ lookup('env', 'REPO_VISIBILITY') | default('', true) }}"
     repo_name: "{{ lookup('env', 'REPO_NAME') | default('', true) }}"
-    repo_names: "{{ lookup('env', 'REPO_NAMES_JSON') | default('{}', true) | from_json }}"
 
     _tenant_types:
       - { folder: projects, basename: controller-projects, template: "templates/seed-controller-projects.yml.j2" }
@@ -113,12 +111,32 @@
         - { file: config.yml, name: control_config }
         - { file: tenants.yml, name: tenants_registry }
 
+    - name: "Reject removed topology launch inputs"
+      ansible.builtin.assert:
+        that:
+          - repo_pattern is not defined
+          - repo_names is not defined
+          - platform_repo_pattern is not defined
+          - platform_repo_names is not defined
+          - (lookup('env', 'REPO_PATTERN') | default('', true) | length) == 0
+          - (lookup('env', 'REPO_NAMES_JSON') | default('', true) | length) == 0
+          - (lookup('env', 'PLATFORM_REPO_PATTERN') | default('', true) | length) == 0
+          - (lookup('env', 'PLATFORM_REPO_NAMES_JSON') | default('', true) | length) == 0
+          - control_config.platform_repo_pattern is not defined
+          - control_config.platform_repo_names is not defined
+          - control_config.platform_repos is not defined
+          - control_config.repo_mode is not defined
+        fail_msg: >-
+          Removed topology inputs were supplied via JT extra-vars, environment, or
+          control config.yml (repo_pattern / repo_names / platform_repo_pattern /
+          platform_repo_names / platform_repos / persisted Genesis repo_mode).
+          Use scalar platform_repo and tenant repo_name/repository only.
+
     - name: "Build concise Bootstrap request"
       ansible.builtin.set_fact:
         _bootstrap_request: >-
           {{ {'tenant_id': tenant_id}
              | combine({'tenant_scm_org': tenant_scm_org} if tenant_scm_org | length > 0 else {})
-             | combine({'repo_pattern': repo_pattern} if repo_pattern | length > 0 else {})
              | combine({'repo_mode': repo_mode} if repo_mode | length > 0 else {})
              | combine({'onboarding_mode': onboarding_mode} if onboarding_mode | length > 0 else {})
              | combine({'dispatch_enabled': dispatch_enabled | bool}
@@ -127,8 +145,7 @@
              | combine({'aap_organization': aap_organization} if aap_organization | length > 0 else {})
              | combine({'team_name': team_name} if team_name | length > 0 else {})
              | combine({'tenant_scm_namespace_id': tenant_scm_namespace_id} if tenant_scm_namespace_id | length > 0 else {})
-             | combine({'repo_name': repo_name} if repo_name | length > 0 else {})
-             | combine({'repo_names': repo_names} if repo_names | length > 0 else {}) }}
+             | combine({'repo_name': repo_name} if repo_name | length > 0 else {}) }}
 
     - name: "Resolve tenant from the shared registry contract"
       ansible.builtin.command:
@@ -152,11 +169,10 @@
         _effective_tenant_id: "{{ (_bootstrap_resolution.stdout | from_json).tenant.tenant_id }}"
         _effective_aap_organization: "{{ (_bootstrap_resolution.stdout | from_json).tenant.aap_organization }}"
         _effective_team_name: "{{ (_bootstrap_resolution.stdout | from_json).tenant.team_name | default('') }}"
-        _tenant_repositories: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repositories }}"
-        _tenant_repo_by_folder: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repo_by_folder }}"
+        _tenant_repository: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repository }}"
+        _tenant_repositories: "{{ [(_bootstrap_resolution.stdout | from_json).tenant.repository] }}"
         tenant_scm_org: "{{ (_bootstrap_resolution.stdout | from_json).tenant.tenant_scm_org }}"
         tenant_scm_namespace_id: "{{ (_bootstrap_resolution.stdout | from_json).tenant.tenant_scm_namespace_id | default('') }}"
-        repo_pattern: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repo_pattern }}"
         repo_mode: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repo_mode }}"
         onboarding_mode: "{{ (_bootstrap_resolution.stdout | from_json).tenant.onboarding_mode }}"
         repo_visibility: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repo_visibility }}"
@@ -178,12 +194,9 @@
         _env_branch_map: "{{ control_config.env_branch_map }}"
         _mapped_branches: "{{ control_config.env_branch_map.values() | list | unique }}"
         _create_missing_env_branches: "{{ control_config.create_missing_env_branches | default(true) | bool }}"
-        platform_repo_pattern: "{{ control_config.platform_repo_pattern }}"
-        platform_repo: "{{ control_config.platform_repo | default('') }}"
-        _platform_repos: "{{ control_config.platform_repos | default([]) }}"
+        platform_repo: "{{ control_config.platform_repo | default('casc-platform-global') }}"
         bootstrap_jt_name: "{{ control_config.job_templates.bootstrap | default('jt-platform-bootstrap_tenant', true) }}"
         dispatcher_jt_name: "{{ control_config.job_templates.dispatcher | default('jt-platform-casc_dispatcher', true) }}"
-        _platform_repo_lookup: {}
 
     - name: "Validate authoritative branch topology"
       ansible.builtin.assert:
@@ -198,31 +211,10 @@
           control config.yml requires platform_scm_org and a non-empty env_branch_map
           whose branch values are non-empty strings.
 
-    - name: "Build platform repository resolver"
-      ansible.builtin.set_fact:
-        _platform_repo_lookup: "{{ _platform_repo_lookup | combine({item.resource_type: item.name}) }}"
-      loop: "{{ _platform_repos }}"
-      when: platform_repo_pattern == 'per-resource-type'
-
-    - name: "Require authoritative Greenfield platform repositories"
-      ansible.builtin.assert:
-        that:
-          - _platform_repo_lookup.organizations | default('') | length > 0
-          - _platform_repo_lookup.teams | default('') | length > 0
-        fail_msg: >-
-          Greenfield per-resource-type Bootstrap requires organizations and teams
-          entries in control config.yml platform_repos. Hardcoded repository fallback
-          is intentionally disabled.
-      when:
-        - onboarding_mode == 'greenfield'
-        - platform_repo_pattern == 'per-resource-type'
-
     - name: "Build tenant repository records"
       ansible.builtin.set_fact:
-        _tenant_repo_records: >-
-          {{ [{'name': _tenant_repositories[0], 'resource_type': 'combined'}]
-             if repo_pattern == 'combined'
-             else _tenant_repo_by_folder | dict2items(key_name='resource_type', value_name='name') }}
+        _tenant_repo_records:
+          - name: "{{ _tenant_repository }}"
 
     - name: "Render expected scaffold marker for each tenant repository"
       ansible.builtin.command:
@@ -234,8 +226,6 @@
           - "{{ _tenant_runtime | to_json }}"
           - --repository
           - "{{ item.name }}"
-          - --resource-type
-          - "{{ item.resource_type }}"
       loop: "{{ _tenant_repo_records }}"
       register: _scaffold_marker_results
       changed_when: false
@@ -316,7 +306,6 @@
         _tenant_registry_entry: >-
           {{ {'tenant_id': _effective_tenant_id,
               'tenant_scm_org': tenant_scm_org,
-              'repo_pattern': repo_pattern,
               'repo_mode': repo_mode,
               'onboarding_mode': onboarding_mode,
               'dispatch_enabled': dispatch_enabled | bool,
@@ -328,17 +317,15 @@
                        if onboarding_mode == 'greenfield' else {})
              | combine({'tenant_scm_namespace_id': tenant_scm_namespace_id}
                        if tenant_scm_namespace_id | length > 0 else {})
-             | combine({'repo_name': _tenant_runtime.repo_name}
-                       if _tenant_runtime.repo_name | default('') | length > 0 else {})
-             | combine({'repo_names': _tenant_runtime.repo_names}
-                       if _tenant_runtime.repo_names | default({}) | length > 0 else {}) }}
+             | combine({'repo_name': _tenant_repository}
+                       if _tenant_repository != ('casc-tenant-' + _effective_tenant_id) else {}) }}
 
     - name: "Log resolved Bootstrap contract"
       ansible.builtin.debug:
         msg: >-
           tenant={{ _effective_tenant_id }} organization={{ _effective_aap_organization }}
-          mode={{ onboarding_mode }} provider={{ scm_provider }} pattern={{ repo_pattern }}
-          repos={{ _tenant_repositories | length }} control={{ control_scm_org }}/{{ control_repo }}@{{ effective_control_revision }}
+          mode={{ onboarding_mode }} provider={{ scm_provider }} repository={{ _tenant_repository }}
+          control={{ control_scm_org }}/{{ control_repo }}@{{ effective_control_revision }}
 
     - name: "Execute provider Bootstrap operations"
       ansible.builtin.include_tasks: "tasks/bootstrap_scm_{{ scm_provider }}.yml"

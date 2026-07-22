@@ -13,7 +13,7 @@ and drift workflows that customers would otherwise build themselves.
 - Multiple YAML files per resource type, merged by the engine before dispatch.
 - `base/` plus environment-overlay folders driven by `env_branch_map`.
 - Repository creation or governed pre-created repository scaffolding.
-- Combined or per-resource-type repository layouts with customer-selected names.
+- Combined control, platform, and tenant repositories with optional custom names.
 - Greenfield and Brownfield tenant onboarding.
 - Optional, customer-owned naming policy.
 - Scoped platform or tenant dispatch through `infra.aap_configuration.dispatch`.
@@ -25,8 +25,8 @@ and drift workflows that customers would otherwise build themselves.
 |---|---|
 | `aap-casc-engine` | Playbooks, schemas, reusable pipelines, and templates |
 | `casc-platform-control` | Mandatory `config.yml` and `tenants.yml`; optional `naming-rules.yml` |
-| Platform desired-state repo(s) | Shared Organization, Team, RBAC, settings, and other platform YAML |
-| Tenant desired-state repo(s) | Tenant projects, inventories, credentials, templates, workflows, schedules, and notifications |
+| Platform desired-state repo | Shared Organization, Team, RBAC, settings, and other platform YAML |
+| Tenant desired-state repo | Tenant projects, inventories, credentials, templates, workflows, schedules, and notifications |
 
 The control repository never contains AAP desired-state YAML. Normal platform
 and tenant pushes dispatch only their own scope; a tenant dispatch does not
@@ -89,7 +89,6 @@ ansible-playbook genesis.yml \
   -e control_scm_org=ww-platform \
   -e control_repo=casc-platform-control \
   -e platform_repo=casc-platform-global \
-  -e platform_repo_pattern=combined \
   -e repo_mode=existing
 ```
 
@@ -105,14 +104,13 @@ tenants:
     aap_organization: WW Stores Automation  # optional; defaults to tenant_id
     team_name: Stores Automation
     tenant_scm_org: ww-tenants
-    repo_pattern: combined
-    repo_name: stores-aap-casc               # optional
+    repo_name: stores-aap-casc               # optional; default casc-tenant-stores
     repo_mode: existing
     onboarding_mode: greenfield
     status: active
 ```
 
-Greenfield Bootstrap scaffolds tenant repositories and writes only two platform
+Greenfield Bootstrap scaffolds the tenant repository and writes only two platform
 foundation declarations on every mapped branch:
 
 - `base/organizations/stores.yml`
@@ -129,7 +127,6 @@ tenants:
   - tenant_id: legacy_app
     aap_organization: Existing LDAP/SAML Organization
     tenant_scm_org: ww-tenants
-    repo_pattern: combined
     repo_name: legacy-app-aap-casc
     repo_mode: existing
     onboarding_mode: brownfield
@@ -161,16 +158,19 @@ ansible-playbook site.yml \
 Repository routing is `repository -> tenants.yml -> tenant_id`. It never infers
 the AAP Organization from a repository name.
 
-## Repository layouts and names
+## Repository names
 
-| Option | Combined | Per-resource-type |
+The engine is combined-only:
+
+| Scope | Config field | Default |
 |---|---|---|
-| Platform | `platform_repo` | `platform_repo_names` folder-to-name mapping |
-| Tenant | optional `repo_name` | optional partial `repo_names` folder-to-name mapping |
+| Platform desired state | `platform_repo` in `config.yml` | `casc-platform-global` |
+| Tenant desired state | optional `repo_name` in `tenants.yml` | `casc-tenant-<tenant_id>` |
 
-Unknown folders, blank names, duplicate effective names, or collisions with
-control/platform ownership fail before SCM mutation. Ordered name lists are not
-supported.
+Runtime and scaffold markers expose the resolved scalar `repository`. Legacy
+per-resource fields (`repo_pattern`, `repo_names`, `platform_repo_pattern`,
+`platform_repo_names`, `platform_repos`) are rejected. Blank names or collisions
+with control/platform ownership fail before SCM mutation.
 
 ## Environment branches
 

@@ -20,12 +20,26 @@ from typing import Any
 
 import yaml
 
-from repo_name_overrides import (
-    DEFAULT_TENANT_FOLDERS,
-    resolve_tenant_repo_map,
-    validate_tenant_id,
-)
+TENANT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
+# Removed topology fields — fail closed with migration guidance (allowed grep hits).
+LEGACY_TENANT_FIELDS = frozenset(
+    {
+        "repo_pattern",
+        "repo_names",
+        "repositories",
+        "repo_by_folder",
+        "resource_type",
+    }
+)
+LEGACY_CONFIG_FIELDS = frozenset(
+    {
+        "platform_repo_pattern",
+        "platform_repo_names",
+        "platform_repos",
+        "repo_mode",  # Genesis launch-time only; must not persist in config.yml
+    }
+)
 
 DEFAULT_JT = {
     "genesis": "jt-platform-genesis",
@@ -350,6 +364,7 @@ def validate_explicit_deletions(
         raise ValueError("Unsupported explicit deletion:\n  " + "\n  ".join(errors))
 
 def resolve_jt_names(cfg: dict[str, Any]) -> dict[str, str]:
+    reject_legacy_config_fields(cfg)
     configured = cfg.get("job_templates") or {}
     if configured and not isinstance(configured, dict):
         raise ValueError("config.yml job_templates must be a mapping")
@@ -516,11 +531,58 @@ def ensure_control_files(
     return control_revision
 
 
+def validate_tenant_id(value: Any) -> str:
+    """Return the canonical safe tenant key or fail closed."""
+    if not isinstance(value, str) or not value:
+        raise ValueError("tenant_id must be a non-empty string")
+    if not TENANT_ID_PATTERN.fullmatch(value):
+        raise ValueError(
+            "tenant_id must match ^[a-z][a-z0-9_]*$ and contain at most 64 characters"
+        )
+    return value
+
+
 def _required_string(record: dict[str, Any], field: str, tenant_id: str = "") -> str:
     value = record.get(field)
     if not isinstance(value, str) or not value.strip():
         prefix = f"Tenant {tenant_id} " if tenant_id else "Tenant "
         raise ValueError(f"{prefix}{field} must be a non-empty string")
+    return value.strip()
+
+
+def _reject_legacy_fields(record: dict[str, Any], legacy: frozenset[str], label: str) -> None:
+    present = sorted(set(record) & legacy)
+    if present:
+        raise ValueError(
+            f"{label} contains removed topology fields: {', '.join(present)}. "
+            "Use combined-only scalars: config.yml platform_repo and tenant repo_name "
+            "(resolved as repository). Per-resource patterns and maps are no longer supported."
+        )
+
+
+def reject_legacy_config_fields(cfg: dict[str, Any]) -> None:
+    """Fail closed when control config.yml still carries removed topology keys."""
+    if not isinstance(cfg, dict):
+        raise ValueError("config.yml must contain a mapping")
+    _reject_legacy_fields(cfg, LEGACY_CONFIG_FIELDS, "config.yml")
+
+
+def resolve_tenant_repository(tenant_id: str, repo_name: Any = "") -> str:
+    """Return the single combined tenant repository name."""
+    tenant = validate_tenant_id(tenant_id)
+    if repo_name in (None, ""):
+        return f"casc-tenant-{tenant}"
+    if not isinstance(repo_name, str) or not repo_name.strip():
+        raise ValueError(f"Tenant {tenant} repo_name must be a non-empty string")
+    return repo_name.strip()
+
+
+def platform_repo_name(cfg: dict[str, Any]) -> str:
+    """Return the single combined platform desired-state repository name."""
+    reject_legacy_config_fields(cfg)
+    value = cfg.get("platform_repo", "casc-platform-global")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("config.yml platform_repo must be a non-empty string")
     return value.strip()
 
 
@@ -530,11 +592,9 @@ TENANT_RECORD_FIELDS = {
     "team_name",
     "tenant_scm_org",
     "tenant_scm_namespace_id",
-    "repo_pattern",
     "repo_mode",
     "repo_visibility",
     "repo_name",
-    "repo_names",
     "onboarding_mode",
     "status",
     "dispatch_enabled",
@@ -545,6 +605,7 @@ def normalize_tenant_record(record: dict[str, Any]) -> dict[str, Any]:
     """Validate one customer-facing tenant record and derive runtime-only fields."""
     if not isinstance(record, dict):
         raise ValueError("Each tenants.yml entry must be a mapping")
+    _reject_legacy_fields(record, LEGACY_TENANT_FIELDS, "Tenant record")
     unknown = sorted(set(record) - TENANT_RECORD_FIELDS)
     if unknown:
         raise ValueError("Unsupported tenant fields: " + ", ".join(unknown))
@@ -581,7 +642,6 @@ def normalize_tenant_record(record: dict[str, Any]) -> dict[str, Any]:
                 f"Tenant {tenant_id} tenant_scm_namespace_id must be a non-empty scalar"
             )
         namespace_id = str(namespace_id).strip()
-    repo_pattern = record.get("repo_pattern", "combined")
     repo_mode = record.get("repo_mode", "create")
     status = record.get("status", "active")
     repo_visibility = record.get("repo_visibility", "private")
@@ -595,29 +655,22 @@ def normalize_tenant_record(record: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(dispatch_enabled, bool):
         raise ValueError(f"Tenant {tenant_id} dispatch_enabled must be a boolean")
 
-    repo_map = resolve_tenant_repo_map(
-        repo_pattern=repo_pattern,
-        tenant_id=tenant_id,
-        repo_name=record.get("repo_name", ""),
-        repo_names=record.get("repo_names"),
-    )
-    repos = list(dict.fromkeys(repo_map[folder] for folder in DEFAULT_TENANT_FOLDERS))
+    repository = resolve_tenant_repository(tenant_id, record.get("repo_name", ""))
     normalized = dict(record)
     normalized.update(
         {
             "tenant_id": tenant_id,
             "aap_organization": aap_organization,
             "tenant_scm_org": tenant_scm_org,
-            "repo_pattern": repo_pattern,
             "repo_mode": repo_mode,
             "onboarding_mode": onboarding_mode,
             "repo_visibility": repo_visibility,
             "status": status,
             "dispatch_enabled": dispatch_enabled,
-            "_repo_by_folder": repo_map,
-            "_repositories": repos,
+            "repository": repository,
         }
     )
+    normalized.pop("repo_name", None)
     if namespace_id not in (None, ""):
         normalized["tenant_scm_namespace_id"] = namespace_id
     else:
@@ -633,31 +686,32 @@ def normalize_runtime_tenant(record: dict[str, Any]) -> dict[str, Any]:
     """Normalize raw or engine-produced tenant data without widening tenants.yml."""
     if not isinstance(record, dict):
         raise ValueError("Tenant runtime data must be a mapping")
+    _reject_legacy_fields(record, LEGACY_TENANT_FIELDS, "Tenant runtime data")
+    payload = {
+        key: value
+        for key, value in record.items()
+        if key in TENANT_RECORD_FIELDS or key == "repository"
+    }
+    if "repository" in payload and "repo_name" not in payload:
+        payload = dict(payload)
+        payload["repo_name"] = payload.pop("repository")
     normalized = normalize_tenant_record(
-        {key: value for key, value in record.items() if key in TENANT_RECORD_FIELDS}
+        {key: value for key, value in payload.items() if key in TENANT_RECORD_FIELDS}
     )
-    supplied_repo_map = record.get("_repo_by_folder", record.get("repo_by_folder"))
-    supplied_repos = record.get("_repositories", record.get("repositories"))
-    if supplied_repo_map is not None and supplied_repo_map != normalized["_repo_by_folder"]:
-        raise ValueError("Derived repo_by_folder does not match the canonical tenant resolver")
-    if supplied_repos is not None and supplied_repos != normalized["_repositories"]:
-        raise ValueError("Derived repositories do not match the canonical tenant resolver")
+    if "repository" in record and record["repository"] != normalized["repository"]:
+        raise ValueError("Derived repository does not match the canonical tenant resolver")
     return normalized
 
 
 def _platform_repo_owners(cfg: dict[str, Any]) -> set[tuple[str, str]]:
+    reject_legacy_config_fields(cfg)
     control_org = str(cfg.get("control_scm_org") or cfg.get("platform_scm_org") or "").strip()
     platform_org = str(cfg.get("platform_scm_org") or "").strip()
     owners: set[tuple[str, str]] = set()
     if control_org and cfg.get("control_repo"):
         owners.add((control_org, str(cfg["control_repo"]).strip()))
     if platform_org:
-        if cfg.get("platform_repo_pattern", "combined") == "combined":
-            owners.add((platform_org, str(cfg.get("platform_repo", "casc-platform-global")).strip()))
-        else:
-            for entry in cfg.get("platform_repos") or []:
-                if isinstance(entry, dict) and entry.get("name"):
-                    owners.add((platform_org, str(entry["name"]).strip()))
+        owners.add((platform_org, platform_repo_name(cfg)))
     return owners
 
 
@@ -670,6 +724,8 @@ def validate_tenant_registry(
     tenants = tenants_doc.get("tenants", [])
     if not isinstance(tenants, list):
         raise ValueError("tenants.yml tenants must be a list")
+    if cfg is not None:
+        reject_legacy_config_fields(cfg)
     normalized = [normalize_tenant_record(record) for record in tenants]
     ids: dict[str, int] = {}
     orgs: dict[str, str] = {}
@@ -679,7 +735,9 @@ def validate_tenant_registry(
     for index, tenant in enumerate(normalized):
         tenant_id = tenant["tenant_id"]
         if tenant_id in ids:
-            raise ValueError(f"Duplicate tenant_id '{tenant_id}' at entries {ids[tenant_id]} and {index}")
+            raise ValueError(
+                f"Duplicate tenant_id '{tenant_id}' at entries {ids[tenant_id]} and {index}"
+            )
         ids[tenant_id] = index
         aap_org = tenant["aap_organization"]
         if aap_org in orgs:
@@ -687,14 +745,13 @@ def validate_tenant_registry(
                 f"AAP Organization '{aap_org}' is assigned to both {orgs[aap_org]} and {tenant_id}"
             )
         orgs[aap_org] = tenant_id
-        for repo in tenant["_repositories"]:
-            owner = (tenant["tenant_scm_org"], repo)
-            if owner in repo_owners:
-                raise ValueError(
-                    f"Repository {owner[0]}/{owner[1]} is owned by both "
-                    f"{repo_owners[owner]} and {tenant_id}"
-                )
-            repo_owners[owner] = tenant_id
+        owner = (tenant["tenant_scm_org"], tenant["repository"])
+        if owner in repo_owners:
+            raise ValueError(
+                f"Repository {owner[0]}/{owner[1]} is owned by both "
+                f"{repo_owners[owner]} and {tenant_id}"
+            )
+        repo_owners[owner] = tenant_id
     return normalized
 
 
@@ -706,46 +763,28 @@ def find_tenant(tenants_doc: dict[str, Any], tenant_id: str) -> dict[str, Any]:
     raise ValueError(f"Tenant tenant_id={requested} is not registered in tenants.yml")
 
 
-SCAFFOLD_VERSION = 2
+SCAFFOLD_VERSION = 3
 
 
 def build_scaffold_marker(
-    tenant: dict[str, Any], *, repository: str, resource_type: str
+    tenant: dict[str, Any], *, repository: str
 ) -> dict[str, Any]:
-    """Build the immutable provider marker for one resolved tenant repository."""
+    """Build the immutable provider marker for the tenant combined repository."""
     normalized = normalize_runtime_tenant(tenant)
-    if repository not in normalized["_repositories"]:
+    if repository != normalized["repository"]:
         raise ValueError(
-            f"Repository {repository} is not part of tenant {normalized['tenant_id']} topology"
+            f"Repository {repository} is not the combined repository for "
+            f"tenant {normalized['tenant_id']} (expected {normalized['repository']})"
         )
-    if normalized["repo_pattern"] == "combined":
-        expected_type = "combined"
-    else:
-        expected_types = [
-            folder
-            for folder, repo_name in normalized["_repo_by_folder"].items()
-            if repo_name == repository
-        ]
-        if len(expected_types) != 1:
-            raise ValueError(f"Could not resolve one resource type for repository {repository}")
-        expected_type = expected_types[0]
-    if resource_type != expected_type:
-        raise ValueError(
-            f"Repository {repository} resource_type={resource_type}; expected {expected_type}"
-        )
-
-    marker: dict[str, Any] = {
+    marker = {
         "scaffold_version": SCAFFOLD_VERSION,
         "tenant_id": normalized["tenant_id"],
         "aap_organization": normalized["aap_organization"],
         "tenant_scm_org": normalized["tenant_scm_org"],
-        "repo_pattern": normalized["repo_pattern"],
         "repo_mode": normalized["repo_mode"],
         "repo_visibility": normalized["repo_visibility"],
         "onboarding_mode": normalized["onboarding_mode"],
         "repository": repository,
-        "resource_type": expected_type,
-        "repositories": normalized["_repo_by_folder"],
     }
     namespace_id = normalized.get("tenant_scm_namespace_id")
     if namespace_id not in (None, ""):
@@ -780,9 +819,6 @@ def public_tenant_runtime(tenant: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in normalized.items()
         if not key.startswith("_")
-    } | {
-        "repo_by_folder": normalized["_repo_by_folder"],
-        "repositories": normalized["_repositories"],
     }
 
 
@@ -793,14 +829,11 @@ def tenant_immutable_projection(tenant: dict[str, Any]) -> dict[str, Any]:
         "tenant_id": normalized["tenant_id"],
         "aap_organization": normalized["aap_organization"],
         "tenant_scm_org": normalized["tenant_scm_org"],
-        "tenant_scm_namespace_id": str(
-            normalized.get("tenant_scm_namespace_id") or ""
-        ),
-        "repo_pattern": normalized["repo_pattern"],
+        "tenant_scm_namespace_id": str(normalized.get("tenant_scm_namespace_id") or ""),
         "repo_mode": normalized["repo_mode"],
         "repo_visibility": normalized["repo_visibility"],
         "onboarding_mode": normalized["onboarding_mode"],
-        "repositories": normalized["_repo_by_folder"],
+        "repository": normalized["repository"],
     }
     if normalized["onboarding_mode"] == "greenfield":
         projection["team_name"] = normalized["team_name"]
@@ -817,25 +850,26 @@ def _tenant_marker_exists(
 ) -> bool:
     normalized = normalize_runtime_tenant(tenant)
     marker = ".aap-casc-engine/tenant-scaffold.yml"
-    for repo_name in normalized["_repositories"]:
-        for ref in refs:
-            if provider == "github":
-                exists = github_file_exists(
-                    normalized["tenant_scm_org"], repo_name, marker, ref, token
-                )
-            elif provider == "gitlab":
-                exists = gitlab_file_exists(
-                    gitlab_api or os.environ["CI_API_V4_URL"],
-                    f"{normalized['tenant_scm_org']}/{repo_name}",
-                    marker,
-                    ref,
-                    token,
-                )
-            else:
-                raise ValueError("provider must be github or gitlab")
-            if exists:
-                return True
+    repo_name = normalized["repository"]
+    for ref in refs:
+        if provider == "github":
+            exists = github_file_exists(
+                normalized["tenant_scm_org"], repo_name, marker, ref, token
+            )
+        elif provider == "gitlab":
+            exists = gitlab_file_exists(
+                gitlab_api or os.environ["CI_API_V4_URL"],
+                f"{normalized['tenant_scm_org']}/{repo_name}",
+                marker,
+                ref,
+                token,
+            )
+        else:
+            raise ValueError("provider must be github or gitlab")
+        if exists:
+            return True
     return False
+
 
 
 def diff_tenant_actions(
@@ -895,6 +929,12 @@ def resolve_bootstrap_request(
     tenants_doc: dict[str, Any], cfg: dict[str, Any], request: dict[str, Any]
 ) -> tuple[dict[str, Any], bool]:
     """Resolve a registered authoritative tenant or validate an unregistered request."""
+    if not isinstance(tenants_doc, dict):
+        raise ValueError("tenants.yml must contain a mapping")
+    raw_tenants = tenants_doc.get("tenants", [])
+    if not isinstance(raw_tenants, list):
+        raise ValueError("tenants.yml tenants must be a list")
+
     normalized_registry = validate_tenant_registry(tenants_doc, cfg)
     requested_id = validate_tenant_id(request.get("tenant_id"))
     registered = next(
@@ -902,13 +942,9 @@ def resolve_bootstrap_request(
         None,
     )
     if registered is None:
-        candidate_doc = {
-            "tenants": [
-                {key: value for key, value in tenant.items() if not key.startswith("_")}
-                for tenant in normalized_registry
-            ]
-            + [request]
-        }
+        # Rebuild from original tenants.yml records so derived runtime fields
+        # (e.g. repository) are not fed back as unsupported registry inputs.
+        candidate_doc = {"tenants": list(raw_tenants) + [request]}
         candidate = next(
             tenant
             for tenant in validate_tenant_registry(candidate_doc, cfg)
@@ -921,10 +957,8 @@ def resolve_bootstrap_request(
         "team_name",
         "tenant_scm_org",
         "tenant_scm_namespace_id",
-        "repo_pattern",
         "repo_mode",
         "repo_name",
-        "repo_names",
         "onboarding_mode",
         "repo_visibility",
     )
@@ -934,7 +968,10 @@ def resolve_bootstrap_request(
         supplied = request.get(field)
         if supplied in (None, "", {}):
             continue
-        authoritative = registered_public.get(field)
+        if field == "repo_name":
+            authoritative = registered_public.get("repository")
+        else:
+            authoritative = registered_public.get(field)
         if supplied != authoritative:
             conflicts.append(field)
     if conflicts:
@@ -974,26 +1011,11 @@ FOUNDATION_RESOURCES = (("organizations", "organizations"), ("teams", "teams"))
 def iter_foundation_targets(cfg: dict[str, Any], tenant_id: str) -> list[tuple[str, str]]:
     """Return (repo_name, path) pairs for every required greenfield foundation file."""
     tenant_id = validate_tenant_id(tenant_id)
-    platform_pattern = cfg.get("platform_repo_pattern", "combined")
-    platform_repo = cfg.get("platform_repo", "casc-platform-global")
-    repo_lookup = {
-        entry.get("resource_type"): entry.get("name")
-        for entry in (cfg.get("platform_repos") or [])
-        if isinstance(entry, dict) and entry.get("resource_type") and entry.get("name")
-    }
-    targets: list[tuple[str, str]] = []
-    for resource_type, combined_folder in FOUNDATION_RESOURCES:
-        filename = f"{tenant_id}.yml"
-        if platform_pattern == "combined":
-            targets.append((platform_repo, f"base/{combined_folder}/{filename}"))
-            continue
-        repo_name = repo_lookup.get(resource_type)
-        if not repo_name:
-            raise ValueError(
-                f"platform_repos is missing a repository for resource_type={resource_type}"
-            )
-        targets.append((repo_name, f"base/{filename}"))
-    return targets
+    platform_repo = platform_repo_name(cfg)
+    return [
+        (platform_repo, f"base/{combined_folder}/{tenant_id}.yml")
+        for _resource_type, combined_folder in FOUNDATION_RESOURCES
+    ]
 
 
 def validate_onboarding_preflight(
@@ -1025,7 +1047,7 @@ def validate_onboarding_preflight(
     tenant_scm_org = tenant.get("tenant_scm_org")
     if not tenant_scm_org:
         raise ValueError(f"Tenant {tenant_id} is missing tenant_scm_org")
-    repos = tenant["_repositories"]
+    repository = tenant["repository"]
     env_map = cfg.get("env_branch_map") or {}
     if not isinstance(env_map, dict) or not env_map:
         raise ValueError("config.yml env_branch_map must be a non-empty mapping")
@@ -1033,25 +1055,24 @@ def validate_onboarding_preflight(
 
     token = scm_token or control_token
     missing_markers = []
-    for repo_name in repos:
-        for branch in mapped_branches:
-            marker = ".aap-casc-engine/tenant-scaffold.yml"
-            if provider == "github":
-                exists = github_file_exists(
-                    tenant_scm_org, repo_name, marker, branch, token
-                )
-            else:
-                exists = gitlab_file_exists(
-                    gitlab_api or os.environ["CI_API_V4_URL"],
-                    f"{tenant_scm_org}/{repo_name}",
-                    marker,
-                    branch,
-                    token,
-                )
-            if not exists:
-                missing_markers.append(
-                    f"{tenant_scm_org}/{repo_name}@{branch}:{marker}"
-                )
+    for branch in mapped_branches:
+        marker = ".aap-casc-engine/tenant-scaffold.yml"
+        if provider == "github":
+            exists = github_file_exists(
+                tenant_scm_org, repository, marker, branch, token
+            )
+        else:
+            exists = gitlab_file_exists(
+                gitlab_api or os.environ["CI_API_V4_URL"],
+                f"{tenant_scm_org}/{repository}",
+                marker,
+                branch,
+                token,
+            )
+        if not exists:
+            missing_markers.append(
+                f"{tenant_scm_org}/{repository}@{branch}:{marker}"
+            )
     if missing_markers:
         raise ValueError(
             "Incomplete scaffold markers for onboarding_dispatch: " + ", ".join(missing_markers)
@@ -1331,9 +1352,7 @@ def cmd_resolve_bootstrap(args: argparse.Namespace) -> int:
 
 def cmd_scaffold_marker(args: argparse.Namespace) -> int:
     tenant = json.loads(args.tenant_json)
-    marker = build_scaffold_marker(
-        tenant, repository=args.repository, resource_type=args.resource_type
-    )
+    marker = build_scaffold_marker(tenant, repository=args.repository)
     if args.actual_json:
         validate_scaffold_marker(json.loads(args.actual_json), marker)
     print(json.dumps(marker, sort_keys=True))
@@ -1462,7 +1481,6 @@ def build_parser() -> argparse.ArgumentParser:
     marker = sub.add_parser("scaffold-marker", help="Render or compare a scaffold marker")
     marker.add_argument("--tenant-json", required=True)
     marker.add_argument("--repository", required=True)
-    marker.add_argument("--resource-type", required=True)
     marker.add_argument("--actual-json", default="")
     marker.set_defaults(func=cmd_scaffold_marker)
 

@@ -7,10 +7,10 @@ control revisions, API responses, and negative-test output.
 **Release-gate topology:** combined only. One control repository, one platform
 desired-state repository, and one desired-state repository per tenant. Custom
 combined `repo_name` / `platform_repo` values and `repo_mode=create|existing`
-remain in scope. Per-resource layout (`platform_repo_pattern` /
-`repo_pattern: per-resource-type`, `platform_repo_names`, `repo_names`) is
-**retired from this release gate** and will be removed by ROADMAP-006. Do not
-spend further validation effort on per-resource scenarios.
+remain in scope. Per-resource layout fields (`platform_repo_pattern`,
+`repo_pattern`, `platform_repo_names`, `repo_names`) were removed by
+ROADMAP-006 and are rejected by the engine. Do not spend further validation
+effort on per-resource scenarios.
 
 ## 0. Preconditions
 

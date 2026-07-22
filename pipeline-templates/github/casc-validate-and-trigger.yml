@@ -138,8 +138,6 @@ jobs:
           mkdir -p .scripts/pipeline
           [ -f .engine/scripts/pipeline/casc_runtime.py ] && cp .engine/scripts/pipeline/casc_runtime.py .scripts/pipeline/ || true
           [ -f scripts/pipeline/casc_runtime.py ] && cp scripts/pipeline/casc_runtime.py .scripts/pipeline/ || true
-          [ -f .engine/scripts/pipeline/repo_name_overrides.py ] && cp .engine/scripts/pipeline/repo_name_overrides.py .scripts/pipeline/ || true
-          [ -f scripts/pipeline/repo_name_overrides.py ] && cp scripts/pipeline/repo_name_overrides.py .scripts/pipeline/ || true
 
       - name: Fetch authoritative control metadata
         id: control
@@ -216,10 +214,10 @@ jobs:
           if os.path.exists('config.yml'):
               try:
                   cfg = yaml.safe_load(open('config.yml'))
-                  for key in ['env_branch_map', 'scm_provider', 'platform_scm_org', 'platform_repo_pattern']:
+                  for key in ['env_branch_map', 'scm_provider', 'platform_scm_org', 'platform_repo']:
                       if key not in cfg:
                           errors.append(f'config.yml: missing required key \"{key}\"')
-                  for required in ('control_scm_org', 'control_repo', 'control_branch', 'platform_repo_pattern'):
+                  for required in ('control_scm_org', 'control_repo', 'control_branch', 'platform_repo'):
                       if not isinstance(cfg.get(required), str) or not cfg[required].strip():
                           errors.append(f'config.yml: {required} must be a non-empty string')
                   if 'create_missing_env_branches' in cfg and not isinstance(cfg['create_missing_env_branches'], bool):
@@ -481,10 +479,9 @@ jobs:
                   'tenant_id': tenant['tenant_id'],
                   'aap_organization': tenant['aap_organization'],
                   'tenant_scm_org': tenant['tenant_scm_org'],
-                  'repo_pattern': tenant.get('repo_pattern', 'combined'),
                   'control_revision': control_revision,
               }
-              for opt in ('team_name', 'repo_mode', 'onboarding_mode', 'dispatch_enabled', 'repo_name', 'repo_names', 'tenant_scm_namespace_id', 'repo_visibility'):
+              for opt in ('team_name', 'repo_mode', 'onboarding_mode', 'dispatch_enabled', 'repo_name', 'tenant_scm_namespace_id', 'repo_visibility'):
                   if opt in tenant and tenant[opt] is not None and tenant[opt] != '':
                       extra[opt] = tenant[opt]
               return extra

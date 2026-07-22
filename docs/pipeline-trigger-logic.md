@@ -34,7 +34,7 @@ The three pipeline implementations use `scripts/pipeline/casc_runtime.py` for th
 same behavior:
 
 - Validate all tenant IDs, exact AAP Organization bindings, and repository ownership.
-- Resolve custom combined or per-resource repository names from the tenant record.
+- Resolve the scalar combined tenant `repository` from the tenant record (`repo_name` override or default).
 - Inspect markers across every mapped branch.
 - Allow identity/topology corrections or removal before any marker exists.
 - Reject identity/topology changes or removal after any marker exists.

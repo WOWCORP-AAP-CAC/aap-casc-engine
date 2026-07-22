@@ -23,7 +23,6 @@ sys.path.insert(0, str(ROOT / "schemas"))
 
 import casc_runtime  # noqa: E402
 import migrate_control_plane  # noqa: E402
-import repo_name_overrides  # noqa: E402
 import validate_naming  # noqa: E402
 
 
@@ -44,7 +43,6 @@ def base_config(**overrides):
         "control_repo": "casc-platform-control",
         "control_branch": "main",
         "platform_scm_org": "ww-platform",
-        "platform_repo_pattern": "combined",
         "platform_repo": "casc-platform-global",
         "env_branch_map": {"dev": "develop", "prd": "main"},
     }
@@ -57,7 +55,6 @@ def greenfield(tenant_id="stores", **overrides):
         "tenant_id": tenant_id,
         "team_name": "Stores Automation",
         "tenant_scm_org": "ww-tenants",
-        "repo_pattern": "combined",
         "onboarding_mode": "greenfield",
     }
     record.update(overrides)
@@ -69,7 +66,6 @@ def brownfield(tenant_id="legacy", **overrides):
         "tenant_id": tenant_id,
         "aap_organization": "Legacy LDAP Organization",
         "tenant_scm_org": "ww-tenants",
-        "repo_pattern": "combined",
         "onboarding_mode": "brownfield",
     }
     record.update(overrides)
@@ -91,7 +87,10 @@ class TenantIdentityTests(unittest.TestCase):
         runtime = casc_runtime.public_tenant_runtime(greenfield())
         self.assertEqual(runtime["tenant_id"], "stores")
         self.assertEqual(runtime["aap_organization"], "stores")
-        self.assertEqual(runtime["repositories"], ["casc-tenant-stores"])
+        self.assertEqual(runtime["repository"], "casc-tenant-stores")
+        self.assertNotIn("repositories", runtime)
+        self.assertNotIn("repo_by_folder", runtime)
+        self.assertNotIn("repo_pattern", runtime)
         self.assertNotIn("org-stores", json.dumps(runtime))
 
     def test_greenfield_accepts_exact_customer_identities(self):
@@ -117,7 +116,7 @@ class TenantIdentityTests(unittest.TestCase):
 
     def test_tenant_id_safe_key_limits(self):
         for valid in ("a", "stores", "tenant_01", "a" * 64):
-            self.assertEqual(repo_name_overrides.validate_tenant_id(valid), valid)
+            self.assertEqual(casc_runtime.validate_tenant_id(valid), valid)
         for invalid in (
             "",
             "A",
@@ -134,7 +133,7 @@ class TenantIdentityTests(unittest.TestCase):
             "a" * 65,
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
-                repo_name_overrides.validate_tenant_id(invalid)
+                casc_runtime.validate_tenant_id(invalid)
 
     def test_derived_runtime_fields_are_not_accepted_as_registry_inputs(self):
         for field in ("derived_repositories", "repository_cache", "access_principal"):
@@ -189,31 +188,26 @@ class TenantIdentityTests(unittest.TestCase):
                 base_config(),
             )
 
-    def test_custom_repo_mapping_is_deterministic(self):
-        overrides = {"projects": "stores-projects", "inventories": "stores-inventory"}
-        mapping = repo_name_overrides.resolve_tenant_repo_map(
-            repo_pattern="per-resource-type",
-            tenant_id="stores",
-            repo_names=overrides,
+    def test_custom_scalar_repository_and_legacy_rejection(self):
+        runtime = casc_runtime.public_tenant_runtime(greenfield(repo_name="ww-tenant-stores"))
+        self.assertEqual(runtime["repository"], "ww-tenant-stores")
+        self.assertEqual(
+            casc_runtime.resolve_tenant_repository("stores"), "casc-tenant-stores"
         )
-        self.assertEqual(mapping["projects"], "stores-projects")
-        self.assertEqual(mapping["inventories"], "stores-inventory")
-        self.assertEqual(mapping["templates"], "controller-templates-stores")
-        with self.assertRaisesRegex(ValueError, "mapping"):
-            repo_name_overrides.resolve_tenant_repo_map(
-                repo_pattern="per-resource-type", tenant_id="stores", repo_names=["x"]
+        self.assertEqual(
+            casc_runtime.platform_repo_name(base_config()), "casc-platform-global"
+        )
+        with self.assertRaisesRegex(ValueError, "removed topology fields"):
+            casc_runtime.normalize_tenant_record(greenfield(repo_pattern="combined"))
+        with self.assertRaisesRegex(ValueError, "removed topology fields"):
+            casc_runtime.normalize_tenant_record(greenfield(repo_names={"projects": "x"}))
+        with self.assertRaisesRegex(ValueError, "removed topology fields"):
+            casc_runtime.platform_repo_name(
+                base_config(platform_repo_pattern="combined")
             )
-        with self.assertRaisesRegex(ValueError, "unknown folder"):
-            repo_name_overrides.resolve_tenant_repo_map(
-                repo_pattern="per-resource-type",
-                tenant_id="stores",
-                repo_names={"unknown": "x"},
-            )
-        with self.assertRaisesRegex(ValueError, "duplicate tenant repo"):
-            repo_name_overrides.resolve_tenant_repo_map(
-                repo_pattern="per-resource-type",
-                tenant_id="stores",
-                repo_names={"projects": "same", "inventories": "same"},
+        with self.assertRaisesRegex(ValueError, "removed topology fields"):
+            casc_runtime.reject_legacy_config_fields(
+                base_config(repo_mode="create")
             )
 
     def test_same_short_repo_name_is_safe_across_scm_namespaces(self):
@@ -228,34 +222,13 @@ class TenantIdentityTests(unittest.TestCase):
         )
         self.assertEqual(len(normalized), 2)
         site = (ROOT / "site.yml").read_text()
-        self.assertIn("'repo_path': item.0.tenant_scm_org + '/' + item.1", site)
+        self.assertIn("item.tenant_scm_org + '/' + item.repository", site)
         for pipeline in PIPELINES:
             content = pipeline.read_text()
             if "gitlab" in str(pipeline):
                 self.assertIn("CI_PROJECT_PATH", content)
             else:
                 self.assertIn("GITHUB_REPOSITORY", content)
-
-    def test_platform_repo_overrides_are_mapping_only(self):
-        folders = ["organizations", "teams"]
-        defaults = [
-            {"folder": "organizations", "name": "orgs"},
-            {"folder": "teams", "name": "teams"},
-        ]
-        mapped = repo_name_overrides.normalize_platform_repo_names(
-            folders, {"organizations": "customer-orgs"}
-        )
-        result = repo_name_overrides.apply_platform_repo_names(defaults, mapped)
-        self.assertEqual([item["name"] for item in result], ["customer-orgs", "teams"])
-        with self.assertRaisesRegex(ValueError, "mapping"):
-            repo_name_overrides.normalize_platform_repo_names(folders, ["a", "b"])
-        with self.assertRaisesRegex(ValueError, "unknown folder"):
-            repo_name_overrides.normalize_platform_repo_names(folders, {"users": "x"})
-        with self.assertRaisesRegex(ValueError, "duplicate platform repo"):
-            repo_name_overrides.apply_platform_repo_names(
-                defaults, {"organizations": "teams"}
-            )
-
 
 class LifecycleTests(unittest.TestCase):
     def test_added_active_tenant_is_actionable(self):
@@ -318,8 +291,11 @@ class LifecycleTests(unittest.TestCase):
     def test_marker_is_strict_and_mode_specific(self):
         tenant = greenfield()
         expected = casc_runtime.build_scaffold_marker(
-            tenant, repository="casc-tenant-stores", resource_type="combined"
+            tenant, repository="casc-tenant-stores"
         )
+        self.assertEqual(expected["scaffold_version"], 3)
+        self.assertEqual(expected["repository"], "casc-tenant-stores")
+        self.assertNotIn("resource_type", expected)
         casc_runtime.validate_scaffold_marker(dict(expected), expected)
         changed = dict(expected, aap_organization="Other")
         with self.assertRaisesRegex(ValueError, "aap_organization"):
@@ -330,7 +306,7 @@ class LifecycleTests(unittest.TestCase):
 
         brown = brownfield()
         marker = casc_runtime.build_scaffold_marker(
-            brown, repository="casc-tenant-legacy", resource_type="combined"
+            brown, repository="casc-tenant-legacy"
         )
         self.assertNotIn("team_name", marker)
 
@@ -356,6 +332,43 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(resolved["aap_organization"], "stores")
         self.assertEqual(resolved["team_name"], "Stores Automation")
 
+    def test_second_survey_tenant_onboards_with_nonempty_registry(self):
+        existing = greenfield("stores", repo_name="ww-tenant-stores")
+        request = greenfield("network", team_name="Network Automation")
+        resolved, registered = casc_runtime.resolve_bootstrap_request(
+            {"tenants": [existing]}, base_config(), request
+        )
+        self.assertFalse(registered)
+        self.assertEqual(resolved["tenant_id"], "network")
+        self.assertEqual(resolved["repository"], "casc-tenant-network")
+        self.assertNotIn("repositories", resolved)
+
+    def test_registered_repo_name_compares_against_repository(self):
+        doc = {"tenants": [greenfield(repo_name="ww-tenant-stores")]}
+        cfg = base_config()
+        matched, registered = casc_runtime.resolve_bootstrap_request(
+            doc, cfg, {"tenant_id": "stores", "repo_name": "ww-tenant-stores"}
+        )
+        self.assertTrue(registered)
+        self.assertEqual(matched["repository"], "ww-tenant-stores")
+        omitted, registered = casc_runtime.resolve_bootstrap_request(
+            doc, cfg, {"tenant_id": "stores"}
+        )
+        self.assertTrue(registered)
+        self.assertEqual(omitted["repository"], "ww-tenant-stores")
+        with self.assertRaisesRegex(ValueError, "conflict"):
+            casc_runtime.resolve_bootstrap_request(
+                doc, cfg, {"tenant_id": "stores", "repo_name": "other-repo"}
+            )
+
+    def test_resolve_jt_names_rejects_legacy_config_fields(self):
+        names = casc_runtime.resolve_jt_names(base_config())
+        self.assertEqual(names["bootstrap"], "jt-platform-bootstrap_tenant")
+        with self.assertRaisesRegex(ValueError, "removed topology fields"):
+            casc_runtime.resolve_jt_names(
+                base_config(platform_repo_pattern="combined")
+            )
+
 
 class FoundationAndTemplateTests(unittest.TestCase):
     def setUp(self):
@@ -374,25 +387,16 @@ class FoundationAndTemplateTests(unittest.TestCase):
                 ("casc-platform-global", "base/teams/stores.yml"),
             ],
         )
-        per_type = casc_runtime.iter_foundation_targets(
-            base_config(
-                platform_repo_pattern="per-resource-type",
-                platform_repos=[
-                    {"resource_type": "organizations", "name": "ww-org-config"},
-                    {"resource_type": "teams", "name": "ww-team-config"},
-                ],
-            ),
-            "stores",
+        custom = casc_runtime.iter_foundation_targets(
+            base_config(platform_repo="ww-governed-platform"), "stores"
         )
         self.assertEqual(
-            per_type,
-            [("ww-org-config", "base/stores.yml"), ("ww-team-config", "base/stores.yml")],
+            custom,
+            [
+                ("ww-governed-platform", "base/organizations/stores.yml"),
+                ("ww-governed-platform", "base/teams/stores.yml"),
+            ],
         )
-        with self.assertRaisesRegex(ValueError, "missing a repository"):
-            casc_runtime.iter_foundation_targets(
-                base_config(platform_repo_pattern="per-resource-type", platform_repos=[]),
-                "stores",
-            )
 
     def test_free_form_foundation_values_round_trip_yaml(self):
         context = {
@@ -654,7 +658,7 @@ class DeletionSafetyTests(unittest.TestCase):
             "control_repo: control\n"
             "control_branch: main\n"
             "platform_scm_org: org\n"
-            "platform_repo_pattern: combined\n"
+            "platform_repo: casc-platform-global\n"
             "env_branch_map:\n  poc: dev\n  prod: main\n",
             encoding="utf-8",
         )
@@ -1001,11 +1005,13 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         content = (ROOT / "site.yml").read_text()
         self.assertNotIn("selected_repos: >-", content)
         self.assertIn('selected_repos: "{{ _platform_repos if dispatch_scope == \'platform\'', content)
-        self.assertIn("Build platform repos list (combined)", content)
+        self.assertIn("Build platform repos list", content)
+        self.assertIn("item.repository", content)
 
     def test_drift_platform_repos_preserves_native_lists(self):
         content = (ROOT / "drift-detect.yml").read_text()
-        self.assertIn("Build platform repos list for drift check (combined)", content)
+        self.assertIn("Build platform repos list for drift check", content)
+        self.assertIn("item.repository", content)
         self.assertIn("clone_name: \"platform__{{ _platform_repo }}\"", content)
         self.assertIn("clone_depth: 0", content)
 
@@ -1062,6 +1068,19 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         self.assertIn("genesis_repos:", inventory_block)
         self.assertIn("control_repo_record", inventory_block)
 
+    def test_genesis_and_bootstrap_reject_removed_topology_inputs(self):
+        genesis = (ROOT / "genesis.yml").read_text()
+        bootstrap = (ROOT / "bootstrap.yml").read_text()
+        self.assertIn("Reject removed topology launch inputs", genesis)
+        self.assertIn("PLATFORM_REPO_PATTERN", genesis)
+        self.assertIn("platform_repo | length > 0", genesis)
+        self.assertIn("Reject removed topology launch inputs", bootstrap)
+        self.assertIn("REPO_PATTERN", bootstrap)
+        self.assertIn("control_config.platform_repo_pattern is not defined", bootstrap)
+        readme = (ROOT / "templates/genesis-readme.md.j2").read_text()
+        self.assertIn("platform desired-state repository", readme)
+        self.assertNotIn("platform desired-state repositories", readme)
+
     def test_precreated_empty_repositories_use_existing_managed_content(self):
         gh_genesis = (ROOT / "tasks/genesis_scm_github.yml").read_text()
         gl_genesis = (ROOT / "tasks/genesis_scm_gitlab.yml").read_text()
@@ -1089,7 +1108,10 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("tenant_id", content, pipeline)
             self.assertIn("aap_organization", content, pipeline)
             self.assertIn("team_name", content, pipeline)
-            self.assertIn("repo_names", content, pipeline)
+            self.assertIn("repo_name", content, pipeline)
+            self.assertIn("platform_repo", content, pipeline)
+            self.assertNotIn("platform_repo_pattern", content, pipeline)
+            self.assertNotIn("repo_name_overrides", content, pipeline)
             self.assertNotIn(".engine/schemas/naming-rules.yml", content, pipeline)
 
     def test_pipelines_validate_folder_and_flat_layouts_consistently(self):
@@ -1193,7 +1215,7 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         self.assertIn("item.clone_name | default(item.name)", role)
         for playbook in (ROOT / "site.yml", ROOT / "drift-detect.yml"):
             content = playbook.read_text()
-            self.assertIn("'clone_name': item.0.tenant_id + '__' + item.1", content)
+            self.assertIn("item.tenant_id + '__' + item.repository", content)
             self.assertIn("casc_repo.clone_name | default(casc_repo.name)", content)
 
     def test_control_revision_is_an_immutable_commit_pin(self):
@@ -1257,7 +1279,7 @@ class MigrationAndDocumentationTests(unittest.TestCase):
             source = Path(tmp) / "legacy"
             source.mkdir()
             (source / "config.yml").write_text(
-                "platform_scm_org: example\nplatform_repo_pattern: combined\n"
+                "platform_scm_org: example\nplatform_repo: casc-platform-global\n"
                 "env_branch_map:\n  dev: develop\n  prd: main\n",
                 encoding="utf-8",
             )
@@ -1272,7 +1294,7 @@ class MigrationAndDocumentationTests(unittest.TestCase):
                     platform_scm_org="example",
                     control_repo="casc-platform-control",
                     control_branch="main",
-                    platform_repo_name="casc-platform-global",
+                    platform_repo_name="",
                     apply=False,
                 )
             )
@@ -1280,6 +1302,260 @@ class MigrationAndDocumentationTests(unittest.TestCase):
             self.assertFalse(
                 (output / "casc-platform-control" / "naming-rules.yml").exists()
             )
+            migrated = yaml.safe_load(
+                (output / "casc-platform-control" / "config.yml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(migrated["platform_repo"], "casc-platform-global")
+            self.assertNotIn("platform_repo_pattern", migrated)
+            self.assertNotIn("repo_mode", migrated)
+
+    def test_migration_preserves_scalars_and_emits_runtime_valid_tenants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "legacy"
+            source.mkdir()
+            (source / "config.yml").write_text(
+                "platform_scm_org: example\n"
+                "platform_repo_pattern: combined\n"
+                "platform_repos:\n"
+                "  - resource_type: combined\n"
+                "    name: ww-governed-platform\n"
+                "repo_mode: existing\n"
+                "env_branch_map:\n  dev: develop\n  prd: main\n",
+                encoding="utf-8",
+            )
+            (source / "tenants.yml").write_text(
+                "tenants:\n"
+                "  - tenant_id: stores\n"
+                "    team_name: Stores Automation\n"
+                "    tenant_scm_org: ww-tenants\n"
+                "    repo_pattern: combined\n"
+                "    repositories:\n"
+                "      - ww-tenant-stores\n"
+                "    onboarding_mode: greenfield\n"
+                "    status: active\n",
+                encoding="utf-8",
+            )
+            (source / "base").mkdir()
+            output = Path(tmp) / "out"
+            rc = migrate_control_plane.plan_legacy_split(
+                argparse_namespace(
+                    source_repo=str(source),
+                    output_dir=str(output),
+                    control_scm_org="example",
+                    platform_scm_org="example",
+                    control_repo="casc-platform-control",
+                    control_branch="main",
+                    platform_repo_name="",
+                    apply=False,
+                )
+            )
+            self.assertEqual(rc, 0)
+            self.assertTrue((output / "ww-governed-platform" / "base").exists())
+            migrated_cfg = yaml.safe_load(
+                (output / "casc-platform-control" / "config.yml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(migrated_cfg["platform_repo"], "ww-governed-platform")
+            self.assertNotIn("platform_repos", migrated_cfg)
+            self.assertNotIn("platform_repo_pattern", migrated_cfg)
+            self.assertNotIn("repo_mode", migrated_cfg)
+            migrated_tenants = yaml.safe_load(
+                (output / "casc-platform-control" / "tenants.yml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            tenant = migrated_tenants["tenants"][0]
+            self.assertEqual(tenant["repo_name"], "ww-tenant-stores")
+            self.assertNotIn("repo_pattern", tenant)
+            self.assertNotIn("repositories", tenant)
+            # Transformed tenants.yml must validate under the new runtime contract.
+            casc_runtime.validate_tenant_registry(migrated_tenants, migrated_cfg)
+
+    def test_migration_rejects_invalid_scalars_and_preserves_repository(self):
+        def run_split(tmp, config_body, tenants_body="tenants: []\n"):
+            source = Path(tmp) / "legacy"
+            source.mkdir()
+            (source / "config.yml").write_text(config_body, encoding="utf-8")
+            (source / "tenants.yml").write_text(tenants_body, encoding="utf-8")
+            (source / "base").mkdir()
+            return migrate_control_plane.plan_legacy_split(
+                argparse_namespace(
+                    source_repo=str(source),
+                    output_dir=str(Path(tmp) / "out"),
+                    control_scm_org="example",
+                    platform_scm_org="example",
+                    control_repo="casc-platform-control",
+                    control_branch="main",
+                    platform_repo_name="",
+                    apply=False,
+                )
+            )
+
+        for invalid in ("platform_repo: 123\n", "platform_repo: []\n", "platform_repo: ''\n"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(SystemExit) as ctx:
+                    run_split(
+                        tmp,
+                        "platform_scm_org: example\n"
+                        + invalid
+                        + "env_branch_map:\n  dev: develop\n",
+                    )
+                self.assertIn("platform_repo must be a non-empty string", str(ctx.exception))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as ctx:
+                run_split(
+                    tmp,
+                    "platform_scm_org: example\n"
+                    "platform_repo: casc-platform-global\n"
+                    "env_branch_map:\n  dev: develop\n",
+                    "tenants:\n"
+                    "  - tenant_id: stores\n"
+                    "    team_name: Stores\n"
+                    "    tenant_scm_org: ww\n"
+                    "    repo_name: 123\n"
+                    "    onboarding_mode: greenfield\n",
+                )
+            message = str(ctx.exception)
+            self.assertTrue(
+                "repo_name must be a non-empty string" in message
+                or "not runtime-valid" in message
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rc = run_split(
+                tmp,
+                "platform_scm_org: example\n"
+                "platform_repo: casc-platform-global\n"
+                "env_branch_map:\n  dev: develop\n",
+                "tenants:\n"
+                "  - tenant_id: stores\n"
+                "    team_name: Stores Automation\n"
+                "    tenant_scm_org: ww-tenants\n"
+                "    repository: ww-custom\n"
+                "    onboarding_mode: greenfield\n"
+                "    status: active\n",
+            )
+            self.assertEqual(rc, 0)
+            migrated = yaml.safe_load(
+                (Path(tmp) / "out/casc-platform-control/tenants.yml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            tenant = migrated["tenants"][0]
+            self.assertEqual(tenant["repo_name"], "ww-custom")
+            self.assertNotIn("repository", tenant)
+            cfg = yaml.safe_load(
+                (Path(tmp) / "out/casc-platform-control/config.yml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            casc_runtime.validate_tenant_registry(migrated, cfg)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as ctx:
+                run_split(
+                    tmp,
+                    "platform_scm_org: example\n"
+                    "platform_repo: casc-platform-global\n"
+                    "env_branch_map:\n  dev: develop\n",
+                    "tenants:\n"
+                    "  - tenant_id: stores\n"
+                    "    team_name: Stores\n"
+                    "    tenant_scm_org: ww\n"
+                    "    repo_name: one-repo\n"
+                    "    repository: other-repo\n"
+                    "    onboarding_mode: greenfield\n",
+                )
+            self.assertIn("conflicting repository scalars", str(ctx.exception).lower())
+
+    def test_migration_fails_closed_on_unconsolidated_per_resource(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "legacy"
+            source.mkdir()
+            (source / "config.yml").write_text(
+                "platform_scm_org: example\n"
+                "platform_repo_pattern: per-resource-type\n"
+                "platform_repos:\n"
+                "  - resource_type: organizations\n"
+                "    name: ww-orgs\n"
+                "  - resource_type: teams\n"
+                "    name: ww-teams\n"
+                "env_branch_map:\n  dev: develop\n  prd: main\n",
+                encoding="utf-8",
+            )
+            (source / "tenants.yml").write_text("tenants: []\n", encoding="utf-8")
+            with self.assertRaises(SystemExit) as ctx:
+                migrate_control_plane.plan_legacy_split(
+                    argparse_namespace(
+                        source_repo=str(source),
+                        output_dir=str(Path(tmp) / "out"),
+                        control_scm_org="example",
+                        platform_scm_org="example",
+                        control_repo="casc-platform-control",
+                        control_branch="main",
+                        platform_repo_name="",
+                        apply=False,
+                    )
+                )
+            self.assertIn("manually consolidated", str(ctx.exception))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "legacy"
+            source.mkdir()
+            (source / "config.yml").write_text(
+                "platform_scm_org: example\n"
+                "platform_repos:\n"
+                "  - resource_type: organizations\n"
+                "    name: ww-orgs\n"
+                "env_branch_map:\n  dev: develop\n",
+                encoding="utf-8",
+            )
+            (source / "tenants.yml").write_text("tenants: []\n", encoding="utf-8")
+            with self.assertRaises(SystemExit) as ctx:
+                migrate_control_plane.plan_legacy_split(
+                    argparse_namespace(
+                        source_repo=str(source),
+                        output_dir=str(Path(tmp) / "out"),
+                        control_scm_org="example",
+                        platform_scm_org="example",
+                        control_repo="casc-platform-control",
+                        control_branch="main",
+                        platform_repo_name="",
+                        apply=False,
+                    )
+                )
+            self.assertIn("manually consolidated", str(ctx.exception))
+            self.assertIn("platform_repos", str(ctx.exception))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tenants = Path(tmp) / "tenants.yml"
+            tenants.write_text(
+                "tenants:\n"
+                "  - tenant_id: stores\n"
+                "    team_name: Stores\n"
+                "    tenant_scm_org: ww\n"
+                "    repo_names:\n"
+                "      - stores-projects\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit) as ctx:
+                migrate_control_plane.plan_tenant_identity_migration(
+                    argparse_namespace(
+                        tenants_file=str(tenants),
+                        from_tenant_id="stores",
+                        to_tenant_id="",
+                        to_scm_org="",
+                        to_repo_name="stores-combined",
+                        to_aap_organization="",
+                        output_dir=str(Path(tmp) / "out"),
+                    )
+                )
+            self.assertIn("manually consolidated", str(ctx.exception))
+            self.assertIn("repo_names", str(ctx.exception))
 
     def test_required_docs_cover_lean_contract(self):
         docs = [
@@ -1300,6 +1576,9 @@ class MigrationAndDocumentationTests(unittest.TestCase):
             "Team",
         ):
             self.assertIn(required, combined)
+        guide = (ROOT / "docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md").read_text()
+        self.assertIn("combined-only", guide)
+        self.assertNotIn("Per-resource-type layouts remain available", guide)
 
 
 if __name__ == "__main__":

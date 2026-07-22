@@ -5,12 +5,12 @@
 - name: "GH - Build Greenfield foundation targets"
   ansible.builtin.set_fact:
     _foundation_files:
-      - repo: "{{ _platform_repo_lookup.organizations if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-        path: "{{ 'base/' + _effective_tenant_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/organizations/' + _effective_tenant_id + '.yml' }}"
+      - repo: "{{ platform_repo }}"
+        path: "base/organizations/{{ _effective_tenant_id }}.yml"
         content: "{{ _org_foundation_content }}"
         label: organization
-      - repo: "{{ _platform_repo_lookup.teams if platform_repo_pattern == 'per-resource-type' else platform_repo }}"
-        path: "{{ 'base/' + _effective_tenant_id + '.yml' if platform_repo_pattern == 'per-resource-type' else 'base/teams/' + _effective_tenant_id + '.yml' }}"
+      - repo: "{{ platform_repo }}"
+        path: "base/teams/{{ _effective_tenant_id }}.yml"
         content: "{{ _team_foundation_content }}"
         label: team
   when: onboarding_mode == 'greenfield'
@@ -57,8 +57,6 @@
       - "{{ _tenant_runtime | to_json }}"
       - --repository
       - "{{ item.item.0.name }}"
-      - --resource-type
-      - "{{ item.item.0.resource_type }}"
       - --actual-json
       - "{{ (item.json.content | b64decode | from_yaml) | to_json }}"
   loop: "{{ _gh_marker_preflight.results }}"
@@ -93,8 +91,6 @@
       - "{{ _tenant_runtime | to_json }}"
       - --repository
       - "{{ item.item.item }}"
-      - --resource-type
-      - "{{ (_tenant_repo_records | selectattr('name', 'equalto', item.item.item) | first).resource_type }}"
       - --actual-json
       - "{{ (item.json.content | b64decode | from_yaml) | to_json }}"
   loop: >-
@@ -367,9 +363,8 @@
   ansible.builtin.set_fact:
     _tenant_scaffold_files: >-
       {{ _tenant_scaffold_files
-         + [{'repo': _tenant_repo_by_folder[item.folder],
-             'path': ('base/' + item.folder + '/example.yml.sample'
-                      if repo_pattern == 'combined' else 'base/example.yml.sample'),
+         + [{'repo': _tenant_repository,
+             'path': 'base/' + item.folder + '/example.yml.sample',
              'content': lookup('template', item.template),
              'kind': 'example'}] }}
   loop: "{{ _tenant_types }}"
@@ -378,9 +373,8 @@
   ansible.builtin.set_fact:
     _tenant_scaffold_files: >-
       {{ _tenant_scaffold_files
-         + [{'repo': _tenant_repo_by_folder[item.0.folder],
-             'path': (item.1 + '/' + item.0.folder + '/.gitkeep'
-                      if repo_pattern == 'combined' else item.1 + '/.gitkeep'),
+         + [{'repo': _tenant_repository,
+             'path': item.1 + '/' + item.0.folder + '/.gitkeep',
              'content': '',
              'kind': 'folder'}] }}
   loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
@@ -483,8 +477,6 @@
       - "{{ _tenant_runtime | to_json }}"
       - --repository
       - "{{ item.item.0.name }}"
-      - --resource-type
-      - "{{ item.item.0.resource_type }}"
       - --actual-json
       - "{{ (item.json.content | b64decode | from_yaml) | to_json }}"
   loop: "{{ _gh_final_marker_checks.results }}"

@@ -103,7 +103,6 @@
     - name: "Compute effective configuration from control metadata"
       ansible.builtin.set_fact:
         platform_scm_org: "{{ control_config.platform_scm_org }}"
-        _repo_pattern: "{{ control_config.platform_repo_pattern | default('combined') }}"
         _platform_repo: "{{ control_config.platform_repo | default('casc-platform-global') }}"
         dispatcher_jt_name: "{{ control_config.job_templates.dispatcher | default('jt-platform-casc_dispatcher', true) }}"
 
@@ -150,7 +149,7 @@
       ansible.builtin.set_fact:
         _active_tenants: "{{ _normalized_tenants | selectattr('status', 'equalto', 'active') | selectattr('dispatch_enabled', 'equalto', true) | list }}"
 
-    - name: "Build platform repos list (combined)"
+    - name: "Build platform repos list"
       ansible.builtin.set_fact:
         _platform_repos:
           - name: "{{ _platform_repo }}"
@@ -158,26 +157,6 @@
             repo_path: "{{ platform_scm_org }}/{{ _platform_repo }}"
             aap_scope: platform
             scm_org: "{{ platform_scm_org }}"
-      when: _repo_pattern == 'combined'
-
-    - name: "Build platform repos list (per-resource)"
-      ansible.builtin.set_fact:
-        _platform_repos: >-
-          {%- set repos = [] -%}
-          {%- for repo in control_config.platform_repos | default([]) -%}
-          {%- set _ = repos.append(repo | combine({
-               'clone_name': 'platform__' + repo.name,
-               'repo_path': platform_scm_org + '/' + repo.name,
-               'aap_scope': 'platform',
-               'scm_org': platform_scm_org})) -%}
-          {%- endfor -%}
-          {{ repos | to_json }}
-      when: _repo_pattern != 'combined'
-
-    - name: "Decode per-resource platform repos list"
-      ansible.builtin.set_fact:
-        _platform_repos: "{{ _platform_repos | from_json }}"
-      when: _repo_pattern != 'combined'
 
     - name: "Initialize tenant repos list"
       ansible.builtin.set_fact:
@@ -185,10 +164,10 @@
 
     - name: "Build tenant repos list from the canonical registry resolver"
       ansible.builtin.set_fact:
-        _tenant_repos: "{{ _tenant_repos + [{'name': item.1, 'clone_name': item.0.tenant_id + '__' + item.1, 'repo_path': item.0.tenant_scm_org + '/' + item.1, 'aap_scope': item.0.tenant_id, 'scm_org': item.0.tenant_scm_org}] }}"
-      loop: "{{ _active_tenants | subelements('repositories') }}"
+        _tenant_repos: "{{ _tenant_repos + [{'name': item.repository, 'clone_name': item.tenant_id + '__' + item.repository, 'repo_path': item.tenant_scm_org + '/' + item.repository, 'aap_scope': item.tenant_id, 'scm_org': item.tenant_scm_org}] }}"
+      loop: "{{ _active_tenants }}"
       loop_control:
-        label: "{{ item.0.tenant_id }} -> {{ item.1 }}"
+        label: "{{ item.tenant_id }} -> {{ item.repository }}"
 
     - name: "Select only the requested desired-state scope"
       ansible.builtin.set_fact:

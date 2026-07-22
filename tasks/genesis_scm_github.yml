@@ -352,20 +352,15 @@
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 5: Seed full multi-env folder structure (base/ + env/)
-#   Makes repos self-documenting with the complete layout from day-0.
-#   - combined:          base/<type>/ + <env>/<type>/ in the combined platform desired-state repo
-#   - per-resource-type: base/ + <env>/ in each type-specific repo
+#   base/<type>/ + <env>/<type>/ in the combined platform desired-state repo.
 #   <env> comes from each KEY in env_branch_map (e.g., dev, tst, prd).
-# ═══════════════════════════════════════════════════════════════════════════
 
-# --- Combined pattern: base/<type>/ + <env>/<type>/ in one repo ---
 - name: "GH – Compute all folder paths (combined)"
   ansible.builtin.set_fact:
     _genesis_seed_paths: >-
       {{ (_platform_type_folders | map('regex_replace', '^', 'base/') | list)
          + (env_branch_map.keys() | list | product(_platform_type_folders)
             | map('join', '/') | list) }}
-  when: repo_pattern == 'combined'
 
 - name: "GH – Check .gitkeep in folders (combined)"
   ansible.builtin.uri:
@@ -377,7 +372,6 @@
     status_code: [200, 404]
   loop: "{{ _genesis_seed_paths }}"
   register: _gh_folder_checks_combined
-  when: repo_pattern == 'combined'
 
 - name: "GH – Seed .gitkeep in folders (combined)"
   ansible.builtin.uri:
@@ -396,46 +390,6 @@
   loop: "{{ _gh_folder_checks_combined.results | default([]) }}"
   loop_control:
     label: "{{ item.item }}/"
-  when: repo_pattern == 'combined'
-
-# --- Per-resource-type: base/ + <env>/ in each type repo ---
-- name: "GH – Compute folder prefixes (per-resource-type)"
-  ansible.builtin.set_fact:
-    _genesis_folder_prefixes: "{{ ['base'] + (env_branch_map.keys() | list) }}"
-  when: repo_pattern == 'per-resource-type'
-
-- name: "GH – Check .gitkeep in folders (per-resource-type)"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.0.name }}/contents/{{ item.1 }}/.gitkeep?ref={{ _desired_state_seed_branch | urlencode }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404]
-  loop: "{{ platform_repos | product(_genesis_folder_prefixes) | list }}"
-  loop_control:
-    label: "{{ item.0.name }}/{{ item.1 }}/"
-  register: _gh_folder_checks_per_type
-  when: repo_pattern == 'per-resource-type'
-
-- name: "GH – Seed .gitkeep in folders (per-resource-type)"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.0.name }}/contents/{{ item.item.1 }}/.gitkeep"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body: >-
-      {{ {'message': 'Genesis: create ' + item.item.1 + '/ folder [skip ci]',
-          'content': '' | b64encode,
-          'branch': _desired_state_seed_branch}
-         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
-    status_code: [200, 201]
-  loop: "{{ _gh_folder_checks_per_type.results | default([]) }}"
-  loop_control:
-    label: "{{ item.item.0.name }}/{{ item.item.1 }}/"
-  when: repo_pattern == 'per-resource-type'
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 6: Seed example.yml.sample in platform repos
@@ -444,7 +398,8 @@
 #   ignores them — tenants/operators rename to .yml to activate.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# --- Combined pattern: base/<type>/example.yml.sample in the combined platform desired-state repo ---
+#   base/<type>/example.yml.sample in the combined platform desired-state repo.
+
 - name: "GH – Check example.yml.sample in platform type folders (combined)"
   ansible.builtin.uri:
     url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ platform_repo }}/contents/base/{{ item.folder }}/example.yml.sample?ref={{ _desired_state_seed_branch | urlencode }}"
@@ -457,7 +412,6 @@
   loop_control:
     label: "base/{{ item.folder }}/example.yml.sample"
   register: _gh_platform_example_checks
-  when: repo_pattern == 'combined'
 
 - name: "GH – Seed example.yml.sample in platform type folders (combined)"
   ansible.builtin.uri:
@@ -476,41 +430,6 @@
   loop: "{{ _gh_platform_example_checks.results | default([]) }}"
   loop_control:
     label: "base/{{ item.item.folder }}/example.yml.sample"
-  when: repo_pattern == 'combined'
-
-# --- Per-resource-type: base/example.yml.sample in each type repo ---
-- name: "GH – Check example.yml.sample in platform type repos (per-resource-type)"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.name }}/contents/base/example.yml.sample?ref={{ _desired_state_seed_branch | urlencode }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404]
-  loop: "{{ platform_repos }}"
-  loop_control:
-    label: "{{ item.name }}/base/example.yml.sample"
-  register: _gh_platform_example_checks_per_type
-  when: repo_pattern == 'per-resource-type'
-
-- name: "GH – Seed example.yml.sample in platform type repos (per-resource-type)"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.name }}/contents/base/example.yml.sample"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body: >-
-      {{ {'message': 'Genesis: add ' + item.item.folder + ' example YAML (rename to .yml to activate) [skip ci]',
-          'content': lookup('template', item.item.template) | b64encode,
-          'branch': _desired_state_seed_branch}
-         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
-    status_code: [200, 201]
-  loop: "{{ _gh_platform_example_checks_per_type.results | default([]) }}"
-  loop_control:
-    label: "{{ item.item.name }}/base/example.yml.sample"
-  when: repo_pattern == 'per-resource-type'
 
 # Seed files are committed on the highest environment branch first. Create the
 # remaining promotion branches afterwards so each starts from the seeded state.
@@ -605,7 +524,6 @@
       {{ _platform_branch_scaffold
          + [{'repo': platform_repo, 'path': item + '/.gitkeep', 'content': ''}] }}
   loop: "{{ _genesis_seed_paths | default([]) }}"
-  when: repo_pattern == 'combined'
 
 - name: "GH - Add combined examples"
   ansible.builtin.set_fact:
@@ -615,25 +533,6 @@
              'path': 'base/' + item.folder + '/example.yml.sample',
              'content': lookup('template', item.template)}] }}
   loop: "{{ _platform_type_metadata }}"
-  when: repo_pattern == 'combined'
-
-- name: "GH - Add per-resource folder scaffolds"
-  ansible.builtin.set_fact:
-    _platform_branch_scaffold: >-
-      {{ _platform_branch_scaffold
-         + [{'repo': item.0.name, 'path': item.1 + '/.gitkeep', 'content': ''}] }}
-  loop: "{{ platform_repos | product(_genesis_folder_prefixes | default([])) | list }}"
-  when: repo_pattern == 'per-resource-type'
-
-- name: "GH - Add per-resource examples"
-  ansible.builtin.set_fact:
-    _platform_branch_scaffold: >-
-      {{ _platform_branch_scaffold
-         + [{'repo': item.name,
-             'path': 'base/example.yml.sample',
-             'content': lookup('template', item.template)}] }}
-  loop: "{{ platform_repos }}"
-  when: repo_pattern == 'per-resource-type'
 
 - name: "GH - Check platform scaffold on every mapped branch"
   ansible.builtin.uri:

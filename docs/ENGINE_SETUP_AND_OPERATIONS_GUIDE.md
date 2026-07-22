@@ -23,9 +23,10 @@ tokens without external dependencies.
 | Platform desired state | Global/shared AAP resource YAML |
 | Tenant desired state | One tenant's AAP resource YAML |
 
-Use one control repo, one combined platform repo for the simplest deployment,
-and one combined repo per tenant. Per-resource-type layouts remain available
-when access boundaries require them.
+The engine is combined-only: one control repository, one platform desired-state
+repository (`platform_repo`), and one desired-state repository per tenant
+(`repo_name` / resolved `repository`). Custom scalar names and
+`repo_mode=create|existing` remain supported.
 
 ### A2. AAP objects
 
@@ -48,7 +49,7 @@ AAP; pipelines receive only execute-level launcher tokens.
 
 | Job Template | Fixed extra vars | Launch-time inputs | Required AAP credentials |
 |---|---|---|---|
-| Genesis | Customer SCM URL/provider defaults | Platform/control namespaces, repo layout/names, branch map, `repo_mode` | SCM credential able to create or update the selected repositories |
+| Genesis | Customer SCM URL/provider defaults | Platform/control namespaces, scalar `platform_repo`, branch map, launch-time `repo_mode` | SCM credential able to create or update the selected repositories |
 | Bootstrap | Control repo coordinates and engine repo | Tenant fields below; `control_revision` is supplied by CI | SCM credential able to scaffold control, platform, and requested tenant repos |
 | Dispatcher | Control repo coordinates | `target_env`, `dispatch_scope`, `tenant_id` or `triggered_repo`, `control_revision` | SCM read credential plus target AAP connection credential |
 | Drift | Control repo coordinates | `target_env`, `drift_mode`, optional `control_revision` | SCM read credential plus target AAP connection credential |
@@ -79,8 +80,8 @@ Recommended Bootstrap survey schema:
 | `aap_organization` | No | Greenfield defaults to `tenant_id`; Brownfield requires it |
 | `team_name` | No | Greenfield requires it; Brownfield rejects it |
 | `tenant_scm_org` | Yes for an unregistered request | Registered Git record is authoritative |
-| `repo_pattern`, `repo_mode`, `repo_visibility` | No | Shared runtime defaults apply when omitted |
-| `repo_name`, `repo_names` | No | Mutually exclusive layout-specific overrides |
+| `repo_mode`, `repo_visibility` | No | Shared runtime defaults apply when omitted |
+| `repo_name` | No | Optional combined tenant repository override |
 | `tenant_scm_namespace_id` | No | Required only for GitLab project creation |
 
 For a tenant already registered in control `tenants.yml`, CI should launch
@@ -130,7 +131,6 @@ platform_scm_org: ww-platform
 control_scm_org: ww-platform
 control_repo: casc-platform-control
 control_branch: main
-platform_repo_pattern: combined
 platform_repo: casc-platform-global
 repo_mode: existing
 repo_visibility: private
@@ -139,6 +139,9 @@ env_branch_map:
   tst: release/tst
   prd: main
 ```
+
+`repo_mode` is a Genesis launch-time input only. It is not persisted in control
+`config.yml`. Tenant `repo_mode` still belongs in `tenants.yml` for Bootstrap.
 
 Use `repo_mode=existing` when customer governance pre-creates repositories.
 The repositories may be empty when `create_missing_env_branches=true`; the engine
@@ -158,7 +161,6 @@ tenants:
     aap_organization: WW Stores Automation
     team_name: Stores Automation
     tenant_scm_org: ww-tenants
-    repo_pattern: combined
     repo_name: stores-aap-casc
     repo_mode: existing
     onboarding_mode: greenfield
@@ -192,10 +194,8 @@ apply tenant desired state.
 | `control_scm_org` | platform namespace | Control namespace |
 | `control_repo` | `casc-platform-control` | Control repository name |
 | `control_branch` | `main` | Control branch |
-| `platform_repo_pattern` | `combined` | `combined` or `per-resource-type` |
-| `platform_repo` | `casc-platform-global` | Combined platform repo name |
-| `platform_repo_names` | `{}` | Per-resource folder-to-repo overrides |
-| `repo_mode` | `create` | `create` or `existing` |
+| `platform_repo` | `casc-platform-global` | Combined platform desired-state repository |
+| `repo_mode` | `create` | Launch-time only: `create` or `existing` (not written to config.yml) |
 | `repo_visibility` | `private` | `private` or `public` |
 | `create_missing_env_branches` | `true` | Create missing mapped branches; otherwise require all |
 | `bootstrap_dispatch_fanout` | `true` | Enable bounded Greenfield onboarding dispatch |
@@ -204,8 +204,9 @@ apply tenant desired state.
 | `platform_namespace_id` | GitLab create mode | Numeric platform group ID |
 | `control_namespace_id` | platform group ID | Numeric control group ID for control repo creation when split |
 
-`platform_repo_names` accepts only a mapping. Unknown folders, blank names, and
-duplicate effective repository names fail before mutation.
+Legacy fields `platform_repo_pattern`, `platform_repo_names`, `platform_repos`,
+and Genesis `repo_mode` in `config.yml` are rejected. Migrate to the scalar
+`platform_repo` contract before upgrading the engine.
 
 ### B2. Control `config.yml`
 
@@ -218,9 +219,7 @@ control_scm_org: ww-platform
 control_repo: casc-platform-control
 control_branch: main
 platform_scm_org: ww-platform
-platform_repo_pattern: combined
 platform_repo: casc-platform-global
-repo_mode: existing
 create_missing_env_branches: true
 bootstrap_dispatch_fanout: true
 dispatcher_concurrency: serialized
@@ -235,10 +234,6 @@ env_branch_map:
   prd: main
 ```
 
-For per-resource-type platform layout, `platform_repos` is a list of explicit
-`resource_type`/`name` records. Bootstrap fails closed if the required
-Organizations or Teams repository is missing; it never guesses a hardcoded name.
-
 ### B3. Tenant record
 
 | Field | Greenfield | Brownfield | Default/notes |
@@ -248,39 +243,26 @@ Organizations or Teams repository is missing; it never guesses a hardcoded name.
 | `team_name` | required | forbidden | Exact Team generated only for Greenfield |
 | `tenant_scm_org` | required | required | Tenant SCM organization/group |
 | `tenant_scm_namespace_id` | GitLab when needed | GitLab when needed | Numeric group ID for project creation |
-| `repo_pattern` | optional | optional | `combined` default or `per-resource-type` |
-| `repo_name` | combined only | combined only | Optional combined repo override |
-| `repo_names` | per-resource only | per-resource only | Optional partial folder-to-repo mapping |
-| `repo_mode` | optional | optional | `create` default or `existing` |
+| `repo_name` | optional | optional | Optional combined tenant repository override |
+| `repo_mode` | optional | optional | `create` default or `existing` (persisted for Bootstrap) |
 | `repo_visibility` | optional | optional | `private` default |
 | `onboarding_mode` | required intent | required intent | `greenfield` or `brownfield` |
 | `status` | optional | optional | `active` default or `inactive` |
 | `dispatch_enabled` | optional | optional | `true` default |
 
-Do not store derived `repositories`, `repo_by_folder`, or `tenant_repos` fields.
-The shared resolver derives them consistently in Bootstrap, Dispatcher, Drift,
-and CI.
+Do not store derived `repository`, `repositories`, `repo_by_folder`, or
+`tenant_repos` fields as customer inputs. The shared resolver derives the
+scalar `repository` (`casc-tenant-<tenant_id>` or custom `repo_name`) for
+Bootstrap, Dispatcher, Drift, and CI. Legacy `repo_pattern` / `repo_names`
+fields are rejected with a migration message.
 
-### B4. Repository-name overrides
-
-Combined tenant:
+### B4. Combined repository override
 
 ```yaml
-repo_pattern: combined
 repo_name: stores-aap-casc
 ```
 
-Per-resource tenant:
-
-```yaml
-repo_pattern: per-resource-type
-repo_names:
-  projects: stores-projects-casc
-  inventories: stores-inventories-casc
-```
-
-Partial maps retain deterministic defaults for omitted folders. Ordered lists
-are rejected to prevent positional misrouting.
+Omit `repo_name` to use the default `casc-tenant-<tenant_id>`.
 
 ### B5. Branch and pipeline model
 

@@ -5,8 +5,6 @@ control_scm_org: {{ control_scm_org | to_json }}
 control_repo: {{ control_repo | to_json }}
 control_branch: {{ control_branch | to_json }}
 platform_scm_org: {{ platform_scm_org | to_json }}
-platform_repo_pattern: {{ (repo_pattern | default('combined')) | to_json }}
-repo_mode: {{ (repo_mode | default('create')) | to_json }}
 platform_repo: {{ (platform_repo | default('casc-platform-global')) | to_json }}
 create_missing_env_branches: {{ create_missing_env_branches | default(true) | bool | lower }}
 bootstrap_dispatch_fanout: {{ bootstrap_dispatch_fanout | default(true) | bool | lower }}
@@ -20,10 +18,3 @@ job_templates:
 
 env_branch_map:
 {{ _effective_env_branch_map | to_nice_yaml(indent=2) | indent(2, true) }}
-{% if repo_pattern | default('combined') == 'per-resource-type' %}
-platform_repos:
-{% for repository in platform_repos %}
-  - resource_type: {{ repository.folder | to_json }}
-    name: {{ repository.name | to_json }}
-{% endfor %}
-{% endif %}
