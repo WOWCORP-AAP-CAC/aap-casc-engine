@@ -276,6 +276,47 @@
     msg: "tenants.yml already exists in {{ control_repo }}. Skipping to preserve tenant entries."
   when: _gh_tenants_check.status == 200
 
+- name: "GH – Check naming-rules.yml.sample on control_branch"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/naming-rules.yml.sample?ref={{ control_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404]
+  register: _gh_naming_sample_check
+
+- name: "GH – Create missing naming-rules.yml.sample from canonical examples bytes"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ control_scm_org }}/{{ control_repo }}/contents/naming-rules.yml.sample"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      message: "Genesis: seed inert naming-rules.yml.sample [skip ci]"
+      content: "{{ _naming_rules_sample_content | b64encode }}"
+      branch: "{{ control_branch }}"
+    status_code: [200, 201]
+  when: _gh_naming_sample_check.status == 404
+
+- name: "GH – Keep customer-modified naming-rules.yml.sample unchanged"
+  ansible.builtin.debug:
+    msg: >-
+      Preserving customer-modified naming-rules.yml.sample on
+      {{ control_repo }}@{{ control_branch }} (differs from examples/naming-rules.yml.sample).
+  when:
+    - _gh_naming_sample_check.status == 200
+    - ((_gh_naming_sample_check.json.content | default('') | regex_replace('\\n', '') | b64decode) != _naming_rules_sample_content)
+
+- name: "GH – naming-rules.yml.sample already matches canonical bytes"
+  ansible.builtin.debug:
+    msg: "naming-rules.yml.sample on {{ control_repo }}@{{ control_branch }} already matches canonical examples bytes."
+  when:
+    - _gh_naming_sample_check.status == 200
+    - ((_gh_naming_sample_check.json.content | default('') | regex_replace('\\n', '') | b64decode) == _naming_rules_sample_content)
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 3: Seed CI/CD thin caller workflow in each repo
 # ═══════════════════════════════════════════════════════════════════════════

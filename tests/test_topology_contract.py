@@ -501,10 +501,20 @@ class NamingPolicyTests(unittest.TestCase):
             rules.write_text("---\n", encoding="utf-8")
             self.assertEqual(self.load(rules), {})
 
-    def test_shipped_type_prefixed_policy_has_real_schema(self):
-        rules = self.load(ROOT / "examples/naming-rules-type-prefixed.yml.sample")
-        self.assertIn("aap_organizations", rules)
-        self.assertIn("identity_field", rules["aap_organizations"])
+    def test_canonical_naming_sample_is_inert_commented_source(self):
+        sample_path = ROOT / "examples/naming-rules.yml.sample"
+        sample = sample_path.read_text(encoding="utf-8")
+        self.assertIn("rename", sample.lower())
+        self.assertIn("adapt", sample.lower())
+        self.assertIn("uncomment", sample.lower())
+        self.assertIn("REPLACE_ME", sample)
+        self.assertNotIn("WW ", sample)
+        self.assertFalse((ROOT / "examples/naming-rules-type-prefixed.yml.sample").exists())
+        # Commented-only sample body loads as an inactive empty policy.
+        with tempfile.TemporaryDirectory() as tmp:
+            rules = Path(tmp) / "naming-rules.yml"
+            rules.write_text(sample, encoding="utf-8")
+            self.assertEqual(self.load(rules), {})
 
     def test_customer_policy_uses_registered_identity_field(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -615,14 +625,35 @@ class NamingPolicyTests(unittest.TestCase):
             rules = self.load(policy)
             self.assertEqual(validate_naming.validate_tree(str(root), rules), [])
 
-    def test_genesis_does_not_seed_active_policy(self):
+    def test_genesis_seeds_inert_sample_not_active_policy(self):
+        genesis = (ROOT / "genesis.yml").read_text(encoding="utf-8")
+        self.assertIn("examples/naming-rules.yml.sample", genesis)
+        self.assertIn("_naming_rules_sample_content", genesis)
+        self.assertIn("rstrip=false", genesis)
+        self.assertNotIn("_control_sample_branches", genesis)
+        # lookup must preserve trailing newline of the canonical sample bytes.
+        self.assertRegex(
+            genesis,
+            r"lookup\('file',\s*playbook_dir\s*~\s*'/examples/naming-rules\.yml\.sample',\s*rstrip=false\)",
+        )
         for task in (
             ROOT / "tasks/genesis_scm_github.yml",
             ROOT / "tasks/genesis_scm_gitlab.yml",
         ):
-            self.assertNotIn("Render naming-rules", task.read_text())
+            content = task.read_text(encoding="utf-8")
+            self.assertIn("naming-rules.yml.sample", content)
+            self.assertIn("Keep customer-modified naming-rules.yml.sample unchanged", content)
+            self.assertIn("control_branch", content)
+            self.assertNotIn("_control_sample_branches", content)
+            self.assertNotIn("Render naming-rules", content)
+            # Never write active naming-rules.yml from Genesis.
+            self.assertNotRegex(content, r"contents/naming-rules\.yml[^.]")
+            self.assertNotRegex(content, r"files/naming-rules\.yml[^.]")
+        sample_bytes = (ROOT / "examples/naming-rules.yml.sample").read_bytes()
+        self.assertTrue(sample_bytes.endswith(b"\n"))
         self.assertFalse((ROOT / "schemas/naming-rules.yml").exists())
         self.assertFalse((ROOT / "templates/naming-rules.yml.j2").exists())
+        self.assertFalse((ROOT / "templates/naming-rules.yml.sample.j2").exists())
 
     def test_bootstrap_naming_preflight_uses_base_layout_and_pinned_control(self):
         bootstrap = (ROOT / "bootstrap.yml").read_text(encoding="utf-8")

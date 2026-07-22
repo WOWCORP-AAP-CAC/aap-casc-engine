@@ -1,14 +1,15 @@
 ---
-# Optional customer naming policy example.
+# Optional customer naming policy example (inert sample).
 #
-# Copy this file to the root of casc-platform-control as naming-rules.yml only
-# when naming validation is required. Omit resource types that should not have
-# a format rule. Patterns validate resource identities in YAML, not filenames.
+# Rename this file to naming-rules.yml, adapt the patterns for your
+# organization, and uncomment rules to activate naming validation.
+# Omit resource types that should remain unrestricted. Patterns validate
+# resource identities in YAML, not filenames.
 #
 # aap_organizations:
-#   pattern: "^WW .+ Automation$"
-#   example: "WW Stores Automation"
+#   pattern: "^REPLACE_ME .+ Automation$"
+#   example: "REPLACE_ME Platform Automation"
 #
 # aap_teams:
 #   pattern: "^.+ Automation$"
-#   example: "Stores Automation"
+#   example: "Platform Automation"

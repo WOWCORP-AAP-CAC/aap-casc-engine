@@ -101,6 +101,8 @@
       ansible.builtin.set_fact:
         _effective_env_branch_map: "{{ env_branch_map }}"
         _desired_state_seed_branch: "{{ env_branch_map.values() | list | last }}"
+        # Canonical sample bytes — preserve trailing newline (rstrip=false).
+        _naming_rules_sample_content: "{{ lookup('file', playbook_dir ~ '/examples/naming-rules.yml.sample', rstrip=false) }}"
 
     - name: "Determine platform desired-state repos"
       ansible.builtin.set_fact:
@@ -259,7 +261,7 @@
           Platform Repo:   {{ platform_repo }}
           Repos Created:   {{ genesis_repos | length }}
           Control Repo:    {{ control_repo }}
-          Control Files:   config.yml, tenants.yml (optional naming-rules.yml is customer-owned)
+          Control Files:   config.yml, tenants.yml, naming-rules.yml.sample (inert; never activates policy)
           CI/CD Seeded:    {{ '.github/workflows/casc.yml' if scm_provider == 'github' else '.gitlab-ci.yml' }}
           ══════════════════════════════════════════════════════
           Next steps:

@@ -322,9 +322,12 @@ control revision.
 
 Day-0 activation:
 
-1. Start with `examples/naming-rules.yml.sample` or the explicitly optional
-   type-prefixed sample.
-2. Commit it as control-root `naming-rules.yml`.
+1. Start from the Genesis-seeded control-root `naming-rules.yml.sample`
+   on `control_branch` (bytes from `examples/naming-rules.yml.sample`), or
+   copy that examples file. Genesis does not place this sample on environment
+   branches — those belong to desired-state repositories.
+2. Rename it to control-root `naming-rules.yml`, adapt patterns, and uncomment
+   rules to activate.
 3. Bootstrap with Organization and Team values that satisfy the policy.
 4. Bootstrap validates the exact rendered bytes before any SCM mutation.
 
@@ -333,11 +336,11 @@ Policy format:
 ```yaml
 ---
 aap_organizations:
-  pattern: '^WW .+ Automation$'
-  example: WW Stores Automation
+  pattern: '^REPLACE_ME .+ Automation$'
+  example: REPLACE_ME Platform Automation
 aap_teams:
   pattern: '^.+ Automation$'
-  example: Stores Automation
+  example: Platform Automation
 ```
 
 Rules use the `identity_field` from `schemas/resource-types.yml`. Raw resource

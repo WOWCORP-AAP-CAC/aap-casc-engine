@@ -191,12 +191,10 @@ pushes dispatch to the corresponding environment.
 ## Optional naming policy
 
 Naming validation is inactive when control-root `naming-rules.yml` is missing or
-empty. To activate it, start from:
-
-- `examples/naming-rules.yml.sample` for a customer policy.
-- `examples/naming-rules-type-prefixed.yml.sample` for the optional type-prefixed example.
-
-Commit the policy to the control branch before Bootstrap. The exact rendered
+empty. Genesis seeds inert `naming-rules.yml.sample` from
+`examples/naming-rules.yml.sample` onto the control repository `control_branch`
+only (environment branches belong to desired-state repos). Rename, adapt, and
+uncomment rules as `naming-rules.yml` to activate. The exact rendered
 Greenfield Organization and Team are validated before any SCM mutation. A rule
 applies only to resource types explicitly present in the policy.
 
