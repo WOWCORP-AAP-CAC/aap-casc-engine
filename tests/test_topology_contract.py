@@ -1177,6 +1177,23 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("git cat-file -e", content, pipeline)
             self.assertIn("refusing an unsafe tenant lifecycle diff", content, pipeline)
 
+    def test_reusable_onboarding_dispatch_uses_validate_engine_repo(self):
+        """Thin callers make workflow_ref point at the caller, not the engine."""
+        reusable = (
+            ROOT / ".github/workflows/casc-validate-and-trigger.yml"
+        ).read_text()
+        onboarding = reusable.split("name: Protected Onboarding Dispatch", 1)[1]
+        onboarding = onboarding.split("name: Trigger Dispatcher", 1)[0]
+        # Protected continuation must reuse validate's derived engine_repo output.
+        self.assertIn(
+            "repository: ${{ needs.validate.outputs.engine_repo }}",
+            onboarding,
+        )
+        # The broken pattern assigned ENGINE_REPO from workflow_ref and checked
+        # out the thin caller, missing casc_runtime.py.
+        self.assertNotIn('ENGINE_REPO="${{ github.workflow_ref }}"', onboarding)
+        self.assertIn("scripts/pipeline", onboarding)
+
     def test_dispatcher_and_drift_have_no_naming_policy_dependency(self):
         for path in (ROOT / "site.yml", ROOT / "drift-detect.yml"):
             content = path.read_text()

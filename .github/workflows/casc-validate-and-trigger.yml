@@ -784,16 +784,12 @@ jobs:
           python-version: "3.11"
       - name: Install pyyaml
         run: pip install pyyaml
-      - name: Derive engine repo from reusable workflow ref
-        id: engine
-        run: |
-          ENGINE_REPO="${{ github.workflow_ref }}"
-          ENGINE_REPO="${ENGINE_REPO%%/.github/*}"
-          echo "repo=${ENGINE_REPO}" >> "$GITHUB_OUTPUT"
       - name: Checkout engine CI helpers
         uses: actions/checkout@v5
         with:
-          repository: ${{ steps.engine.outputs.repo }}
+          # Use validate's derived engine repo (caller uses: line). Do not derive
+          # from workflow_ref here — that resolves to the thin caller repo.
+          repository: ${{ needs.validate.outputs.engine_repo }}
           path: .engine
           persist-credentials: false
           sparse-checkout: |
