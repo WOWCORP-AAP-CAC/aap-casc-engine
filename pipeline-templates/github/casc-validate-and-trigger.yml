@@ -73,12 +73,18 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           NULL_SHA="0000000000000000000000000000000000000000"
+          EVENT="${{ github.event_name }}"
 
-          if [ "${{ github.event_name }}" != "push" ]; then
+          if [ "$EVENT" = "pull_request" ]; then
+            BEFORE="$PR_BASE"
+            AFTER="$PR_HEAD"
+          elif [ "$EVENT" != "push" ]; then
             echo "tenants_changed=false" >> "$GITHUB_OUTPUT"
-            echo "Non-push event — skipping tenants check"
+            echo "Non-push/non-PR event — skipping tenants check"
             exit 0
           fi
 
@@ -91,18 +97,23 @@ jobs:
           if [ -z "$BEFORE" ] || [ "$BEFORE" = "$NULL_SHA" ]; then
             git diff-tree --root --no-commit-id --name-only -r "$AFTER" > /tmp/changed_files
           else
+            if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$BEFORE" 2>/dev/null || true
+            fi
             if ! git diff --name-only "$BEFORE" "$AFTER" > /tmp/changed_files; then
-              echo "::error::Could not diff ${BEFORE}..${AFTER}; refusing to silently skip bootstrap"
+              echo "::error::Could not diff ${BEFORE}..${AFTER}; refusing to silently skip lifecycle validation"
               exit 1
             fi
           fi
 
+          echo "lifecycle_before=${BEFORE}" >> "$GITHUB_OUTPUT"
+          echo "lifecycle_after=${AFTER}" >> "$GITHUB_OUTPUT"
           if grep -Fxq "tenants.yml" /tmp/changed_files; then
             echo "tenants_changed=true" >> "$GITHUB_OUTPUT"
-            echo "tenants.yml was modified in this push"
+            echo "tenants.yml was modified (${EVENT})"
           else
             echo "tenants_changed=false" >> "$GITHUB_OUTPUT"
-            echo "tenants.yml was NOT modified in this push"
+            echo "tenants.yml was NOT modified (${EVENT})"
           fi
 
       - name: Checkout engine repo (validation assets + CI helpers)
@@ -269,6 +280,59 @@ jobs:
           else
             echo "Naming policy not active."
           fi
+
+      - name: Enforce tenant lifecycle immutability
+        if: >-
+          env.CASC_CALLER_ROLE == 'control'
+          && steps.tenants_check.outputs.tenants_changed == 'true'
+          && github.repository_owner == env.CONTROL_SCM_ORG
+          && github.event.repository.name == env.CONTROL_REPO
+          && (
+            (github.event_name == 'push' && github.ref_name == env.CONTROL_BRANCH)
+            || (github.event_name == 'pull_request' && github.base_ref == env.CONTROL_BRANCH)
+          )
+        env:
+          CONTROL_REPO_TOKEN: ${{ secrets.CONTROL_REPO_TOKEN }}
+          BEFORE_SHA: ${{ steps.tenants_check.outputs.lifecycle_before }}
+        run: |
+          # Validate-only: CONTROL_REPO_TOKEN for marker reads. No AAP deploy secrets.
+          NULL_SHA="0000000000000000000000000000000000000000"
+          if [ -z "${CONTROL_REPO_TOKEN}" ]; then
+            echo "::error::CONTROL_REPO_TOKEN is required for tenant lifecycle validation"
+            exit 1
+          fi
+          if [ -z "${BEFORE_SHA}" ] || [ "${BEFORE_SHA}" = "${NULL_SHA}" ]; then
+            printf '%s\n' 'tenants: []' > /tmp/previous-tenants.yml
+          else
+            if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "${BEFORE_SHA}" 2>/dev/null || true
+            fi
+            if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              echo "::error::Previous commit ${BEFORE_SHA} is unavailable; refusing an unsafe tenant lifecycle diff"
+              exit 1
+            fi
+            if git cat-file -e "${BEFORE_SHA}:tenants.yml" 2>/dev/null; then
+              git show "${BEFORE_SHA}:tenants.yml" > /tmp/previous-tenants.yml
+            else
+              printf '%s\n' 'tenants: []' > /tmp/previous-tenants.yml
+            fi
+          fi
+          CURRENT="tenants.yml"
+          if [ ! -f "$CURRENT" ] && [ -f ".control/tenants.yml" ]; then
+            CURRENT=".control/tenants.yml"
+          fi
+          CONFIG="config.yml"
+          if [ ! -f "$CONFIG" ] && [ -f ".control/config.yml" ]; then
+            CONFIG=".control/config.yml"
+          fi
+          python3 .scripts/pipeline/casc_runtime.py diff-tenants \
+            --provider github \
+            --config "${CONFIG}" \
+            --previous /tmp/previous-tenants.yml \
+            --current "${CURRENT}" \
+            --scm-token "${CONTROL_REPO_TOKEN}" \
+            --output /tmp/lifecycle-actions.json > /dev/null
+          echo "Tenant lifecycle validation passed (no immutable violations)."
 
       - name: Check policy compliance (OPA)
         if: always()

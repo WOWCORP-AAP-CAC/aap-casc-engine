@@ -262,12 +262,17 @@ class LifecycleTests(unittest.TestCase):
 
     def test_post_scaffold_identity_change_and_removal_fail(self):
         old = greenfield()
+        marker = casc_runtime.build_scaffold_marker(
+            casc_runtime.normalize_runtime_tenant(old),
+            repository="casc-tenant-stores",
+        )
         with self.assertRaisesRegex(ValueError, "immutable"):
             casc_runtime.diff_tenant_actions(
                 {"tenants": [old]},
                 {"tenants": [greenfield(team_name="Renamed Team")]},
                 base_config(),
                 marker_exists=lambda _tenant: True,
+                load_marker=lambda _tenant: marker,
             )
         with self.assertRaisesRegex(ValueError, "cannot be removed"):
             casc_runtime.diff_tenant_actions(
@@ -275,6 +280,32 @@ class LifecycleTests(unittest.TestCase):
                 {"tenants": []},
                 base_config(),
                 marker_exists=lambda _tenant: True,
+                load_marker=lambda _tenant: marker,
+            )
+
+    def test_post_scaffold_restore_to_marker_owned_identity_is_allowed(self):
+        good = greenfield()
+        poisoned = greenfield(team_name="Renamed Stores Team")
+        marker = casc_runtime.build_scaffold_marker(
+            casc_runtime.normalize_runtime_tenant(good),
+            repository="casc-tenant-stores",
+        )
+        actions = casc_runtime.diff_tenant_actions(
+            {"tenants": [poisoned]},
+            {"tenants": [good]},
+            base_config(),
+            marker_exists=lambda _tenant: True,
+            load_marker=lambda _tenant: marker,
+        )
+        self.assertEqual(actions, [])
+        # Changing away from the marker remains rejected.
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            casc_runtime.diff_tenant_actions(
+                {"tenants": [good]},
+                {"tenants": [poisoned]},
+                base_config(),
+                marker_exists=lambda _tenant: True,
+                load_marker=lambda _tenant: marker,
             )
 
     def test_mutable_status_and_dispatch_do_not_bootstrap(self):
@@ -1144,6 +1175,53 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertNotIn("platform_repo_pattern", content, pipeline)
             self.assertNotIn("repo_name_overrides", content, pipeline)
             self.assertNotIn(".engine/schemas/naming-rules.yml", content, pipeline)
+
+    def test_pipelines_enforce_lifecycle_on_pr_mr_validate(self):
+        """Immutable tenant changes must fail PR/MR checks before merge."""
+        gh_reusable = (ROOT / ".github/workflows/casc-validate-and-trigger.yml").read_text()
+        gh_standalone = (
+            ROOT / "pipeline-templates/github/casc-validate-and-trigger.yml"
+        ).read_text()
+        gl = (ROOT / "pipeline-templates/gitlab/.gitlab-ci-template.yml").read_text()
+
+        for content, label in (
+            (gh_reusable, "reusable"),
+            (gh_standalone, "standalone"),
+        ):
+            self.assertIn("Enforce tenant lifecycle immutability", content, label)
+            self.assertIn(
+                "github.event_name == 'pull_request'",
+                content,
+                label,
+            )
+            self.assertIn(
+                "CONTROL_REPO_TOKEN is required for tenant lifecycle validation",
+                content,
+                label,
+            )
+            # Validate-only gate: no AAP deploy secrets in the lifecycle step.
+            enforce = content.split("Enforce tenant lifecycle immutability", 1)[1]
+            enforce = enforce.split("- name:", 1)[0]
+            self.assertIn("CONTROL_REPO_TOKEN", enforce, label)
+            self.assertNotIn("AAP_ENGINE_TOKEN", enforce, label)
+            self.assertNotIn("AAP_ENV_TARGETS_JSON", enforce, label)
+
+        self.assertIn("validate:tenant-lifecycle:", gl)
+        self.assertIn(
+            "CONTROL_REPO_TOKEN is required for tenant lifecycle validation",
+            gl,
+        )
+        lifecycle_job = gl.split("validate:tenant-lifecycle:", 1)[1]
+        lifecycle_job = lifecycle_job.split("validate:policy-compliance:", 1)[0]
+        self.assertIn("merge_request_event", lifecycle_job)
+        self.assertIn("CONTROL_REPO_TOKEN", lifecycle_job)
+        self.assertNotIn("AAP_ENGINE_TOKEN", lifecycle_job)
+        self.assertNotIn("AAP_ENV_TARGETS_JSON", lifecycle_job)
+        # Bootstrap remains push-only for JT launch (MR must not launch Bootstrap).
+        bootstrap = gl.split("bootstrap:tenants:", 1)[1]
+        bootstrap_script = bootstrap.split("rules:", 1)[0]
+        self.assertIn('"${CI_PIPELINE_SOURCE}" != "push"', bootstrap_script)
+        self.assertIn("Non-push pipeline", bootstrap_script)
 
     def test_pipelines_validate_folder_and_flat_layouts_consistently(self):
         for pipeline in PIPELINES:

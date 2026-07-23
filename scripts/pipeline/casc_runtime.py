@@ -840,6 +840,44 @@ def tenant_immutable_projection(tenant: dict[str, Any]) -> dict[str, Any]:
     return projection
 
 
+def _load_tenant_marker(
+    tenant: dict[str, Any],
+    *,
+    provider: str,
+    token: str,
+    refs: list[str],
+    gitlab_api: str = "",
+) -> dict[str, Any] | None:
+    """Return the first readable scaffold marker for the tenant, if any."""
+    normalized = normalize_runtime_tenant(tenant)
+    marker_path = ".aap-casc-engine/tenant-scaffold.yml"
+    repo_name = normalized["repository"]
+    for ref in refs:
+        try:
+            if provider == "github":
+                raw = github_raw(
+                    normalized["tenant_scm_org"], repo_name, marker_path, ref, token
+                )
+            elif provider == "gitlab":
+                raw = gitlab_raw(
+                    gitlab_api or os.environ["CI_API_V4_URL"],
+                    f"{normalized['tenant_scm_org']}/{repo_name}",
+                    marker_path,
+                    ref,
+                    token,
+                )
+            else:
+                raise ValueError("provider must be github or gitlab")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                continue
+            raise
+        loaded = yaml.safe_load(raw.decode("utf-8"))
+        if isinstance(loaded, dict):
+            return loaded
+    return None
+
+
 def _tenant_marker_exists(
     tenant: dict[str, Any],
     *,
@@ -848,28 +886,29 @@ def _tenant_marker_exists(
     refs: list[str],
     gitlab_api: str = "",
 ) -> bool:
-    normalized = normalize_runtime_tenant(tenant)
-    marker = ".aap-casc-engine/tenant-scaffold.yml"
-    repo_name = normalized["repository"]
-    for ref in refs:
-        if provider == "github":
-            exists = github_file_exists(
-                normalized["tenant_scm_org"], repo_name, marker, ref, token
-            )
-        elif provider == "gitlab":
-            exists = gitlab_file_exists(
-                gitlab_api or os.environ["CI_API_V4_URL"],
-                f"{normalized['tenant_scm_org']}/{repo_name}",
-                marker,
-                ref,
-                token,
-            )
-        else:
-            raise ValueError("provider must be github or gitlab")
-        if exists:
-            return True
-    return False
+    return (
+        _load_tenant_marker(
+            tenant,
+            provider=provider,
+            token=token,
+            refs=refs,
+            gitlab_api=gitlab_api,
+        )
+        is not None
+    )
 
+
+def _restores_marker_owned_identity(
+    tenant: dict[str, Any], marker: dict[str, Any]
+) -> bool:
+    """True when the proposed tenant exactly matches the scaffold marker contract."""
+    normalized = normalize_runtime_tenant(tenant)
+    expected = build_scaffold_marker(normalized, repository=normalized["repository"])
+    try:
+        validate_scaffold_marker(marker, expected)
+    except ValueError:
+        return False
+    return True
 
 
 def diff_tenant_actions(
@@ -878,8 +917,15 @@ def diff_tenant_actions(
     cfg: dict[str, Any],
     *,
     marker_exists: Any,
+    load_marker: Any = None,
 ) -> list[dict[str, Any]]:
-    """Return Bootstrap actions while enforcing marker-based lifecycle immutability."""
+    """Return Bootstrap actions while enforcing marker-based lifecycle immutability.
+
+    After a marker exists, identity/topology changes away from the marker-owned
+    contract are rejected. Restoring the exact marker-owned identity is allowed
+    (no Bootstrap action) so poisoned registry commits can be repaired without
+    force-pushing a protected control branch.
+    """
     previous = {
         item["tenant_id"]: item for item in validate_tenant_registry(previous_doc, cfg)
     }
@@ -906,6 +952,12 @@ def diff_tenant_actions(
         immutable_changed = tenant_immutable_projection(old) != tenant_immutable_projection(new)
         if immutable_changed:
             if marker_exists(old) or marker_exists(new):
+                marker = None
+                if load_marker is not None:
+                    marker = load_marker(old) or load_marker(new)
+                if marker is not None and _restores_marker_owned_identity(new, marker):
+                    # Registry repair back to the marker-owned contract.
+                    continue
                 raise ValueError(
                     f"Tenant {tenant_id} scaffold identity/topology is immutable after the first marker; "
                     "use an explicit migration procedure"
@@ -1377,8 +1429,21 @@ def cmd_diff_tenants(args: argparse.Namespace) -> int:
             gitlab_api=args.gitlab_api,
         )
 
+    def load_marker(tenant: dict[str, Any]) -> dict[str, Any] | None:
+        return _load_tenant_marker(
+            tenant,
+            provider=args.provider,
+            token=args.scm_token,
+            refs=marker_refs,
+            gitlab_api=args.gitlab_api,
+        )
+
     actions = diff_tenant_actions(
-        previous, current, cfg, marker_exists=marker_exists
+        previous,
+        current,
+        cfg,
+        marker_exists=marker_exists,
+        load_marker=load_marker,
     )
     payload = json.dumps(actions, sort_keys=True)
     if args.output:

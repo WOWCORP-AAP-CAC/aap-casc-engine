@@ -250,6 +250,109 @@ validate:naming-convention:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
+validate:tenant-lifecycle:
+  stage: validate
+  image: python:3.11-slim
+  variables:
+    GIT_DEPTH: 0
+  needs:
+    - job: "fetch:schemas"
+      artifacts: true
+    - job: "fetch:control-metadata"
+      artifacts: true
+      optional: true
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git > /dev/null
+    - pip install pyyaml
+  script:
+    - |
+      # Validate-only lifecycle gate for push and MR. Uses CONTROL_REPO_TOKEN for
+      # marker reads only — no AAP deploy credentials.
+      if [ "${CASC_CALLER_ROLE:-tenant}" != "control" ]; then
+        echo "Not a control caller; skipping tenant lifecycle validation."
+        exit 0
+      fi
+      if [ "${CI_PROJECT_PATH}" != "${CONTROL_SCM_ORG}/${CONTROL_REPO}" ]; then
+        echo "Not the control project; skipping tenant lifecycle validation."
+        exit 0
+      fi
+
+      NULL_SHA="0000000000000000000000000000000000000000"
+      if [ "${CI_PIPELINE_SOURCE}" = "merge_request_event" ]; then
+        if [ "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}" != "${CONTROL_BRANCH}" ]; then
+          echo "MR target is not ${CONTROL_BRANCH}; skipping tenant lifecycle validation."
+          exit 0
+        fi
+        BEFORE_SHA="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
+        AFTER_SHA="${CI_COMMIT_SHA}"
+      elif [ "${CI_PIPELINE_SOURCE}" = "push" ] && [ "${CI_COMMIT_BRANCH}" = "${CONTROL_BRANCH}" ]; then
+        BEFORE_SHA="${CI_COMMIT_BEFORE_SHA:-}"
+        AFTER_SHA="${CI_COMMIT_SHA}"
+      else
+        echo "Pipeline source ${CI_PIPELINE_SOURCE} does not require lifecycle gate here."
+        exit 0
+      fi
+
+      if [ -z "${AFTER_SHA}" ] || [ "${AFTER_SHA}" = "${NULL_SHA}" ]; then
+        echo "No after SHA; skipping tenant lifecycle validation."
+        exit 0
+      fi
+
+      if [ -z "${BEFORE_SHA}" ] || [ "${BEFORE_SHA}" = "${NULL_SHA}" ]; then
+        git diff-tree --root --no-commit-id --name-only -r "${AFTER_SHA}" > /tmp/changed_files
+      else
+        if ! git diff --name-only "${BEFORE_SHA}" "${AFTER_SHA}" > /tmp/changed_files; then
+          echo "ERROR: Could not diff ${BEFORE_SHA}..${AFTER_SHA}; refusing an unsafe tenant lifecycle diff"
+          exit 1
+        fi
+      fi
+
+      if ! grep -Fxq "tenants.yml" /tmp/changed_files; then
+        echo "tenants.yml was not modified; lifecycle validation not required."
+        exit 0
+      fi
+
+      if [ -z "${CONTROL_REPO_TOKEN:-}" ]; then
+        echo "ERROR: CONTROL_REPO_TOKEN is required for tenant lifecycle validation"
+        exit 1
+      fi
+
+      if [ -z "${BEFORE_SHA}" ] || [ "${BEFORE_SHA}" = "${NULL_SHA}" ]; then
+        printf '%s\n' 'tenants: []' > /tmp/previous-tenants.yml
+      else
+        if ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+          echo "ERROR: previous commit ${BEFORE_SHA} is unavailable; refusing an unsafe tenant lifecycle diff"
+          exit 1
+        fi
+        if git cat-file -e "${BEFORE_SHA}:tenants.yml" 2>/dev/null; then
+          git show "${BEFORE_SHA}:tenants.yml" > /tmp/previous-tenants.yml
+        else
+          printf '%s\n' 'tenants: []' > /tmp/previous-tenants.yml
+        fi
+      fi
+
+      CURRENT="tenants.yml"
+      if [ ! -f "$CURRENT" ] && [ -f ".control/tenants.yml" ]; then
+        CURRENT=".control/tenants.yml"
+      fi
+      CONFIG="config.yml"
+      if [ ! -f "$CONFIG" ] && [ -f ".control/config.yml" ]; then
+        CONFIG=".control/config.yml"
+      fi
+
+      python3 .scripts/pipeline/casc_runtime.py diff-tenants \
+        --provider gitlab \
+        --config "${CONFIG}" \
+        --previous /tmp/previous-tenants.yml \
+        --current "${CURRENT}" \
+        --scm-token "${CONTROL_REPO_TOKEN}" \
+        --gitlab-api "${CI_API_V4_URL}" \
+        --output /tmp/lifecycle-actions.json > /dev/null
+      echo "Tenant lifecycle validation passed (no immutable violations)."
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CASC_CALLER_ROLE == "control" && $CI_PROJECT_NAME == $CONTROL_REPO'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CONTROL_BRANCH && $CASC_CALLER_ROLE == "control" && $CI_PROJECT_NAME == $CONTROL_REPO'
+
 validate:policy-compliance:
   stage: validate
   image: python:3.11-slim
