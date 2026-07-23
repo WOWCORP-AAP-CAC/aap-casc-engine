@@ -53,9 +53,9 @@ Each file uses an `infra.aap_configuration` variable key:
 ---
 controller_projects:
   - name: Stores Deployment
-    organization: WW Stores Automation
+    organization: Example Stores Automation
     scm_type: git
-    scm_url: https://github.example/ww/stores-automation.git
+    scm_url: https://github.example/example/stores-automation.git
     scm_branch: main
 ```
 
@@ -66,9 +66,9 @@ identities inside YAML, not filenames.
 
 ### Prerequisites
 
-- Red Hat Ansible Automation Platform with an execution environment containing
-  `infra.aap_configuration >=4.0.0,<5.0.0` (tested baseline; formal support
-  matrix is ROADMAP-008).
+- Red Hat Ansible Automation Platform with an execution environment that already
+  contains `infra.aap_configuration >=4.0.0,<5.0.0` (tested baseline; formal
+  support matrix is ROADMAP-008).
 - GitHub or GitLab API access. The GitHub path is live-validated; GitLab remains
   static template parity only (live validation deferred).
 - Multi-AAP topology as documented in the Setup and Operations Guide:
@@ -90,15 +90,17 @@ export SCM_TOKEN='<scm-api-token>'
 export SCM_BASE_URL='https://github.com'
 
 ansible-playbook genesis.yml \
-  -e platform_scm_org=ww-platform \
-  -e control_scm_org=ww-platform \
+  -e platform_scm_org=example-platform \
+  -e control_scm_org=example-platform \
   -e control_repo=casc-platform-control \
   -e platform_repo=casc-platform-global \
-  -e repo_mode=existing
+  -e repo_mode=create
 ```
 
-Genesis seeds `config.yml` and `tenants.yml` in the control repository. It does
-not activate a naming policy by default.
+Genesis creates the control and platform repositories (shortest path), then seeds
+`config.yml` and `tenants.yml`. It does not activate a naming policy by default.
+Use `repo_mode=existing` only when those repositories are pre-created under
+customer governance.
 
 ### 2. Register a Greenfield tenant
 
@@ -106,11 +108,11 @@ not activate a naming policy by default.
 ---
 tenants:
   - tenant_id: stores
-    aap_organization: WW Stores Automation  # optional; defaults to tenant_id
+    aap_organization: Example Stores Automation  # optional; defaults to tenant_id
     team_name: Stores Automation
-    tenant_scm_org: ww-tenants
+    tenant_scm_org: example-tenants
     repo_name: stores-aap-casc               # optional; default casc-tenant-stores
-    repo_mode: existing
+    repo_mode: create
     onboarding_mode: greenfield
     status: active
 ```
@@ -131,9 +133,9 @@ execution-environment associations remain normal customer desired state.
 tenants:
   - tenant_id: legacy_app
     aap_organization: Existing LDAP/SAML Organization
-    tenant_scm_org: ww-tenants
+    tenant_scm_org: example-tenants
     repo_name: legacy-app-aap-casc
-    repo_mode: existing
+    repo_mode: create
     onboarding_mode: brownfield
     status: active
 ```
@@ -141,7 +143,8 @@ tenants:
 Brownfield Bootstrap is SCM-only. It requires the exact existing AAP
 Organization name, rejects `team_name`, writes no foundation YAML, and performs
 no onboarding dispatch. Existing AAP objects remain unchanged until the customer
-declares them in desired-state YAML.
+declares them in desired-state YAML. Use `repo_mode=existing` when the tenant
+repository is pre-created.
 
 ### 4. Apply one scope
 
