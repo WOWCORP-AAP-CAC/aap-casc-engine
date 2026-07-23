@@ -67,9 +67,14 @@ identities inside YAML, not filenames.
 ### Prerequisites
 
 - Red Hat Ansible Automation Platform with an execution environment containing
-  `infra.aap_configuration >=4.0.0,<5.0.0`.
-- GitHub or GitLab API access.
-- AAP Job Templates for Genesis, Bootstrap, Dispatcher, and Drift Detection.
+  `infra.aap_configuration >=4.0.0,<5.0.0` (tested baseline; formal support
+  matrix is ROADMAP-008).
+- GitHub or GitLab API access. The GitHub path is live-validated; GitLab remains
+  static template parity only (live validation deferred).
+- Multi-AAP topology as documented in the Setup and Operations Guide:
+  Genesis/Bootstrap on a management AAP; Dispatcher on every host listed in
+  `AAP_ENV_TARGETS_JSON`; Drift as an AAP JT (not CI-launched).
+- Least-privilege launcher tokens (Execute only on the intended Job Template).
 - SCM and AAP credentials described in the
   [Setup and Operations Guide](docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md).
 
@@ -223,7 +228,8 @@ applies only to resource types explicitly present in the policy.
 
 ## Documentation
 
-- [Setup and Operations Guide](docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md)
+- [Setup and Operations Guide](docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md) —
+  canonical install, multi-AAP topology, secrets lifecycle, and day-2 recovery
 - [Pipeline Trigger Logic](docs/pipeline-trigger-logic.md)
 - [Nonproduction Validation](docs/NONPRODUCTION_VALIDATION.md)
 - [Resource Deletion Capabilities](docs/resource-deletion-capabilities.md)

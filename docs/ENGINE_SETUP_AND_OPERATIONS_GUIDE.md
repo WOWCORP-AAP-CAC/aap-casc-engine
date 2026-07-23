@@ -1,129 +1,287 @@
-# AAP Multi-Tenant CasC Engine - Setup and Operations Guide
+# AAP Multi-Tenant CasC Engine — Setup and Operations Guide
 
-This is the canonical guide for installing, configuring, validating, and
-operating the engine with GitHub or GitLab. It uses progressive disclosure:
+Canonical guide for installing, configuring, validating, and operating the
+engine. Progressive disclosure:
 
-- **Part A:** shortest supported setup.
-- **Part B:** complete configuration reference.
-- **Part C:** adoption, security, and day-2 operations.
-- **Part D:** validation, limitations, and troubleshooting.
-
-OIDC federation and external secret managers are intentionally out of scope.
-The baseline uses provider-native protected secrets/variables and AAP bearer
-tokens without external dependencies.
-
-## Part A - Recommended setup
-
-### A1. Target topology
-
-| Repository class | Contents |
+| Part | Use when |
 |---|---|
-| Engine | Playbooks, helpers, schemas, templates, reusable pipelines |
-| Control | Mandatory `config.yml`, mandatory `tenants.yml`, optional `naming-rules.yml` |
-| Platform desired state | Global/shared AAP resource YAML |
-| Tenant desired state | One tenant's AAP resource YAML |
+| **A** | Shortest supported setup (topology, AAP construction, secrets, first run) |
+| **B** | Field-level configuration reference |
+| **C** | Adoption, security, day-2 recovery |
+| **D** | Validation status, limitations, troubleshooting |
 
-The engine is combined-only: one control repository, one platform desired-state
-repository (`platform_repo`), and one desired-state repository per tenant
-(`repo_name` / resolved `repository`). Custom scalar names and
-`repo_mode=create|existing` remain supported.
+OIDC federation and external secret managers are out of scope. The baseline uses
+provider-native protected secrets/variables and AAP Job Template credentials.
 
-### A2. AAP objects
+Satellite documents (linked, not duplicated):
 
-Create one AAP Project for this engine and four Job Templates:
+- [Pipeline Trigger Logic](pipeline-trigger-logic.md)
+- [Nonproduction Validation](NONPRODUCTION_VALIDATION.md)
+- [Resource Deletion Capabilities](resource-deletion-capabilities.md)
 
-| Purpose | Default name | Playbook | Credentials |
-|---|---|---|---|
-| Genesis | `jt-platform-genesis` | `genesis.yml` | SCM write credential |
-| Bootstrap | `jt-platform-bootstrap_tenant` | `bootstrap.yml` | SCM write credential |
-| Dispatcher | `jt-platform-casc_dispatcher` | `site.yml` | SCM read + target AAP connection |
-| Drift | `jt-platform-drift_detection` | `drift-detect.yml` | SCM read + target AAP connection |
+### Validation status
 
-The names are defaults, not requirements. Set `job_templates.*` in control
-`config.yml` and the matching Genesis inputs when customers use other names.
-Dispatcher must use `allow_simultaneous=false` for the serialized baseline.
+| Provider / path | Status |
+|---|---|
+| GitHub Actions + AAP (combined-only contract) | Live-validated for the current engine contract |
+| GitLab CI | **Static / template parity only** — do not treat as live-validated |
 
-Create the engine Project from the `aap-casc-engine` repository, then configure
-the Job Templates as follows. Keep privileged SCM write/apply credentials in
-AAP; pipelines receive only execute-level launcher tokens.
+### Security baseline
 
-| Job Template | Fixed extra vars | Launch-time inputs | Required AAP credentials |
-|---|---|---|---|
-| Genesis | Customer SCM URL/provider defaults | Platform/control namespaces, scalar `platform_repo`, branch map, launch-time `repo_mode` | SCM credential able to create or update the selected repositories |
-| Bootstrap | Control repo coordinates and engine repo | Tenant fields below; `control_revision` is supplied by CI | SCM credential able to scaffold control, platform, and requested tenant repos |
-| Dispatcher | Control repo coordinates | `target_env`, `dispatch_scope`, `tenant_id` or `triggered_repo`, `control_revision` | SCM read credential plus target AAP connection credential |
-| Drift | Control repo coordinates | `target_env`, `drift_mode`, optional `control_revision` | SCM read credential plus target AAP connection credential |
+Production launcher identities must have **Execute only** on the intended Job
+Template (Bootstrap-only and Dispatcher-only). Unrelated Job Template launch
+must return HTTP 403. Superuser or broad Organization Admin launchers are not
+production guidance.
 
-#### Job Template to control-plane binding
+### Prerequisites (tested baseline)
 
-Bootstrap, Dispatcher, and Drift Job Templates are intentionally bound to **one**
-trusted control plane through their fixed AAP extra vars
-(`control_scm_org`, `control_repo`, `control_branch`, and related coordinates).
+Label: **current installation prerequisite / tested baseline**, not a formal
+support matrix. The formal compatibility and upgrade contract remains
+**ROADMAP-008**.
 
-This is a trust boundary, not a missing CI feature:
+| Prerequisite | Baseline |
+|---|---|
+| Collection | `infra.aap_configuration >=4.0.0,<5.0.0` ([`collections/requirements.yml`](../collections/requirements.yml)) |
+| Execution environment | EE that can install that collection (and its certified transitive deps from Automation Hub) |
+| AAP API | Management AAP for Genesis/Bootstrap; each target AAP listed in `AAP_ENV_TARGETS_JSON` for Dispatcher |
+| SCM API | GitHub or GitLab token suitable for the chosen Genesis/Bootstrap `repo_mode` |
+| Pipelines | Protected secrets/variables per caller role (Part A secrets) |
 
-- Caller workflows (including tenant-controlled pipelines) must **not** be able to
-  override `control_repo` / control coordinates on privileged Job Template launches.
-- CI may supply tenant fields and a pinned `control_revision` for the bound control
-  repo; it must not redirect privileged execution to different control content.
-- One Bootstrap/Dispatcher/Drift JT set serves one control plane.
-- Parallel independent control planes require separately configured JT sets (or an
-  intentional operator retarget of the JT fixed vars for a controlled validation
-  window), not dynamic forwarding from an editable caller workflow.
+---
 
-Recommended Bootstrap survey schema:
+## Part A — Shortest supported setup
 
-| Field | Survey required? | Runtime rule |
-|---|---:|---|
-| `tenant_id` | Yes | Lowercase safe engine key, maximum 64 characters |
-| `onboarding_mode` | Yes | `greenfield` or `brownfield` |
-| `aap_organization` | No | Greenfield defaults to `tenant_id`; Brownfield requires it |
-| `team_name` | No | Greenfield requires it; Brownfield rejects it |
-| `tenant_scm_org` | Yes for an unregistered request | Registered Git record is authoritative |
-| `repo_mode`, `repo_visibility` | No | Shared runtime defaults apply when omitted |
-| `repo_name` | No | Optional combined tenant repository override |
-| `tenant_scm_namespace_id` | No | Required only for GitLab project creation |
+### A0. Multi-AAP deployment topology
 
-For a tenant already registered in control `tenants.yml`, CI should launch
-Bootstrap with `tenant_id` and pinned `control_revision`; conflicting survey
-values fail rather than overriding Git.
+CI resolves each `env_branch_map` key against `AAP_ENV_TARGETS_JSON` and launches
+the Dispatcher Job Template **on that environment’s AAP host**. Do not assume a
+single AAP host holds every Job Template for every environment.
 
-Bootstrap survey fields `aap_organization` and `team_name` must be optional at
-survey-schema level. Shared runtime validation enforces the conditional rules.
-Do not configure team-lead, user-password, or individual SCM collaborator
-questions; those identities and access grants are outside Bootstrap.
+| Location | Required resources |
+|---|---|
+| **Management / engine AAP** | Engine Project; Genesis JT; Bootstrap JT; SCM **write** credential (injects `SCM_TOKEN`); Bootstrap-only execute launcher identity + token (`AAP_ENGINE_TOKEN`); inventory/EE for those JTs |
+| **Each target AAP** (every host in `AAP_ENV_TARGETS_JSON`) | Engine (or Dispatcher) Project; Dispatcher JT; SCM **read** credential (`SCM_TOKEN`); target AAP connection credential (`CONTROLLER_*`); Dispatcher-only execute launcher token for that host; inventory/EE for the JT |
+| **Drift** | AAP JT only — **not** CI-launched. See placements below |
 
-### A3. Configure protected secrets
-
-#### GitHub
-
-| Secret/variable | Repositories | Minimum purpose |
-|---|---|---|
-| `CONTROL_REPO_TOKEN` | Control, platform, tenant | Read control metadata and lifecycle markers |
-| `ENGINE_REPO_TOKEN` | Control, platform, tenant | Read private engine assets when required |
-| `AAP_ENV_TARGETS_JSON` | Control, platform, tenant | Execute-only Dispatcher token per AAP environment |
-| `AAP_ENGINE_TOKEN` | Control only | Execute Bootstrap JT |
-| `AAP_ENGINE_HOST` variable | Control only | AAP API host for Bootstrap launch |
-
-`AAP_ENV_TARGETS_JSON` format:
-
-```json
-{"dev":{"host":"https://aap-dev.example","token":"..."},"prd":{"host":"https://aap-prd.example","token":"..."}}
+```mermaid
+flowchart LR
+  subgraph scm [SCM]
+    Control[control repo]
+    Platform[platform repo]
+    Tenant[tenant repos]
+  end
+  subgraph mgmt [Management AAP]
+    Genesis[Genesis JT]
+    Bootstrap[Bootstrap JT]
+  end
+  subgraph targets [Target AAPs]
+    DispDev[Dispatcher on env host]
+    DispPrd[Dispatcher on env host]
+  end
+  CI[CI pipelines] -->|AAP_ENGINE_TOKEN| Bootstrap
+  CI -->|AAP_ENV_TARGETS_JSON per env| DispDev
+  CI -->|AAP_ENV_TARGETS_JSON per env| DispPrd
+  Genesis --> Control
+  Genesis --> Platform
+  Bootstrap --> Tenant
+  DispDev --> Platform
+  DispDev --> Tenant
+  DispPrd --> Platform
+  DispPrd --> Tenant
 ```
 
-#### GitLab
+#### Drift placements (supported vs validated)
 
-Use protected/masked CI/CD variables with the same names. `SCM_TOKEN` is
-injected into Genesis/Bootstrap AAP jobs by an AAP credential. GitLab namespace
-creation also requires the appropriate numeric namespace ID.
+Drift is never launched by the validate/bootstrap/trigger/fanout pipelines.
+Operators schedule or launch `drift-detect.yml` from AAP.
 
-Use separate least-privilege tokens where practical. Do not expose deploy
-secrets to pull/merge-request validation. The supplied pipelines scope secrets
-to deployment steps and mask parsed AAP tokens.
+| Placement | Meaning | Status |
+|---|---|---|
+| **A — Management AAP** | Drift JT on management/engine AAP; attached `CONTROLLER_*` credential targets the Controller API under comparison for that run; SCM read reaches control + desired state | **Supported** by the playbook env contract |
+| **B — Target AAP** | Drift JT on the target AAP; local AAP connection + SCM read | **Supported** by the playbook env contract |
+
+Neither placement is documented here as a separately validated multi-AAP
+“recommended architecture.” Choose a placement where the attached credentials
+satisfy the Drift env contract for the environment under comparison. Validated
+nonproduction coverage for Drift is report-mode behavior and deletion-safety
+interaction (see [Nonproduction Validation](NONPRODUCTION_VALIDATION.md)), not
+a mandated host topology.
+
+### A1. Canonical AAP resource construction
+
+Names below are **defaults**. Persist customer names in control `config.yml`
+`job_templates.*` and matching Genesis `*_JT_NAME` inputs.
+
+#### Project
+
+| Setting | Guidance |
+|---|---|
+| SCM URL | Customer fork or copy of `aap-casc-engine` |
+| Branch | Branch operators sync for JT playbooks |
+| SCM credential | Built-in Source Control credential for **project sync only** (not the CasC `SCM_TOKEN` injector) |
+| Update on launch | Recommended so JT runs use the intended engine revision |
+| Galaxy / collections | EE or org Galaxy credentials must resolve `infra.aap_configuration` per prerequisites |
+
+#### Execution environment
+
+Use an EE that provides Ansible and can install
+`infra.aap_configuration >=4.0.0,<5.0.0`. Attach that EE to Genesis, Bootstrap,
+Dispatcher, and Drift Job Templates.
+
+#### Credential types and injectors
+
+Playbooks read **environment variables** via `lookup('env', ...)`. Configure AAP
+credentials so those vars are injected at job runtime. Engine seed templates do
+**not** ship the production injector schemas; operators create them on AAP.
+
+| Credential role | Typical type | Injected env (playbook contract) | Attach to |
+|---|---|---|---|
+| CasC SCM token | Custom type (example name: CasC SCM Token) with `env` injector | `SCM_TOKEN` (required). Optionally also set `SCM_BASE_URL` / `SCM_PROVIDER` via fixed JT vars if not injected | Genesis, Bootstrap (write); Dispatcher, Drift (read) |
+| Target AAP connection (Dispatcher) | Built-in **Red Hat Ansible Automation Platform**, or custom injectors matching the contract | `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, `CONTROLLER_VERIFY_SSL` | Dispatcher JT on **that** target host |
+| Target AAP connection (Drift) | Same family | Same as Dispatcher, plus optional `CONTROLLER_OAUTH_TOKEN` (preferred when set; otherwise username/password) | Drift JT |
+| Project Source Control | Built-in Source Control | Used by AAP project sync only — **not** read by CasC playbooks as `SCM_TOKEN` | Engine Project |
+
+Built-in GitHub/GitLab PAT credential types are for Project SCM auth and do not
+satisfy the CasC `SCM_TOKEN` env contract. Use a custom type with an `env`
+injector for `SCM_TOKEN`.
+
+**Dispatcher note:** `site.yml` uses username/password env vars only (not
+`CONTROLLER_OAUTH_TOKEN`). **Drift** prefers `CONTROLLER_OAUTH_TOKEN` when
+present.
+
+Default example credential names used in some deployments
+(`crd-platform-scm_token`, `crd-platform-aap_connection`) are conventions, not
+engine requirements.
+
+#### Job Templates
+
+| JT (default name) | Playbook | `allow_simultaneous` | Credentials | Fixed JT vars (trust boundary) | Launch / survey inputs |
+|---|---|---|---|---|---|
+| `jt-platform-genesis` | `genesis.yml` | n/a | SCM write (`SCM_TOKEN`) | Optional defaults: `SCM_BASE_URL`, provider, JT name overrides | Platform/control coords, `platform_repo`, `repo_mode`, `env_branch_map`, visibility, GitLab namespace IDs, fan-out flag |
+| `jt-platform-bootstrap_tenant` | `bootstrap.yml` | n/a | SCM write (`SCM_TOKEN`) | **Must bind** `CONTROL_SCM_ORG`, `CONTROL_REPO`, `CONTROL_BRANCH`, `PLATFORM_SCM_ORG`, `ENGINE_REPO`, SCM URL/provider as needed | Survey/launch: tenant fields; CI supplies `CONTROL_REVISION` + `TENANT_ID` |
+| `jt-platform-casc_dispatcher` | `site.yml` | **`false` (required)** | SCM read + AAP connection | **Must bind** control coordinates + SCM URL as needed | `TARGET_ENV`, `DISPATCH_SCOPE`, `TENANT_ID` / `TRIGGERED_REPO`, `CONTROL_REVISION`, `TRIGGER_SOURCE` (CI sets these) |
+| `jt-platform-drift_detection` | `drift-detect.yml` | operator choice | SCM read + AAP connection | Control coordinates + SCM URL as needed | `TARGET_ENV`, `DRIFT_MODE`, optional `CONTROL_REVISION` |
+
+#### Trust boundary — not promptable
+
+Do **not** make these survey/prompt fields on Bootstrap, Dispatcher, or Drift:
+
+- `control_scm_org` / `CONTROL_SCM_ORG`
+- `control_repo` / `CONTROL_REPO`
+- `control_branch` / `CONTROL_BRANCH`
+- Related control redirects that would let a caller retarget the control plane
+
+CI may supply tenant fields and a pinned `control_revision` for the **bound**
+control repo. One JT set serves one control plane. Parallel control planes need
+separate JT sets (or a deliberate operator retarget of fixed vars).
+
+#### Launcher identities (mandatory)
+
+| Identity | Permission | Used as |
+|---|---|---|
+| Bootstrap launcher | Execute **only** on Bootstrap JT | `AAP_ENGINE_TOKEN` (control pipelines) |
+| Dispatcher launcher (per target host) | Execute **only** on Dispatcher JT on that host | Token inside `AAP_ENV_TARGETS_JSON` for that env |
+
+Verification checklist:
+
+1. Bootstrap token launches Bootstrap → success.
+2. Same token launches an unrelated JT → **403**.
+3. Dispatcher token for env `dev` launches Dispatcher on the `dev` host → success.
+4. Same token launches Genesis/Bootstrap or another host’s JT → **403**.
+5. Missing Execute → launch fails; CI polling reports failure (including
+   `poll_timeout_minutes` expiry).
+
+### A2. SCM topology (combined-only)
+
+| Repository class | Contents | Config |
+|---|---|---|
+| Engine | Playbooks, helpers, schemas, templates, reusable pipelines | SCM URL on AAP Project |
+| Control | `config.yml`, `tenants.yml`, optional `naming-rules.yml` | `control_*` in Genesis / `config.yml` |
+| Platform desired state | Global/shared AAP YAML | Scalar `platform_repo` (default `casc-platform-global`) |
+| Tenant desired state | One tenant’s AAP YAML | Scalar `repo_name` or default `casc-tenant-<tenant_id>` |
+
+Do not use per-resource topology. Those legacy fields are rejected:
+`repo_pattern`, `repo_names`, `platform_repo_pattern`, `platform_repo_names`,
+`platform_repos`.
+
+### A3. Secrets — AAP credentials vs SCM pipeline secrets
+
+Keep privileged SCM write and AAP apply credentials **in AAP**. Pipelines receive
+execute-level launcher tokens only.
+
+#### A3.1 AAP-managed credentials
+
+| Secret material | Where | Rotation |
+|---|---|---|
+| SCM PAT/token for Genesis/Bootstrap write | CasC SCM Token credential on management AAP | Rotate in SCM IdP → update AAP credential → verify Genesis/Bootstrap dry launch |
+| SCM PAT/token for Dispatcher/Drift read | Same type on each target (and Drift host) | Rotate → update each host’s credential → verify Dispatcher clone |
+| Controller username/password or OAuth for apply/compare | AAP connection credential on Dispatcher/Drift | Rotate service account → update credential → launch Dispatcher/Drift |
+| Project sync Source Control password/PAT | Project SCM credential | Rotate → project sync |
+
+Never commit tokens into desired-state YAML or JT extra vars.
+
+#### A3.2 SCM pipeline secrets (GitHub Actions)
+
+| Name | Kind | Caller roles | Purpose | Minimum privilege |
+|---|---|---|---|---|
+| `CONTROL_REPO_TOKEN` | secret | control, platform, tenant | Read control `config.yml` / `tenants.yml` / lifecycle markers | Read access to control repo |
+| `ENGINE_REPO_TOKEN` | secret | control, platform, tenant | Checkout private engine helpers/schemas when required | Read access to engine repo |
+| `AAP_ENV_TARGETS_JSON` | secret | control, platform, tenant | Per-env Dispatcher launch (`host` + `token` only) | Dispatcher Execute on each listed host |
+| `AAP_ENGINE_TOKEN` | secret | **control only** | Launch Bootstrap JT | Bootstrap Execute only |
+| `AAP_ENGINE_HOST` | **variable** | **control only** | Management AAP API base URL for Bootstrap | n/a (non-secret URL) |
+
+`AAP_ENV_TARGETS_JSON` format (token-only; username/password rejected):
+
+```json
+{
+  "dev": {"host": "https://aap-dev.example", "token": "..."},
+  "prd": {"host": "https://aap-prd.example", "token": "..."}
+}
+```
+
+Keys must match `env_branch_map` environment names used at runtime.
+
+| Pipeline job | Secrets used |
+|---|---|
+| `validate` (push/PR) | `ENGINE_REPO_TOKEN`, `CONTROL_REPO_TOKEN` — **no** deploy secrets |
+| `bootstrap` | `ENGINE_REPO_TOKEN`, `CONTROL_REPO_TOKEN`, `AAP_ENGINE_TOKEN` + `aap_engine_host` |
+| `fanout` / `trigger` / `onboarding_dispatch` | `CONTROL_REPO_TOKEN`, `AAP_ENV_TARGETS_JSON` |
+
+Configure secrets as protected/masked where the provider allows. Scope deploy
+secrets away from pull-request contexts. Fork PRs and environments without
+`CONTROL_REPO_TOKEN` fail closed on validate steps that need control metadata;
+deploy jobs must not run without deploy secrets.
+
+Cross-organization reusable workflows do **not** inherit org secrets automatically;
+callers must pass secrets explicitly (seeded callers do this).
+
+Do **not** use public-repository org-secret workarounds as production guidance.
+
+#### A3.3 SCM pipeline variables (GitLab — static parity)
+
+Use protected/masked CI/CD variables with the **same names**. Privilege split is
+by where variables are defined (group/project/environment) and
+`CASC_CALLER_ROLE`, not by divergent caller YAML. Live GitLab validation is
+deferred; treat this as template parity with the GitHub-proven contract.
+
+GitLab create-mode also needs numeric namespace IDs
+(`PLATFORM_NAMESPACE_ID` / `CONTROL_NAMESPACE_ID` / tenant namespace ID).
+
+#### A3.4 Token rotation (pipeline)
+
+1. Create replacement tokens with the same least-privilege scope.
+2. Update the secret/variable in each org/group that holds it.
+3. Run validate-only on a feature branch (no deploy).
+4. Run a controlled mapped-branch or Bootstrap path in nonproduction.
+5. Revoke the old token after success.
 
 ### A4. Run Genesis
 
-Recommended starting inputs:
+**Step card**
+
+1. Confirm management AAP Project syncs the intended engine revision.
+2. Confirm Genesis JT has SCM write credential injecting `SCM_TOKEN`.
+3. Launch with customer inputs (example):
 
 ```yaml
 scm_base_url: https://github.com
@@ -140,19 +298,37 @@ env_branch_map:
   prd: main
 ```
 
-`repo_mode` is a Genesis launch-time input only. It is not persisted in control
-`config.yml`. Tenant `repo_mode` still belongs in `tenants.yml` for Bootstrap.
+4. Verify control repo contains `config.yml`, `tenants.yml`, and
+   `naming-rules.yml.sample` on `control_branch`.
+5. Verify platform repo has callers and folder scaffold on mapped branches.
 
-Use `repo_mode=existing` when customer governance pre-creates repositories.
-The repositories may be empty when `create_missing_env_branches=true`; the engine
-initializes them with its final README or immutable tenant marker before adding
-the high-to-low branch topology. Genesis preserves unrelated files and converges
-only engine-managed control, caller, folder, and example scaffold. Use
-`repo_mode=create` when the supplied SCM token is allowed to create repositories.
+Notes:
+
+- `repo_mode` is launch-time only (not written to `config.yml`).
+- `repo_mode=existing` preserves unrelated files; engine converges managed
+  scaffold. Empty pre-created repos are allowed when
+  `create_missing_env_branches=true`.
+- Genesis does not activate naming policy by default.
 
 ### A5. Bootstrap one tenant
 
-Greenfield request:
+**Recommended survey schema**
+
+| Field | Survey required? | Runtime rule |
+|---|---:|---|
+| `tenant_id` | Yes | `^[a-z][a-z0-9_]*$`, max 64 |
+| `onboarding_mode` | Yes | `greenfield` or `brownfield` |
+| `aap_organization` | No | Greenfield defaults to `tenant_id`; Brownfield requires it |
+| `team_name` | No | Greenfield requires it; Brownfield rejects it |
+| `tenant_scm_org` | Yes if unregistered | Registered Git record is authoritative |
+| `repo_mode`, `repo_visibility` | No | Defaults apply when omitted |
+| `repo_name` | No | Optional combined tenant repository override |
+| `tenant_scm_namespace_id` | No | GitLab create mode when needed |
+
+Do not configure team-lead, user-password, or individual SCM collaborator survey
+questions.
+
+**Greenfield registry example**
 
 ```yaml
 ---
@@ -167,50 +343,98 @@ tenants:
     status: active
 ```
 
-Bootstrap writes the Organization and Team foundation to every mapped platform
-branch and scaffolds every mapped tenant branch. It does not create users, RBAC
-assignments, Galaxy associations, execution-environment associations, or SCM
-memberships.
+**Step card (GitOps)**
 
-If `bootstrap_dispatch_fanout=true`, onboarding dispatches platform scope first,
-then only the new tenant in each environment. It never launches `full`. If
-false, complete the pending onboarding through protected control
-`onboarding_dispatch` for that `tenant_id`.
+1. Commit the tenant record to control `tenants.yml` and push `control_branch`.
+2. Control pipeline validates, diffs `tenants.yml`, launches Bootstrap with
+   `tenant_id` + pinned `control_revision`.
+3. Conflicting survey values vs Git fail closed (Git wins for registered tenants).
+4. Greenfield Bootstrap writes Organization + Team foundation on every mapped
+   platform branch and scaffolds every mapped tenant branch. It does **not**
+   create users, RBAC, Galaxy associations, EE associations, or SCM memberships.
+5. If `bootstrap_dispatch_fanout=true`, onboarding dispatches platform scope
+   then only the new tenant per environment (never `full`). If false, complete
+   via protected control `onboarding_dispatch`.
+6. If `dispatch_enabled=false`, scaffolding and foundation still run; tenant
+   apply waits until re-enabled.
 
-When `dispatch_enabled=false`, Bootstrap still scaffolds the tenant and applies
-the platform-owned Organization/Team foundation, but skips tenant-scope apply.
-Re-enable it and use a later mapped-branch merge or protected manual dispatch to
-apply tenant desired state.
+### A6. First dispatch
 
-## Part B - Configuration reference
+After Bootstrap (or for day-2 desired state):
+
+1. Merge validated YAML to the lowest mapped branch in the relevant platform or
+   tenant repo.
+2. Pipeline `trigger` launches Dispatcher on the mapped env host via
+   `AAP_ENV_TARGETS_JSON`.
+3. Confirm Dispatcher `allow_simultaneous=false` and job succeeds.
+4. Promote low → high through mapped branches.
+
+Manual local example:
+
+```bash
+ansible-playbook site.yml \
+  -e target_env=dev \
+  -e dispatch_scope=tenant \
+  -e tenant_id=stores
+```
+
+(Requires `CONTROLLER_*` and `SCM_*` in the environment.)
+
+---
+
+## Part B — Configuration reference
+
+Source tags used below:
+
+| Tag | Meaning |
+|---|---|
+| `cred` | Credential injection (`lookup('env', ...)`) |
+| `fixed` | Fixed JT extra var / env bound on the JT |
+| `survey` | Survey or ad-hoc launch extra var |
+| `control` | Persisted in control `config.yml` |
+| `tenant` | Persisted in control `tenants.yml` |
+| `pipeline` | Supplied by CI workflow/job |
 
 ### B1. Genesis inputs
 
-| Input | Default | Meaning |
-|---|---|---|
-| `scm_base_url` | `https://github.com` | SCM base URL |
-| `scm_provider` / `SCM_PROVIDER` | auto-detected | `github` or `gitlab` |
-| `platform_scm_org` | required | Platform desired-state namespace |
-| `control_scm_org` | platform namespace | Control namespace |
-| `control_repo` | `casc-platform-control` | Control repository name |
-| `control_branch` | `main` | Control branch |
-| `platform_repo` | `casc-platform-global` | Combined platform desired-state repository |
-| `repo_mode` | `create` | Launch-time only: `create` or `existing` (not written to config.yml) |
-| `repo_visibility` | `private` | `private` or `public` |
-| `create_missing_env_branches` | `true` | Create missing mapped branches; otherwise require all |
-| `bootstrap_dispatch_fanout` | `true` | Enable bounded Greenfield onboarding dispatch |
-| `env_branch_map` | deployment input | Ordered low-to-high environment/branch map |
-| `*_jt_name` | documented defaults | Customer Job Template names |
-| `platform_namespace_id` | GitLab create mode | Numeric platform group ID |
-| `control_namespace_id` | platform group ID | Numeric control group ID for control repo creation when split |
+| Input | Source | Default | Meaning |
+|---|---|---|---|
+| `SCM_TOKEN` | `cred` | required | SCM API + git write |
+| `SCM_BASE_URL` | `cred`/`fixed`/`survey` | `https://github.com` | SCM base URL |
+| `SCM_PROVIDER` | `cred`/`fixed`/`survey` | auto from URL | `github` \| `gitlab` |
+| `PLATFORM_SCM_ORG` | `fixed`/`survey` | required | Platform namespace |
+| `CONTROL_SCM_ORG` | `fixed`/`survey` | platform org | Control namespace |
+| `CONTROL_REPO` | `fixed`/`survey` | `casc-platform-control` | Control repo name |
+| `CONTROL_BRANCH` | `fixed`/`survey` | `main` | Control branch |
+| `ENGINE_REPO` | `fixed`/`survey` | `aap-casc-engine` | Engine repo name (caller wiring) |
+| `PLATFORM_REPO` | `fixed`/`survey` | `casc-platform-global` | Combined platform repo |
+| `REPO_MODE` | `survey` | `create` | Launch-time only; not in `config.yml` |
+| `REPO_VISIBILITY` | `survey` | `private` | `private` \| `public` |
+| `CREATE_MISSING_ENV_BRANCHES` | `fixed`/`survey` | `true` | Create missing mapped branches |
+| `BOOTSTRAP_DISPATCH_FANOUT` | `fixed`/`survey` | `true` | Persisted to `config.yml` |
+| `env_branch_map` | `survey`/`fixed` | see playbook | Ordered low→high map |
+| `GENESIS_JT_NAME` / `BOOTSTRAP_JT_NAME` / `DISPATCHER_JT_NAME` / `DRIFT_DETECTION_JT_NAME` | `fixed`/`survey` | documented defaults | Seeded into `job_templates.*` |
+| `PLATFORM_NAMESPACE_ID` / `CONTROL_NAMESPACE_ID` | `survey` | — | GitLab create mode |
+| `AAP_ENGINE_HOST` | `fixed`/`survey` | optional | Seeded into control caller wiring |
 
-Legacy fields `platform_repo_pattern`, `platform_repo_names`, `platform_repos`,
-and Genesis `repo_mode` in `config.yml` are rejected. Migrate to the scalar
-`platform_repo` contract before upgrading the engine.
+Legacy topology inputs are rejected: `platform_repo_pattern`,
+`platform_repo_names`, `repo_pattern`, `repo_names`, and matching `*_JSON`
+env vars.
 
 ### B2. Control `config.yml`
 
-Genesis seeds the authoritative runtime configuration:
+| Field | Source | Notes |
+|---|---|---|
+| `scm_provider` | `control` (seeded) | `github` \| `gitlab` |
+| `control_scm_org`, `control_repo`, `control_branch` | `control` | Bound into JT fixed vars in operations |
+| `platform_scm_org`, `platform_repo` | `control` | Combined platform scalar |
+| `create_missing_env_branches` | `control` | Boolean |
+| `bootstrap_dispatch_fanout` | `control` | Boolean |
+| `dispatcher_concurrency` | `control` | Seeded `serialized` |
+| `job_templates.*` | `control` | Customer JT names |
+| `env_branch_map` | `control` | Must align with `AAP_ENV_TARGETS_JSON` keys used in CI |
+
+Example:
 
 ```yaml
 ---
@@ -234,182 +458,233 @@ env_branch_map:
   prd: main
 ```
 
-### B3. Tenant record
+### B3. Tenant record (`tenants.yml`)
 
-| Field | Greenfield | Brownfield | Default/notes |
-|---|---|---|---|
-| `tenant_id` | required | required | Safe stable engine key, max 64 characters |
-| `aap_organization` | optional | required | Exact AAP Organization; Greenfield defaults to `tenant_id` |
-| `team_name` | required | forbidden | Exact Team generated only for Greenfield |
-| `tenant_scm_org` | required | required | Tenant SCM organization/group |
-| `tenant_scm_namespace_id` | GitLab when needed | GitLab when needed | Numeric group ID for project creation |
-| `repo_name` | optional | optional | Optional combined tenant repository override |
-| `repo_mode` | optional | optional | `create` default or `existing` (persisted for Bootstrap) |
-| `repo_visibility` | optional | optional | `private` default |
-| `onboarding_mode` | required intent | required intent | `greenfield` or `brownfield` |
-| `status` | optional | optional | `active` default or `inactive` |
-| `dispatch_enabled` | optional | optional | `true` default |
+| Field | Source | Greenfield | Brownfield | Notes |
+|---|---|---|---|---|
+| `tenant_id` | `tenant` | required | required | Stable engine key |
+| `aap_organization` | `tenant` | optional | required | Exact AAP Organization name |
+| `team_name` | `tenant` | required | forbidden | Greenfield Team only |
+| `tenant_scm_org` | `tenant` | required | required | Tenant SCM org/group |
+| `tenant_scm_namespace_id` | `tenant` | GitLab when needed | GitLab when needed | Numeric ID |
+| `repo_name` | `tenant` | optional | optional | Combined repo override |
+| `repo_mode` | `tenant` | optional | optional | Persisted for Bootstrap |
+| `repo_visibility` | `tenant` | optional | optional | Default `private` |
+| `onboarding_mode` | `tenant` | required | required | `greenfield` \| `brownfield` |
+| `status` | `tenant` | optional | optional | `active` \| `inactive` |
+| `dispatch_enabled` | `tenant` | optional | optional | Default `true` |
 
-Do not store derived `repository`, `repositories`, `repo_by_folder`, or
-`tenant_repos` fields as customer inputs. The shared resolver derives the
-scalar `repository` (`casc-tenant-<tenant_id>` or custom `repo_name`) for
-Bootstrap, Dispatcher, Drift, and CI. Legacy `repo_pattern` / `repo_names`
-fields are rejected with a migration message.
+Do not store derived `repository` / `repositories` / `repo_by_folder` as
+customer inputs. Legacy `repo_pattern` / `repo_names` are rejected.
 
-### B4. Combined repository override
+### B4. Bootstrap launch inputs
 
-```yaml
-repo_name: stores-aap-casc
-```
-
-Omit `repo_name` to use the default `casc-tenant-<tenant_id>`.
+| Input | Source | Notes |
+|---|---|---|
+| `SCM_TOKEN`, `SCM_*` | `cred`/`fixed` | Same pattern as Genesis |
+| Control coordinates | `fixed` | Trust boundary |
+| `CONTROL_REVISION` | `pipeline` / launch | Pin; mismatch fails closed |
+| `TENANT_ID`, `ONBOARDING_MODE`, … | `survey` / `pipeline` | CI uses `tenant_id` + revision for registered tenants |
+| GitLab namespace helpers | `survey`/`fixed` | Create mode |
 
 ### B5. Branch and pipeline model
 
-`env_branch_map` is ordered low to high. Missing branches are created from the
-highest branch toward lower branches; changes are promoted from low to high.
-The caller exists on every mapped branch, including pre-existing branches.
-
 | User action | Result |
 |---|---|
-| Push to mapped desired-state branch | Validate and dispatch only caller scope to mapped environment |
+| Push to mapped desired-state branch | Validate + dispatch caller scope to mapped env |
 | Push to feature branch | Validate only |
-| Pull/merge request to any branch | Validate only; no deploy credentials |
-| Control push changing `tenants.yml` | Validate, lifecycle diff, sequential Bootstrap, bounded fan-out when enabled |
-| Protected `onboarding_dispatch` | Resume one pending Greenfield tenant only |
+| Pull/merge request | Validate only; no deploy credentials |
+| Control push changing `tenants.yml` | Validate, lifecycle diff, Bootstrap, bounded fan-out when enabled |
+| Protected `onboarding_dispatch` | Resume one pending Greenfield tenant |
 | `[skip dispatch]` commit | Validation only |
 
 See [Pipeline Trigger Logic](pipeline-trigger-logic.md).
 
-### B6. Dispatcher and Drift inputs
+### B6. Dispatcher inputs (`site.yml`)
 
-| Playbook | Important inputs |
-|---|---|
-| `site.yml` | `target_env`, `dispatch_scope=platform|tenant|full`, optional `tenant_id`, full `triggered_repo` SCM path, `control_revision` |
-| `drift-detect.yml` | `target_env`, `drift_mode=report|remediate`, optional `control_revision` |
+| Input | Source | Default / rule |
+|---|---|---|
+| `CONTROLLER_HOST` / `CONTROLLER_USERNAME` / `CONTROLLER_PASSWORD` / `CONTROLLER_VERIFY_SSL` | `cred` | Required for apply |
+| `SCM_TOKEN`, `SCM_BASE_URL` | `cred`/`fixed` | Clone control + desired state |
+| Control coordinates | `fixed` | Trust boundary |
+| `TARGET_ENV` | `pipeline` / launch | Required |
+| `DISPATCH_SCOPE` | `pipeline` / launch | `full` if `TRIGGER_SOURCE` ∈ `{scheduled,drift}`; else typically `tenant`/`platform` from CI |
+| `TENANT_ID` / `TRIGGERED_REPO` | `pipeline` / launch | Scope selection |
+| `CONTROL_REVISION` | `pipeline` / launch | Pin when supplied |
+| `TRIGGER_SOURCE` | `pipeline` / launch | Default `scheduled` |
+| `TRIGGER_COMMIT` | `pipeline` | Optional metadata |
 
-Normal platform and tenant pipelines never request `full`. Scheduled protected
-operations may use it. Tenant repository mapping remains independent of the AAP
-Organization display name.
+Normal platform/tenant pipelines never request `full`.
 
-## Part C - Adoption and operations
+### B7. Drift inputs (`drift-detect.yml`)
+
+| Input | Source | Default / rule |
+|---|---|---|
+| `CONTROLLER_*` (+ optional `CONTROLLER_OAUTH_TOKEN`) | `cred` | OAuth preferred when set |
+| `SCM_*` + control coordinates | `cred`/`fixed` | Desired-state snapshot |
+| `TARGET_ENV` | launch | Required |
+| `DRIFT_MODE` | launch | `report` \| `remediate` |
+| `DRIFT_REPORT_PATH` | launch | `/tmp/drift-report.json` |
+| `CONTROL_REVISION` | launch | Optional pin |
+
+Current comparison coverage: Organizations, credential types, projects, and
+job templates. Undeclared live objects may appear as `extra_in_live`.
+
+---
+
+## Part C — Adoption, security, and day-2 recovery
 
 ### C1. Brownfield gradual adoption
 
-Brownfield enables CasC to coexist with ClickOps:
+1. Register exact existing `aap_organization` with no `team_name`.
+2. Bootstrap SCM only (no AAP foundation, no onboarding fan-out).
+3. Baseline one object into YAML on a feature branch; open PR/MR.
+4. Merge to the lowest mapped branch; promote upward.
+5. Repeat object by object.
 
-1. Register the exact existing `aap_organization` with no `team_name`.
-2. Bootstrap SCM only. No AAP foundation or onboarding fan-out occurs.
-3. Baseline one existing object into YAML on a feature branch.
-4. Validate in a pull/merge request.
-5. Merge to the lowest mapped branch, then promote upward.
-6. Repeat object by object.
-
-Only declared objects become managed through CasC. Unknown existing objects are
-not deleted by absence. Naming can remain unchanged: omit rules for those
-resource types or supply a policy that accepts existing LDAP/SAML identities.
+Absence from YAML is never deletion. Use Drift **report** mode before any
+remediation during adoption.
 
 ### C2. Optional naming policy
 
-The only active policy path is control-root `naming-rules.yml` at the pinned
-control revision.
+Active path: control-root `naming-rules.yml` at the pinned control revision.
 
 | File state | Behavior |
 |---|---|
-| Missing | Naming policy inactive |
-| Empty YAML | Naming policy inactive |
-| Contains resource rules | Enforce only those resource types |
+| Missing or empty | Naming inactive |
+| Contains resource rules | Enforce only those types |
 
-Day-0 activation:
+Day-0: start from Genesis-seeded `naming-rules.yml.sample` on `control_branch`,
+rename to `naming-rules.yml`, adapt, uncomment. Policy never renames objects and
+never validates filenames.
 
-1. Start from the Genesis-seeded control-root `naming-rules.yml.sample`
-   on `control_branch` (bytes from `examples/naming-rules.yml.sample`), or
-   copy that examples file. Genesis does not place this sample on environment
-   branches — those belong to desired-state repositories.
-2. Rename it to control-root `naming-rules.yml`, adapt patterns, and uncomment
-   rules to activate.
-3. Bootstrap with Organization and Team values that satisfy the policy.
-4. Bootstrap validates the exact rendered bytes before any SCM mutation.
+### C3. Scaffold lifecycle (combined-only)
 
-Policy format:
-
-```yaml
----
-aap_organizations:
-  pattern: '^REPLACE_ME .+ Automation$'
-  example: REPLACE_ME Platform Automation
-aap_teams:
-  pattern: '^.+ Automation$'
-  example: Platform Automation
-```
-
-Rules use the `identity_field` from `schemas/resource-types.yml`. Raw resource
-values and non-scalar identities cannot have naming rules. A policy never
-renames an object and never validates filenames.
-
-Local validation example:
-
-```bash
-python3 schemas/validate_naming.py \
-  --config-dir /path/to/desired-state \
-  --rules /path/to/casc-platform-control/naming-rules.yml \
-  --resource-types schemas/resource-types.yml \
-  --allowed-keys roles/process_casc_config/defaults/main.yml
-```
-
-### C3. Scaffold lifecycle
-
-The first matching `.aap-casc-engine/tenant-scaffold.yml` marker is the lifecycle
-boundary.
+First matching `.aap-casc-engine/tenant-scaffold.yml` is the lifecycle boundary.
 
 | Field group | Before any marker | After any marker |
 |---|---|---|
-| `tenant_id` | Request may be corrected or removed | Immutable |
-| Effective `aap_organization` | May be corrected | Immutable |
-| SCM namespace, repo mode/pattern/names, onboarding mode, visibility | May be corrected | Immutable |
-| Greenfield `team_name` | May be corrected | Immutable Bootstrap input |
+| `tenant_id` | May correct or remove | Immutable |
+| Effective `aap_organization` | May correct | Immutable |
+| SCM namespace, `repo_mode`, `repo_name` / resolved `repository`, onboarding mode, visibility | May correct | Immutable |
+| Greenfield `team_name` | May correct | Immutable Bootstrap input |
 | `status`, `dispatch_enabled` | Mutable | Mutable |
 
-Inactive records continue to reserve tenant ID, AAP Organization, and repository
-ownership. Identity/topology change or retirement requires a deliberate future
-migration; Bootstrap does not rename objects in place.
+Exact marker-owned identity may be **restored** (no force-push). Changes **away**
+from marker-owned identity are rejected. Lifecycle enforcement applies on GitHub
+PR validate (and GitLab MR validate templates) when `CONTROL_REPO_TOKEN` can
+read markers.
 
-### C4. Repository permissions
+### C4. Repository permissions and branch protection
 
-Bootstrap does not manage individual SCM collaborators. Grant access through the
-customer's normal organization, group, repository, and approval process.
+Bootstrap does not manage individual SCM collaborators.
 
-- `repo_mode=create` requires namespace-level project creation permission and a
-  normal post-create access process.
-- `repo_mode=existing` preserves permissions and unrelated customer files.
-- SCM tokens should have only the repositories and API operations required by
-  their role.
-- AAP launcher tokens should have Execute only on the intended Job Template.
+Recommendations:
+
+- Protect `control_branch` and every mapped environment branch.
+- Require PR/MR review before merge to protected branches.
+- Restrict who can push secrets or change launcher tokens.
+- `repo_mode=create` needs namespace create permission; `existing` preserves ACLs.
 
 ### C5. Users, RBAC, credentials, and execution environments
 
-Generic Bootstrap creates no users and assigns no roles. Platform teams declare
-users, IdP mappings, RBAC, Galaxy credentials, and execution-environment
-associations in normal platform desired-state YAML. Tenant self-service through
-SCM does not depend on a generated AAP user.
+Generic Bootstrap creates no users and assigns no roles. Declare users, IdP
+mappings, RBAC, Galaxy credentials, and EE associations in desired-state YAML.
+Shipped user examples contain no password; apply paths disable the collection
+`change_me` fallback.
 
-Shipped user examples contain no password. Dispatcher and remediation set
-`users_default_password: ""` to disable the collection's `change_me` fallback.
-A customer-supplied item password can still override that empty default, but
-secret material should not be committed to Git.
+### C6. Deletion and drift limits
 
-### C6. Deletion and drift
+Absence from YAML is never deletion. Unsupported `state: absent` fails CI
+validate-deletions and Dispatcher before apply. See
+[Resource Deletion Capabilities](resource-deletion-capabilities.md).
 
-Absence from YAML is never deletion. The current deletion matrix is fail-closed;
-see [Resource Deletion Capabilities](resource-deletion-capabilities.md).
+### C7. Day-2 recovery runbooks
 
-Current drift comparison covers Organizations, credential types, projects, and
-job templates. It reports undeclared live objects as `extra_in_live`. During
-Brownfield adoption, use report mode and review the report before enabling
-remediation. Expanding coverage and aligning unmanaged-object reporting is a
-separate roadmap item.
+#### Safe Genesis / Bootstrap reruns
 
-## Part D - Validate and troubleshoot
+Idempotent for unchanged topology. Rerun Genesis to reconverge managed scaffold.
+Rerun Bootstrap for a registered tenant with matching marker-owned identity.
+
+#### Partial scaffolding recovery
+
+Inspect markers and foundation paths. Re-run Bootstrap with the same registry
+identity. Do not edit marker identity fields by hand to “force” a rename.
+
+#### Marker conflict
+
+Symptom: validate/Bootstrap rejects identity/topology change after scaffolding.
+Action: restore the exact marker-owned registry values (Git revert of the bad
+registry change) and re-push. Do not force-push markers or rewrite history to
+hide the conflict.
+
+#### Exact marker-owned restoration
+
+Allowed: return `tenants.yml` (and related fields) to the exact values owned by
+the marker. Rejected: any change away from those values after the marker exists.
+
+#### `status: inactive` and `dispatch_enabled`
+
+- `inactive`: retains reservation of tenant ID, org, and repo ownership; skips
+  normal dispatch participation per engine rules.
+- `dispatch_enabled=false`: Greenfield still scaffolds + foundation; tenant
+  desired-state apply waits until re-enabled, then use mapped-branch merge or
+  protected manual dispatch.
+
+#### `bootstrap_dispatch_fanout=false`
+
+Complete pending Greenfield onboarding with protected control
+`onboarding_dispatch` for that `tenant_id` (requires control secrets).
+
+#### Control revision mismatch
+
+CI pins `control_revision`. If Bootstrap/Dispatcher sees a different control
+HEAD than expected, fail closed. Re-run from a fresh control push or supply the
+correct pin; do not bypass the pin in caller workflows.
+
+#### Missing branches
+
+Enable `create_missing_env_branches` or pre-create every mapped branch. Callers
+must exist on every mapped branch.
+
+#### Token rotation
+
+Follow A3.1 / A3.4. After rotation, confirm validate + one nonprod dispatch.
+
+#### Customer JT renaming
+
+1. Rename JTs in AAP.
+2. Update `job_templates.*` in `config.yml`.
+3. Rerun Genesis (or update seeded names) with matching `*_JT_NAME` inputs.
+4. Confirm CI launches resolve the new names on each host.
+
+#### Failed or timed-out Dispatcher jobs
+
+Check: JT exists on **that env’s host**, `allow_simultaneous=false`, launcher
+RBAC, token in `AAP_ENV_TARGETS_JSON`, SCM read, Controller credential, and CI
+poll timeout. Fix root cause; re-push or re-launch with the same
+`control_revision` as needed.
+
+#### Safe rollback (no force-push)
+
+1. Revert the undesired Git commit(s) on the mapped branch via PR/MR.
+2. Merge the revert so CI validates and redispatches.
+3. Never force-push control history or scaffold markers to “undo” lifecycle.
+4. For AAP object rollback, prefer desired-state revert + Dispatcher over ClickOps
+   when the object is already CasC-managed.
+
+### C8. Launcher RBAC procedure
+
+1. Create dedicated users/tokens for Bootstrap and per-env Dispatcher.
+2. Grant Execute only on the intended JT.
+3. Prove unrelated JT → 403.
+4. Store tokens only in AAP credentials (apply path) or protected CI secrets
+   (launch path) as designed in A3.
+5. Document owners and rotation cadence.
+
+---
+
+## Part D — Validation and troubleshooting
 
 ### D1. Local checks
 
@@ -420,34 +695,45 @@ ansible-playbook --syntax-check bootstrap.yml
 python3 -m py_compile scripts/pipeline/*.py schemas/validate_naming.py
 ```
 
-`site.yml` and Drift syntax checks require `infra.aap_configuration` installed
-in the local Ansible collection path.
+`site.yml` and Drift syntax checks require `infra.aap_configuration` in the
+local collection path.
 
-### D2. Required nonproduction evidence
+### D2. Nonproduction evidence status
 
-Run every scenario in [Nonproduction Validation](NONPRODUCTION_VALIDATION.md)
-against nonproduction AAP and SCM. Archive AAP job IDs, pipeline URLs, control
-revisions, generated marker/foundation bytes, and negative-test output.
-
-### D3. Common failures
-
-| Failure | Check |
+| Area | Status |
 |---|---|
-| Tenant ID rejected | Lowercase safe key, starts with a letter, max 64 characters |
-| Brownfield rejected | Explicit `aap_organization` present and `team_name` absent |
-| Foundation collision | Existing engine-owned target path must contain identical bytes |
-| Marker conflict | Registry identity/topology changed after scaffolding began |
-| Naming failure | Active rule applies to exact Organization or Team identity |
-| Missing branch | Enable branch creation or pre-create every mapped branch |
-| Dispatch timeout | AAP job state, launcher RBAC, target token, and configured timeout |
+| GitHub combined-only path, lifecycle, deletion safety, launcher least-privilege | Covered by the current nonproduction validation program |
+| GitLab live matrix | **Deferred** — static template parity only |
+| Formal support/upgrade matrix | **ROADMAP-008** (not this guide) |
 
-### D4. Deliberately deferred capabilities
+Run scenarios in [Nonproduction Validation](NONPRODUCTION_VALIDATION.md). Archive
+evidence **outside** this engine repository.
 
-- **Scoped Dispatcher concurrency:** serialized operation remains the production
-  baseline until ownership and locking boundaries are proven.
-- **Composite overlay identity:** some role/RBAC/input-source types need a future
-  explicit composite key design.
-- **Drift redesign:** unmanaged-object semantics and broader resource coverage
-  remain separate work.
+### D3. Troubleshooting by symptom
 
-These limitations must not be presented as completed by this release.
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Tenant ID rejected | Unsafe key | Use `^[a-z][a-z0-9_]*$`, max 64 |
+| Brownfield rejected | Org/team rules | Require `aap_organization`; omit `team_name` |
+| Marker conflict / immutable lifecycle | Post-scaffold identity change | Restore marker-owned values; no force-push |
+| Naming failure | Active `naming-rules.yml` | Align exact Organization/Team strings |
+| Missing branch | Branch map gap | Create branches or enable creation |
+| Missing `CONTROL_REPO_TOKEN` | Secret not injected (fork/PR/private plan) | Provide read token to validate job; do not expose deploy secrets to PRs |
+| JT not found on target host | Dispatcher missing on that AAP | Install Project+JT+creds on every `AAP_ENV_TARGETS_JSON` host |
+| Dispatch timeout | Job pending/failed or poll window | Check AAP job, RBAC, token, `poll_timeout_minutes` |
+| `allow_simultaneous` failure | Dispatcher concurrency | Set Dispatcher `allow_simultaneous=false` |
+| `state: absent` / deletion | Unsupported | Remove declaration; see deletion matrix |
+| Username/password in `AAP_ENV_TARGETS_JSON` | Rejected contract | Token-only JSON |
+| Bootstrap survey conflict | Survey ≠ Git registry | Launch with `tenant_id` + revision; fix Git |
+
+### D4. Deferred capabilities
+
+- GitLab live validation parity
+- ROADMAP-008 formal support / upgrade matrix
+- Scoped Dispatcher concurrency beyond serialized baseline
+- Composite overlay identity for selected RBAC/role/input-source types
+- Drift coverage redesign and unmanaged-object semantics
+- Establishing any new unvalidated Drift multi-AAP baseline beyond the playbook
+  env contract
+
+These must not be presented as completed by the current release.
