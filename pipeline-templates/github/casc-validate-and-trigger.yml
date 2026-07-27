@@ -8,9 +8,6 @@
 #   2. Local schemas/ and roles/ — if the repo bundles these assets locally
 #      (e.g., the engine repo itself).
 # Without either source, allowlist/naming/OPA checks will silently skip.
-#
-# Control protected continuation (workflow_dispatch):
-#   operation=onboarding_dispatch + tenant_id=<tenant_id> (+ optional control_revision)
 
 name: CasC Validate and Trigger (Standalone)
 
@@ -22,25 +19,6 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-    inputs:
-      operation:
-        description: "Optional protected control operation (onboarding_dispatch)"
-        required: false
-        default: ""
-        type: choice
-        options:
-          - ""
-          - onboarding_dispatch
-      tenant_id:
-        description: "Tenant tenant_id required for onboarding_dispatch"
-        required: false
-        default: ""
-        type: string
-      control_revision:
-        description: "Optional pinned control commit SHA; empty resolves CONTROL_BRANCH HEAD"
-        required: false
-        default: ""
-        type: string
 
 env:
   DISPATCHER_JT_NAME: "jt-platform-casc_dispatcher"
@@ -50,9 +28,6 @@ env:
   CONTROL_SCM_ORG: ""
   CONTROL_REPO: "casc-platform-control"
   CONTROL_BRANCH: "main"
-  CASC_OPERATION: ${{ github.event.inputs.operation || '' }}
-  TENANT_ID: ${{ github.event.inputs.tenant_id || '' }}
-  CONTROL_REVISION: ${{ github.event.inputs.control_revision || '' }}
 
 jobs:
   validate:
@@ -233,8 +208,6 @@ jobs:
                           errors.append(f'config.yml: {required} must be a non-empty string')
                   if 'create_missing_env_branches' in cfg and not isinstance(cfg['create_missing_env_branches'], bool):
                       errors.append('config.yml: create_missing_env_branches must be a boolean')
-                  if 'bootstrap_dispatch_fanout' in cfg and not isinstance(cfg['bootstrap_dispatch_fanout'], bool):
-                      errors.append('config.yml: bootstrap_dispatch_fanout must be a boolean')
                   if 'env_branch_map' in cfg:
                       ebm = cfg['env_branch_map']
                       if not isinstance(ebm, dict) or not ebm:
@@ -378,7 +351,6 @@ jobs:
       && needs.validate.outputs.tenants_changed == 'true'
     outputs:
       has_tenants_change: ${{ steps.diff.outputs.has_actions }}
-      tenant_ids: ${{ steps.diff.outputs.tenant_ids }}
       dispatch_tenant_ids: ${{ steps.diff.outputs.dispatch_tenant_ids }}
       fanout_tenant_ids: ${{ steps.diff.outputs.fanout_tenant_ids }}
     steps:
@@ -447,18 +419,15 @@ jobs:
 
           if [ "$(python3 -c 'import json; print(len(json.load(open("tenant_actions.json"))))')" -gt 0 ]; then
             echo "has_actions=true" >> "$GITHUB_OUTPUT"
-            tenant_ids=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json"))]))')
             # Brownfield is SCM-only: never include in onboarding fan-out.
             # Greenfield with dispatch_enabled=false still needs platform fan-out
             # so Organization/Team foundation can apply.
             dispatch_tenant_ids=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("onboarding_mode", "greenfield") == "greenfield" and a["tenant"].get("dispatch_enabled", True)]))')
             fanout_tenant_ids=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("onboarding_mode", "greenfield") == "greenfield"]))')
-            echo "tenant_ids=${tenant_ids}" >> "$GITHUB_OUTPUT"
             echo "dispatch_tenant_ids=${dispatch_tenant_ids}" >> "$GITHUB_OUTPUT"
             echo "fanout_tenant_ids=${fanout_tenant_ids}" >> "$GITHUB_OUTPUT"
           else
             echo "has_actions=false" >> "$GITHUB_OUTPUT"
-            echo "tenant_ids=[]" >> "$GITHUB_OUTPUT"
             echo "dispatch_tenant_ids=[]" >> "$GITHUB_OUTPUT"
             echo "fanout_tenant_ids=[]" >> "$GITHUB_OUTPUT"
           fi
@@ -545,7 +514,7 @@ jobs:
                   'tenant_scm_org': tenant['tenant_scm_org'],
                   'control_revision': control_revision,
               }
-              for opt in ('team_name', 'repo_mode', 'onboarding_mode', 'dispatch_enabled', 'repo_name', 'tenant_scm_namespace_id', 'repo_visibility'):
+              for opt in ('team_name', 'repo_mode', 'onboarding_mode', 'dispatch_enabled', 'repo_name', 'repo_visibility'):
                   if opt in tenant and tenant[opt] is not None and tenant[opt] != '':
                       extra[opt] = tenant[opt]
               return extra
@@ -634,31 +603,19 @@ jobs:
             fi
           fi
 
-      - name: Read config.yml and resolve fan-out
+      - name: Read config.yml and resolve environments
         id: config
         run: |
           python3 -c "
           import yaml, json
           cfg = yaml.safe_load(open('config.yml'))
-          fanout = cfg.get('bootstrap_dispatch_fanout', True)
           envs = list(cfg.get('env_branch_map', {}).keys())
           dispatcher_jt = (cfg.get('job_templates') or {}).get('dispatcher') or '${{ env.DISPATCHER_JT_NAME }}'
-          print(f'fanout_enabled={str(fanout).lower()}')
           print(f'environments={json.dumps(envs)}')
           print(f'dispatcher_jt_name={dispatcher_jt}')
           " >> $GITHUB_OUTPUT
 
-      - name: Record pending onboarding when fan-out disabled
-        if: steps.config.outputs.fanout_enabled != 'true'
-        run: |
-          echo "onboarding_dispatch_pending=true" >> "$GITHUB_OUTPUT"
-          echo "Fan-out disabled by bootstrap_dispatch_fanout=false."
-          echo "Onboarding dispatch remains pending."
-          echo "Continue with protected control workflow_dispatch operation=onboarding_dispatch and tenant_id=<tenant_id>."
-          echo "Normal trigger dispatch is suppressed for this control-repo event."
-
       - name: Resolve credentials and trigger bounded onboarding dispatch
-        if: steps.config.outputs.fanout_enabled == 'true'
         env:
           AAP_ENV_TARGETS_JSON: ${{ secrets.AAP_ENV_TARGETS_JSON }}
           ENVIRONMENTS: ${{ steps.config.outputs.environments }}
@@ -713,7 +670,7 @@ jobs:
                   errors.append(f'ERROR: {exc}')
                   continue
               if result is None:
-                  errors.append(f"ERROR: bootstrap_dispatch_fanout=true but no dispatcher credentials were found for env '{env}'.")
+                  errors.append(f"ERROR: No dispatcher credentials found for env '{env}'.")
               else:
                   resolved[env] = result
           if errors:
@@ -761,70 +718,6 @@ jobs:
                   wait_for_terminal(host, auth_args, job_id, poll_timeout)
           FANOUT_PY
 
-  onboarding_dispatch:
-    name: Protected Onboarding Dispatch
-    needs: [validate]
-    if: >-
-      always()
-      && needs.validate.result == 'success'
-      && env.CASC_CALLER_ROLE == 'control'
-      && env.CASC_OPERATION == 'onboarding_dispatch'
-      && github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - name: Install pyyaml
-        run: pip install pyyaml
-      - name: Checkout engine CI helpers
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ secrets.ENGINE_REPO || github.repository }}
-          path: .engine
-          persist-credentials: false
-          sparse-checkout: |
-            scripts/pipeline
-          token: ${{ secrets.ENGINE_REPO_TOKEN || github.token }}
-        continue-on-error: true
-      - name: Locate casc_runtime helper
-        id: helper
-        run: |
-          if [ -f .engine/scripts/pipeline/casc_runtime.py ]; then
-            echo "path=.engine/scripts/pipeline/casc_runtime.py" >> "$GITHUB_OUTPUT"
-          elif [ -f scripts/pipeline/casc_runtime.py ]; then
-            echo "path=scripts/pipeline/casc_runtime.py" >> "$GITHUB_OUTPUT"
-          else
-            echo "ERROR: casc_runtime.py missing (set ENGINE_REPO/ENGINE_REPO_TOKEN or bundle scripts/pipeline)"
-            exit 1
-          fi
-      - name: Run protected bounded onboarding continuation
-        env:
-          AAP_ENV_TARGETS_JSON: ${{ secrets.AAP_ENV_TARGETS_JSON }}
-          CONTROL_REPO_TOKEN: ${{ secrets.CONTROL_REPO_TOKEN }}
-        run: |
-          if [ -z "${TENANT_ID}" ]; then
-            echo "ERROR: tenant_id is required for onboarding_dispatch"
-            exit 1
-          fi
-          python3 "${{ steps.helper.outputs.path }}" onboarding-dispatch \
-            --provider github \
-            --operation "${CASC_OPERATION}" \
-            --caller-role "${CASC_CALLER_ROLE}" \
-            --repository "${{ github.repository }}" \
-            --ref-name "${{ github.ref_name }}" \
-            --control-scm-org "${CONTROL_SCM_ORG}" \
-            --control-repo "${CONTROL_REPO}" \
-            --control-branch "${CONTROL_BRANCH}" \
-            --control-token "${CONTROL_REPO_TOKEN}" \
-            --tenant-id "${TENANT_ID}" \
-            --control-revision "${{ needs.validate.outputs.control_revision }}" \
-            --poll-timeout "${POLL_TIMEOUT_MINUTES}"
-
   trigger:
     name: Trigger Dispatcher
     needs: [validate, bootstrap, fanout]
@@ -832,7 +725,6 @@ jobs:
       always()
       && needs.validate.result == 'success'
       && env.CASC_CALLER_ROLE != 'control'
-      && env.CASC_OPERATION != 'onboarding_dispatch'
       && (needs.bootstrap.result == 'skipped'
           || (needs.bootstrap.result == 'success' && needs.bootstrap.outputs.has_tenants_change != 'true'))
       && needs.fanout.result != 'success'

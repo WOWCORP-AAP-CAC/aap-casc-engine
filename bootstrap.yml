@@ -26,10 +26,6 @@
     control_revision: "{{ lookup('env', 'CONTROL_REVISION') | default('', true) }}"
     engine_repo: "{{ lookup('env', 'ENGINE_REPO') | default('aap-casc-engine', true) }}"
 
-    platform_repo_id: "{{ lookup('env', 'PLATFORM_REPO_ID') | default('', true) }}"
-    platform_namespace_id: "{{ lookup('env', 'PLATFORM_NAMESPACE_ID') | default('', true) }}"
-    tenant_scm_namespace_id: "{{ lookup('env', 'TENANT_SCM_NAMESPACE_ID') | default('', true) }}"
-
     # Survey/launch inputs. Extra vars override these environment defaults.
     tenant_id: "{{ lookup('env', 'TENANT_ID') | default('', true) }}"
     aap_organization: "{{ lookup('env', 'AAP_ORGANIZATION') | default('', true) }}"
@@ -144,7 +140,6 @@
              | combine({'repo_visibility': repo_visibility} if repo_visibility | length > 0 else {})
              | combine({'aap_organization': aap_organization} if aap_organization | length > 0 else {})
              | combine({'team_name': team_name} if team_name | length > 0 else {})
-             | combine({'tenant_scm_namespace_id': tenant_scm_namespace_id} if tenant_scm_namespace_id | length > 0 else {})
              | combine({'repo_name': repo_name} if repo_name | length > 0 else {}) }}
 
     - name: "Resolve tenant from the shared registry contract"
@@ -172,21 +167,11 @@
         _tenant_repository: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repository }}"
         _tenant_repositories: "{{ [(_bootstrap_resolution.stdout | from_json).tenant.repository] }}"
         tenant_scm_org: "{{ (_bootstrap_resolution.stdout | from_json).tenant.tenant_scm_org }}"
-        tenant_scm_namespace_id: "{{ (_bootstrap_resolution.stdout | from_json).tenant.tenant_scm_namespace_id | default('') }}"
         repo_mode: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repo_mode }}"
         onboarding_mode: "{{ (_bootstrap_resolution.stdout | from_json).tenant.onboarding_mode }}"
         repo_visibility: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repo_visibility }}"
         dispatch_enabled: "{{ (_bootstrap_resolution.stdout | from_json).tenant.dispatch_enabled | bool }}"
         _repo_private: "{{ (_bootstrap_resolution.stdout | from_json).tenant.repo_visibility == 'private' }}"
-
-    - name: "Validate GitLab namespace input"
-      ansible.builtin.assert:
-        that:
-          - tenant_scm_namespace_id | length > 0
-        fail_msg: "GitLab Bootstrap requires tenant_scm_namespace_id."
-      when:
-        - scm_provider == 'gitlab'
-        - repo_mode == 'create'
 
     - name: "Derive effective control configuration"
       ansible.builtin.set_fact:
@@ -315,8 +300,6 @@
                        if _effective_aap_organization != _effective_tenant_id else {})
              | combine({'team_name': _effective_team_name}
                        if onboarding_mode == 'greenfield' else {})
-             | combine({'tenant_scm_namespace_id': tenant_scm_namespace_id}
-                       if tenant_scm_namespace_id | length > 0 else {})
              | combine({'repo_name': _tenant_repository}
                        if _tenant_repository != ('casc-tenant-' + _effective_tenant_id) else {}) }}
 

@@ -7,18 +7,11 @@
 #     - project: '<platform-group>/aap-casc-engine'
 #       ref: 'main'
 #       file: '/pipeline-templates/gitlab/.gitlab-ci-template.yml'
-#
-# Control protected onboarding continuation (Run pipeline / web):
-#   CASC_OPERATION=onboarding_dispatch
-#   TENANT_ID=<tenant_id>
-#   CONTROL_REVISION=<optional sha>
-#   CASC_CALLER_ROLE=control
 
 stages:
   - validate
   - bootstrap
   - fanout
-  - onboarding
   - trigger
 
 variables:
@@ -32,9 +25,6 @@ variables:
   CONTROL_SCM_ORG: ""
   CONTROL_REPO: "casc-platform-control"
   CONTROL_BRANCH: "main"
-  CASC_OPERATION: ""
-  TENANT_ID: ""
-  CONTROL_REVISION: ""
 
 # ── Pre-stage: Fetch schemas from engine repo ────────────────────────────────
 fetch:schemas:
@@ -183,8 +173,6 @@ validate:control-files:
                       errors.append(f'config.yml: {required} must be a non-empty string')
               if 'create_missing_env_branches' in cfg and not isinstance(cfg['create_missing_env_branches'], bool):
                   errors.append('config.yml: create_missing_env_branches must be a boolean')
-              if 'bootstrap_dispatch_fanout' in cfg and not isinstance(cfg['bootstrap_dispatch_fanout'], bool):
-                  errors.append('config.yml: bootstrap_dispatch_fanout must be a boolean')
               if 'env_branch_map' in cfg:
                   ebm = cfg['env_branch_map']
                   if not isinstance(ebm, dict) or not ebm:
@@ -472,10 +460,8 @@ bootstrap:tenants:
 
       echo "BOOTSTRAP_BLOCK_DISPATCH=true" >> bootstrap.env
       echo "BOOTSTRAP_ACTIONABLE=true" >> bootstrap.env
-      TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json"))]))')
       DISPATCH_TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("onboarding_mode", "greenfield") == "greenfield" and a["tenant"].get("dispatch_enabled", True)]))')
       FANOUT_TENANT_IDS=$(python3 -c 'import json; print(json.dumps([a["tenant"]["tenant_id"] for a in json.load(open("tenant_actions.json")) if a["tenant"].get("onboarding_mode", "greenfield") == "greenfield"]))')
-      echo "BOOTSTRAP_TENANT_IDS=${TENANT_IDS}" >> bootstrap.env
       echo "BOOTSTRAP_DISPATCH_TENANT_IDS=${DISPATCH_TENANT_IDS}" >> bootstrap.env
       echo "BOOTSTRAP_FANOUT_TENANT_IDS=${FANOUT_TENANT_IDS}" >> bootstrap.env
 
@@ -562,7 +548,7 @@ bootstrap:tenants:
               'tenant_scm_org': tenant['tenant_scm_org'],
               'control_revision': control_revision,
           }
-          for opt in ('team_name', 'repo_mode', 'onboarding_mode', 'dispatch_enabled', 'repo_name', 'tenant_scm_namespace_id', 'repo_visibility'):
+          for opt in ('team_name', 'repo_mode', 'onboarding_mode', 'dispatch_enabled', 'repo_name', 'repo_visibility'):
               if opt in tenant and tenant[opt] is not None and tenant[opt] != '':
                   extra[opt] = tenant[opt]
           return extra
@@ -619,8 +605,6 @@ bootstrap:tenants:
       dotenv: bootstrap.env
   rules:
     - if: '$CI_COMMIT_MESSAGE =~ /\[skip dispatch\]/'
-      when: never
-    - if: '$CASC_OPERATION == "onboarding_dispatch"'
       when: never
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CONTROL_BRANCH && $CI_PROJECT_NAME == $CONTROL_REPO && $CASC_CALLER_ROLE == "control"'
       changes:
@@ -686,15 +670,8 @@ fanout:dispatcher:
                   raise RuntimeError(f'Dispatcher job {job_id} ended {status}')
           raise RuntimeError(f'Dispatcher job {job_id} did not complete within {timeout_minutes} minutes')
 
-      cfg = yaml.safe_load(open('.control/config.yml')) or {}
-      if not cfg.get('bootstrap_dispatch_fanout', True):
-          print('Fan-out disabled by bootstrap_dispatch_fanout=false.')
-          print('Onboarding dispatch remains pending.')
-          print('Continue with protected control web pipeline:')
-          print('  CASC_OPERATION=onboarding_dispatch TENANT_ID=<tenant_id> [CONTROL_REVISION=<sha>]')
-          print('Normal trigger dispatch is suppressed for this control-repo event.')
-          # Exit success so dotenv BOOTSTRAP_BLOCK_DISPATCH continues to suppress normal trigger.
-          sys.exit(0)
+      with open('.control/config.yml') as _cfg_fh:
+          cfg = yaml.safe_load(_cfg_fh) or {}
       fanout_tenants = json.loads(os.environ.get('BOOTSTRAP_FANOUT_TENANT_IDS', '[]'))
       if not fanout_tenants:
           print('No greenfield onboarding tenants — skipping Dispatcher fan-out (brownfield is SCM-only).')
@@ -761,70 +738,12 @@ fanout:dispatcher:
   rules:
     - if: '$CI_COMMIT_MESSAGE =~ /\[skip dispatch\]/'
       when: never
-    - if: '$CASC_OPERATION == "onboarding_dispatch"'
-      when: never
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CONTROL_BRANCH && $CI_PROJECT_NAME == $CONTROL_REPO && $CASC_CALLER_ROLE == "control"'
       changes:
         - tenants.yml
     - when: never
 
-# ── Stage 4: Protected onboarding continuation (control web/manual) ───────────
-onboarding:dispatch:
-  stage: onboarding
-  image: python:3.11-slim
-  needs:
-    - job: "fetch:schemas"
-      artifacts: true
-    - job: "fetch:control-metadata"
-      artifacts: true
-    - job: "validate:yaml-structure"
-    - job: "validate:control-files"
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq curl > /dev/null
-    - pip install pyyaml
-  script:
-    - |
-      if [ "${CASC_CALLER_ROLE}" != "control" ]; then
-        echo "ERROR: onboarding_dispatch requires CASC_CALLER_ROLE=control"
-        exit 1
-      fi
-      if [ -z "${TENANT_ID:-}" ]; then
-        echo "ERROR: TENANT_ID is required for onboarding_dispatch"
-        exit 1
-      fi
-      HELPER=""
-      if [ -f .scripts/pipeline/casc_runtime.py ]; then
-        HELPER=".scripts/pipeline/casc_runtime.py"
-      elif [ -f scripts/pipeline/casc_runtime.py ]; then
-        HELPER="scripts/pipeline/casc_runtime.py"
-      else
-        echo "ERROR: casc_runtime.py missing from engine checkout artifacts"
-        exit 1
-      fi
-      if [ -z "${CONTROL_REPO_TOKEN:-}" ]; then
-        echo "ERROR: CONTROL_REPO_TOKEN is required for onboarding_dispatch"
-        exit 1
-      fi
-      python3 "$HELPER" onboarding-dispatch \
-        --provider gitlab \
-        --operation "${CASC_OPERATION}" \
-        --caller-role "${CASC_CALLER_ROLE}" \
-        --repository "${CI_PROJECT_PATH}" \
-        --ref-name "${CI_COMMIT_BRANCH:-${CI_COMMIT_REF_NAME}}" \
-        --control-scm-org "${CONTROL_SCM_ORG}" \
-        --control-repo "${CONTROL_REPO}" \
-        --control-branch "${CONTROL_BRANCH}" \
-        --control-token "${CONTROL_REPO_TOKEN}" \
-        --tenant-id "${TENANT_ID}" \
-        --control-revision "${CONTROL_REVISION}" \
-        --poll-timeout "${POLL_TIMEOUT_MINUTES}" \
-        --gitlab-api "${CI_API_V4_URL}"
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "web" && $CASC_OPERATION == "onboarding_dispatch" && $CASC_CALLER_ROLE == "control" && $CI_PROJECT_NAME == $CONTROL_REPO && $CI_COMMIT_BRANCH == $CONTROL_BRANCH'
-      when: on_success
-    - when: never
-
-# ── Stage 5: Trigger ─────────────────────────────────────────────────────────
+# ── Stage 4: Trigger ─────────────────────────────────────────────────────────
 trigger:dispatcher:
   stage: trigger
   image: python:3.11-slim
@@ -843,10 +762,6 @@ trigger:dispatcher:
     - pip install pyyaml
   script:
     - |
-      if [ "${CASC_OPERATION:-}" = "onboarding_dispatch" ]; then
-        echo "Skipping normal trigger; operation=onboarding_dispatch uses protected onboarding job."
-        exit 0
-      fi
       if [ "${CASC_CALLER_ROLE:-tenant}" = "control" ]; then
         echo "Control repository does not run normal desired-state dispatch."
         exit 0
@@ -1019,8 +934,6 @@ trigger:dispatcher:
       TRIGGER_PY
   retry: 2
   rules:
-    - if: '$CASC_OPERATION == "onboarding_dispatch"'
-      when: never
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
     - if: '$CI_PIPELINE_SOURCE == "web" && $CASC_CALLER_ROLE != "control"'

@@ -197,6 +197,17 @@
   when: onboarding_mode == 'greenfield'
 
 # Mutation begins only after all preflight checks above pass.
+- name: "GL - Resolve tenant group namespace ID"
+  ansible.builtin.include_tasks: gitlab_resolve_group.yml
+  vars:
+    gitlab_group_full_path: "{{ tenant_scm_org }}"
+  when: repo_mode == 'create'
+
+- name: "GL - Store tenant namespace ID"
+  ansible.builtin.set_fact:
+    _gl_tenant_namespace_id: "{{ gitlab_resolved_namespace_id }}"
+  when: repo_mode == 'create'
+
 - name: "GL - Create missing tenant projects"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects"
@@ -206,7 +217,7 @@
     body_format: json
     body:
       name: "{{ item.item }}"
-      namespace_id: "{{ tenant_scm_namespace_id }}"
+      namespace_id: "{{ _gl_tenant_namespace_id }}"
       visibility: "{{ repo_visibility }}"
       initialize_with_readme: true
     status_code: [200, 201]

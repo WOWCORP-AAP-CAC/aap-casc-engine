@@ -1,6 +1,6 @@
 # aap-casc-engine
 
-**AAP Multi-Tenant CasC Engine** provides a simple flat-YAML interface for
+**AAP Multi-Tenant CasC Engine** provides a simple YAML interface for
 multi-team, multi-environment AAP Configuration-as-Code. It keeps
 `infra.aap_configuration` as the supported apply backend while centralizing the
 repository scaffolding, validation, environment overlays, dispatch, onboarding,
@@ -233,6 +233,8 @@ applies only to resource types explicitly present in the policy.
 
 - [Setup and Operations Guide](docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md) —
   canonical install, multi-AAP topology, secrets lifecycle, and day-2 recovery
+- [Tenant Retirement Runbook](docs/TENANT_RETIREMENT_RUNBOOK.md) — manual
+  fail-safe procedure for removing scaffolded tenants
 - [Pipeline Trigger Logic](docs/pipeline-trigger-logic.md)
 - [Nonproduction Validation](docs/NONPRODUCTION_VALIDATION.md)
 - [Resource Deletion Capabilities](docs/resource-deletion-capabilities.md)

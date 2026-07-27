@@ -7,8 +7,6 @@ control_branch: {{ control_branch | to_json }}
 platform_scm_org: {{ platform_scm_org | to_json }}
 platform_repo: {{ (platform_repo | default('casc-platform-global')) | to_json }}
 create_missing_env_branches: {{ create_missing_env_branches | default(true) | bool | lower }}
-bootstrap_dispatch_fanout: {{ bootstrap_dispatch_fanout | default(true) | bool | lower }}
-dispatcher_concurrency: serialized
 
 job_templates:
   genesis: {{ (genesis_jt_name | default('jt-platform-genesis', true)) | to_json }}

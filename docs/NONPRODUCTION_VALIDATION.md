@@ -143,14 +143,28 @@ Exercise survey fallback and inspect the registered records: Greenfield default
 omits redundant `aap_organization`, a distinct Greenfield Organization persists,
 and Brownfield retains its required explicit Organization with no `team_name`.
 
-## 8. Disabled fan-out continuation
+## 8. Greenfield onboarding (automatic bounded dispatch — current behavior)
 
-Set `bootstrap_dispatch_fanout=false` and bootstrap Greenfield.
+After a Greenfield tenant is registered in `tenants.yml` and merged to the
+control branch, the control pipeline automatically performs **bounded onboarding
+dispatch**: platform scope first, then only the new tenant(s) across all
+environments.
 
-Confirm SCM/foundation completion, pending notice, normal trigger suppression,
-and no automatic Dispatcher launch. Then run protected control
-`onboarding_dispatch` for the tenant. Confirm all-branch marker/foundation
-preflight and bounded platform-then-tenant completion.
+Confirm:
+
+- SCM/foundation completion with markers on all mapped branches;
+- automatic platform-then-tenant Dispatcher launches across all environments;
+- if `dispatch_enabled=false`, scaffolding and foundation complete while
+  tenant-scope dispatch is skipped;
+- Brownfield receives no automatic onboarding dispatch.
+
+### Historical (removed): disabled fan-out continuation
+
+**ROADMAP-010 removed** the optional “defer automatic onboarding” config flag
+and the protected manual continuation operation that resumed a single pending
+Greenfield tenant. The engine now performs automatic bounded onboarding for all
+Greenfield tenants after Bootstrap completes. This validation case is no longer
+applicable.
 
 ## 9. Pipeline and authorization matrix
 
@@ -160,8 +174,9 @@ For GitHub and GitLab, verify:
 - PR/MR to every mapped branch: validate only and no AAP deploy secrets;
 - mapped platform push: platform scope only;
 - mapped tenant push: matching tenant scope only;
-- control `tenants.yml` push: lifecycle/bootstrap path only;
-- `[skip dispatch]`: no Bootstrap/fan-out/trigger;
+- control `tenants.yml` push: lifecycle/bootstrap path with automatic bounded
+  onboarding for Greenfield only;
+- `[skip dispatch]`: skips Bootstrap, fan-out, and trigger;
 - forced Dispatcher timeout: nonzero pipeline failure;
 - missing `CONTROL_REPO_TOKEN`: fail closed;
 - missing Bootstrap Execute permission: fail closed;

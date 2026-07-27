@@ -6,6 +6,7 @@ Run with: python3 -m unittest tests/test_topology_contract.py
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -18,11 +19,9 @@ from jinja2 import Environment, FileSystemLoader
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "pipeline"))
-sys.path.insert(0, str(ROOT / "scripts" / "migration"))
 sys.path.insert(0, str(ROOT / "schemas"))
 
 import casc_runtime  # noqa: E402
-import migrate_control_plane  # noqa: E402
 import validate_naming  # noqa: E402
 
 
@@ -71,15 +70,6 @@ def brownfield(tenant_id="legacy", **overrides):
     record.update(overrides)
     return record
 
-
-def argparse_namespace(**kwargs):
-    class NS:
-        pass
-
-    result = NS()
-    for key, value in kwargs.items():
-        setattr(result, key, value)
-    return result
 
 
 class TenantIdentityTests(unittest.TestCase):
@@ -324,7 +314,10 @@ class LifecycleTests(unittest.TestCase):
         expected = casc_runtime.build_scaffold_marker(
             tenant, repository="casc-tenant-stores"
         )
-        self.assertEqual(expected["scaffold_version"], 3)
+        self.assertEqual(expected["scaffold_version"], 4)
+        self.assertIn("repo_mode", expected)
+        self.assertIn("repo_visibility", expected)
+        self.assertNotIn("tenant_scm_namespace_id", expected)
         self.assertEqual(expected["repository"], "casc-tenant-stores")
         self.assertNotIn("resource_type", expected)
         casc_runtime.validate_scaffold_marker(dict(expected), expected)
@@ -410,24 +403,35 @@ class FoundationAndTemplateTests(unittest.TestCase):
         )
 
     def test_two_neutral_foundation_paths(self):
-        combined = casc_runtime.iter_foundation_targets(base_config(), "stores")
-        self.assertEqual(
-            combined,
-            [
-                ("casc-platform-global", "base/organizations/stores.yml"),
-                ("casc-platform-global", "base/teams/stores.yml"),
-            ],
+        """Foundation paths come from Bootstrap provider tasks, not a dead helper."""
+        path_fragments = (
+            'path: "base/organizations/{{ _effective_tenant_id }}.yml"',
+            'path: "base/teams/{{ _effective_tenant_id }}.yml"',
         )
-        custom = casc_runtime.iter_foundation_targets(
-            base_config(platform_repo="ww-governed-platform"), "stores"
-        )
-        self.assertEqual(
-            custom,
-            [
-                ("ww-governed-platform", "base/organizations/stores.yml"),
-                ("ww-governed-platform", "base/teams/stores.yml"),
-            ],
-        )
+        for path in (
+            ROOT / "tasks/bootstrap_scm_github.yml",
+            ROOT / "tasks/bootstrap_scm_gitlab.yml",
+            ROOT / "bootstrap.yml",
+        ):
+            content = path.read_text(encoding="utf-8")
+            for fragment in path_fragments:
+                self.assertIn(fragment, content, path)
+            self.assertNotIn("iter_foundation_targets", content, path)
+        for provider in (
+            ROOT / "tasks/bootstrap_scm_github.yml",
+            ROOT / "tasks/bootstrap_scm_gitlab.yml",
+        ):
+            content = provider.read_text(encoding="utf-8")
+            self.assertIn('repo: "{{ platform_repo }}"', content, provider)
+            self.assertEqual(
+                content.count('repo: "{{ platform_repo }}"'),
+                2,
+                provider,
+            )
+        runtime = (ROOT / "scripts/pipeline/casc_runtime.py").read_text(encoding="utf-8")
+        self.assertNotIn("def iter_foundation_targets", runtime)
+        self.assertNotIn("FOUNDATION_RESOURCES", runtime)
+        self.assertNotIn("def find_tenant", runtime)
 
     def test_free_form_foundation_values_round_trip_yaml(self):
         context = {
@@ -642,6 +646,7 @@ class NamingPolicyTests(unittest.TestCase):
     def test_naming_rules_control_file_is_not_scanned_as_desired_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            (root / "base").mkdir()
             control = root / ".control"
             control.mkdir()
             (control / "config.yml").write_text(
@@ -866,9 +871,42 @@ class DeletionSafetyTests(unittest.TestCase):
                 caller_role="platform",
             )
 
+    def test_platform_tenant_ci_requires_base_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_pinned_control(root)
+            # Env folders alone must not satisfy CI — base/ is mandatory.
+            (root / "poc" / "projects").mkdir(parents=True)
+            (root / "poc" / "projects" / "valid.yml").write_text(
+                "controller_projects:\n  - name: poc-demo\n",
+                encoding="utf-8",
+            )
+            for role in ("platform", "tenant"):
+                with self.subTest(role=role):
+                    with self.assertRaisesRegex(ValueError, "require a base/ directory"):
+                        casc_runtime.validate_structure(
+                            str(root),
+                            str(ROOT / "schemas/resource-types.yml"),
+                            allowed_keys_path=str(
+                                ROOT / "roles/process_casc_config/defaults/main.yml"
+                            ),
+                            caller_role=role,
+                        )
+                    with self.assertRaisesRegex(ValueError, "require a base/ directory"):
+                        casc_runtime.desired_state_search_dirs(
+                            str(root), caller_role=role
+                        )
+            # Control remains exempt.
+            casc_runtime.validate_structure(
+                str(root),
+                str(ROOT / "schemas/resource-types.yml"),
+                caller_role="control",
+            )
+
     def test_explicit_control_config_is_authoritative_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            (root / "base").mkdir()
             # Legacy root config.yml must not be used as a fallback.
             (root / "config.yml").write_text(
                 "env_branch_map:\n  poc: dev\n  prod: main\n",
@@ -1223,7 +1261,11 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         self.assertIn('"${CI_PIPELINE_SOURCE}" != "push"', bootstrap_script)
         self.assertIn("Non-push pipeline", bootstrap_script)
 
-    def test_pipelines_validate_folder_and_flat_layouts_consistently(self):
+    def test_pipelines_and_runtime_require_folder_layout_only(self):
+        process = (ROOT / "roles/process_casc_config/tasks/main.yml").read_text()
+        self.assertIn("Require folder-based layout", process)
+        self.assertIn("Flat-root YAML is not supported", process)
+        self.assertNotIn("Process with flat-file layout", process)
         for pipeline in PIPELINES:
             content = pipeline.read_text()
             self.assertIn("validate-structure", content, pipeline)
@@ -1235,6 +1277,9 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("Control repo: skipping desired-state", content, pipeline)
             self.assertNotIn("if os.path.isdir('base') else ['.']", content, pipeline)
             self.assertNotIn("ls -d */", content, pipeline)
+            self.assertNotIn("bootstrap_dispatch_fanout", content, pipeline)
+            self.assertNotIn("onboarding_dispatch", content, pipeline)
+            self.assertNotIn("tenant_scm_namespace_id", content, pipeline)
             # All pipeline entrypoints must remain valid YAML.
             yaml.safe_load(content)
 
@@ -1255,22 +1300,216 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("git cat-file -e", content, pipeline)
             self.assertIn("refusing an unsafe tenant lifecycle diff", content, pipeline)
 
-    def test_reusable_onboarding_dispatch_uses_validate_engine_repo(self):
-        """Thin callers make workflow_ref point at the caller, not the engine."""
-        reusable = (
-            ROOT / ".github/workflows/casc-validate-and-trigger.yml"
-        ).read_text()
-        onboarding = reusable.split("name: Protected Onboarding Dispatch", 1)[1]
-        onboarding = onboarding.split("name: Trigger Dispatcher", 1)[0]
-        # Protected continuation must reuse validate's derived engine_repo output.
-        self.assertIn(
-            "repository: ${{ needs.validate.outputs.engine_repo }}",
-            onboarding,
+    def _extract_fanout_py(self, content: str) -> str:
+        import re
+        import textwrap
+
+        match = re.search(
+            r"python3\s+<<'FANOUT_PY'\n(.*?)^\s*FANOUT_PY\s*$",
+            content,
+            flags=re.M | re.S,
         )
-        # The broken pattern assigned ENGINE_REPO from workflow_ref and checked
-        # out the thin caller, missing casc_runtime.py.
-        self.assertNotIn('ENGINE_REPO="${{ github.workflow_ref }}"', onboarding)
-        self.assertIn("scripts/pipeline", onboarding)
+        self.assertIsNotNone(match, "FANOUT_PY heredoc missing")
+        return textwrap.dedent(match.group(1))
+
+    def _exec_fanout_py(
+        self,
+        source: str,
+        *,
+        env: dict[str, str],
+        job_statuses: list[str],
+        control_config: str | None = None,
+    ) -> list[dict]:
+        """Execute a production FANOUT_PY block with mocked curl launches."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        launches: list[dict] = []
+        status_iter = iter(job_statuses)
+        next_job_id = 100
+
+        def fake_run(cmd, capture_output=False, text=False, check=False, **_kwargs):
+            cmd = list(cmd)
+            joined = " ".join(cmd)
+            if "/job_templates/?name=" in joined:
+                body = json.dumps(
+                    {
+                        "results": [
+                            {"id": 9, "allow_simultaneous": False, "name": "dispatcher"}
+                        ]
+                    }
+                )
+                return SimpleNamespace(stdout=body, stderr="", returncode=0)
+            if "/launch/" in joined:
+                payload = {}
+                if "-d" in cmd:
+                    payload = json.loads(cmd[cmd.index("-d") + 1])
+                extra = json.loads(payload.get("extra_vars", "{}"))
+                launches.append(extra)
+                nonlocal next_job_id
+                next_job_id += 1
+                body = json.dumps({"id": next_job_id})
+                return SimpleNamespace(stdout=body, stderr="", returncode=0)
+            if "/jobs/" in joined:
+                try:
+                    status = next(status_iter)
+                except StopIteration:
+                    status = "successful"
+                body = json.dumps({"status": status})
+                return SimpleNamespace(stdout=body, stderr="", returncode=0)
+            if cmd[:1] == ["sleep"] or (len(cmd) >= 1 and cmd[0].endswith("sleep")):
+                return SimpleNamespace(stdout="", stderr="", returncode=0)
+            return SimpleNamespace(stdout="{}", stderr="", returncode=0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            if control_config is not None:
+                control = Path(tmp) / ".control"
+                control.mkdir()
+                (control / "config.yml").write_text(control_config, encoding="utf-8")
+            with mock.patch.object(subprocess, "run", side_effect=fake_run), mock.patch.object(
+                sys, "exit", side_effect=SystemExit
+            ), mock.patch("time.sleep", return_value=None):
+                old_cwd = os.getcwd()
+                old_env = os.environ.copy()
+                try:
+                    os.chdir(tmp)
+                    os.environ.clear()
+                    os.environ.update(env)
+                    compiled = compile(source, "<FANOUT_PY>", "exec")
+                    exec(compiled, {"__name__": "__main__"})
+                finally:
+                    os.chdir(old_cwd)
+                    os.environ.clear()
+                    os.environ.update(old_env)
+        return launches
+
+    def _fanout_env(self, kind: str, *, tenant_dispatch: bool) -> dict[str, str]:
+        """Build env for a production FANOUT_PY block (github | standalone | gitlab)."""
+        base = {
+            "AAP_ENV_TARGETS_JSON": json.dumps(
+                {"dev": {"host": "https://aap", "token": "t"}}
+            ),
+            "DISPATCHER_JT_NAME": "dispatcher",
+            "CONTROL_REVISION": "a" * 40,
+        }
+        tenants = ["stores"] if tenant_dispatch else []
+        if kind == "gitlab":
+            return {
+                **base,
+                "BOOTSTRAP_FANOUT_TENANT_IDS": json.dumps(["stores"]),
+                "BOOTSTRAP_DISPATCH_TENANT_IDS": json.dumps(tenants),
+                "POLL_TIMEOUT_MINUTES": "1",
+                "CI_COMMIT_SHA": "b" * 40,
+            }
+        return {
+            **base,
+            "ENVIRONMENTS": json.dumps(["dev"]),
+            "ONBOARDING_TENANTS": json.dumps(tenants),
+            "POLL_TIMEOUT": "1",
+            "GITHUB_SHA": "b" * 40,
+        }
+
+    def test_fanout_acceptance_matrix_contracts(self):
+        """ROADMAP-010: exercise all three production FANOUT_PY blocks."""
+        for pipeline in PIPELINES:
+            content = pipeline.read_text()
+            self.assertNotIn("onboarding_dispatch", content, pipeline)
+            self.assertNotIn("bootstrap_dispatch_fanout", content, pipeline)
+            self.assertNotIn("run_bounded_onboarding", content, pipeline)
+            self.assertIn("FANOUT_PY", content, pipeline)
+            self.assertIn(
+                "[('platform', '')] + [('tenant', oid) for oid in onboarding_tenants]",
+                content,
+                pipeline,
+            )
+            self.assertIn("Refusing full scope during bounded onboarding", content, pipeline)
+            self.assertIn('onboarding_mode", "greenfield") == "greenfield"', content, pipeline)
+
+        runtime_src = (ROOT / "scripts/pipeline/casc_runtime.py").read_text()
+        self.assertNotIn("def run_bounded_onboarding", runtime_src)
+        self.assertNotIn("def launch_dispatcher", runtime_src)
+
+        blocks = {
+            "github": self._extract_fanout_py(
+                (ROOT / ".github/workflows/casc-validate-and-trigger.yml").read_text()
+            ),
+            "standalone": self._extract_fanout_py(
+                (ROOT / "pipeline-templates/github/casc-validate-and-trigger.yml").read_text()
+            ),
+            "gitlab": self._extract_fanout_py(
+                (ROOT / "pipeline-templates/gitlab/.gitlab-ci-template.yml").read_text()
+            ),
+        }
+        # Standalone GitHub must not silently share the reusable block source.
+        self.assertNotEqual(blocks["github"], blocks["standalone"])
+
+        control_config = "env_branch_map:\n  dev: develop\n"
+        for kind, source in blocks.items():
+            with self.subTest(kind=kind, case="platform_then_tenant"):
+                launches = self._exec_fanout_py(
+                    source,
+                    env=self._fanout_env(kind, tenant_dispatch=True),
+                    job_statuses=["successful", "successful"],
+                    control_config=control_config if kind == "gitlab" else None,
+                )
+                self.assertEqual(
+                    [item["dispatch_scope"] for item in launches],
+                    ["platform", "tenant"],
+                )
+                self.assertEqual(launches[1]["tenant_id"], "stores")
+
+            with self.subTest(kind=kind, case="platform_failure_blocks_tenant"):
+                with self.assertRaises(RuntimeError):
+                    self._exec_fanout_py(
+                        source,
+                        env=self._fanout_env(kind, tenant_dispatch=True),
+                        job_statuses=["failed"],
+                        control_config=control_config if kind == "gitlab" else None,
+                    )
+
+            with self.subTest(kind=kind, case="paused_tenant_platform_only"):
+                launches = self._exec_fanout_py(
+                    source,
+                    env=self._fanout_env(kind, tenant_dispatch=False),
+                    job_statuses=["successful"],
+                    control_config=control_config if kind == "gitlab" else None,
+                )
+                self.assertEqual(
+                    [item["dispatch_scope"] for item in launches], ["platform"]
+                )
+
+        # Recovery contract: docs require fanout-only retry, not full rerun.
+        guide = (ROOT / "docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md").read_text()
+        trigger = (ROOT / "docs/pipeline-trigger-logic.md").read_text()
+        for doc in (guide, trigger):
+            compact = " ".join(doc.lower().split())
+            self.assertIn("retry only the failed", compact)
+            self.assertIn("fanout", compact)
+        self.assertIn("corrected", guide)
+        self.assertIn("activated", guide)
+
+    def test_gitlab_group_resolve_is_exact_get_fail_closed(self):
+        helper = (ROOT / "tasks/gitlab_resolve_group.yml").read_text()
+        self.assertIn("/api/v4/groups/", helper)
+        self.assertIn("urlencode()", helper)
+        self.assertIn("replace('/', '%2F')", helper)
+        self.assertIn("full_path", helper)
+        self.assertIn("401", helper)
+        self.assertIn("403", helper)
+        self.assertIn("404", helper)
+        genesis = (ROOT / "tasks/genesis_scm_gitlab.yml").read_text()
+        self.assertIn("gitlab_resolve_group.yml", genesis)
+        # Internal facts use _gl_*_namespace_id; bare customer survey vars must not appear.
+        self.assertNotRegex(genesis, r"(?<![_\w])platform_namespace_id(?![_\w])")
+        self.assertNotRegex(genesis, r"(?<![_\w])control_namespace_id(?![_\w])")
+        self.assertNotIn("PLATFORM_NAMESPACE_ID", genesis)
+        self.assertNotIn("CONTROL_NAMESPACE_ID", genesis)
+        bootstrap = (ROOT / "tasks/bootstrap_scm_gitlab.yml").read_text()
+        self.assertIn("gitlab_resolve_group.yml", bootstrap)
+        self.assertNotRegex(bootstrap, r"(?<![_\w])tenant_scm_namespace_id(?![_\w])")
+        self.assertNotIn("TENANT_SCM_NAMESPACE_ID", bootstrap)
 
     def test_dispatcher_and_drift_have_no_naming_policy_dependency(self):
         for path in (ROOT / "site.yml", ROOT / "drift-detect.yml"):
@@ -1278,15 +1517,77 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertNotIn("naming-rules", content, path)
             self.assertNotIn("validate_naming", content, path)
 
-    def test_generated_callers_use_tenant_id_and_control_token(self):
+    def test_generated_callers_use_control_token_without_continuation_inputs(self):
         callers = (
             ROOT / "templates/github-workflow-caller.yml.j2",
             ROOT / "templates/gitlab-ci-caller.yml.j2",
         )
         for caller in callers:
             content = caller.read_text()
-            self.assertIn("tenant_id", content, caller)
             self.assertIn("CONTROL", content, caller)
+            self.assertNotIn("onboarding_dispatch", content, caller)
+            self.assertNotIn("CASC_OPERATION", content, caller)
+            # Protected continuation inputs were removed; Bootstrap gets tenant_id
+            # from control tenants.yml / JT survey, not thin callers.
+            self.assertNotIn("tenant_id:", content, caller)
+
+    def test_github_bootstrap_wires_aap_engine_host_from_vars(self):
+        workflow = (ROOT / ".github/workflows/casc-validate-and-trigger.yml").read_text()
+        self.assertIn("aap_engine_host:", workflow)
+        self.assertIn("AAP_ENGINE_HOST: ${{ inputs.aap_engine_host }}", workflow)
+        self.assertIn("aap_engine_host and AAP_ENGINE_TOKEN", workflow)
+        caller = (ROOT / "templates/github-workflow-caller.yml.j2").read_text()
+        self.assertIn("aap_engine_host:", caller)
+        self.assertIn("vars.AAP_ENGINE_HOST", caller)
+        # Genesis remains decoupled from the CI host wiring.
+        genesis = (ROOT / "genesis.yml").read_text()
+        self.assertNotIn("aap_engine_host", genesis)
+        self.assertNotRegex(genesis, r"(?<![_\w])AAP_ENGINE_HOST(?![_\w])")
+
+    def test_gitlab_embedded_python_compiles_with_top_level_helpers(self):
+        import ast
+        import re
+        import textwrap
+
+        content = (ROOT / "pipeline-templates/gitlab/.gitlab-ci-template.yml").read_text()
+        snippets: list[tuple[str, str]] = []
+        # Multiline python3 -c blocks only (skip one-liners with trailing shell args).
+        for match in re.finditer(
+            r'python3\s+-c\s+"\n((?:.*\n)*?)\s*"\s*$', content, flags=re.M
+        ):
+            snippets.append(("python3 -c", match.group(1)))
+        for match in re.finditer(
+            r"python3\s+<<'([A-Z0-9_]+)'\n(.*?)^\s*\1\s*$",
+            content,
+            flags=re.M | re.S,
+        ):
+            snippets.append((match.group(1), match.group(2)))
+        self.assertGreaterEqual(len(snippets), 3, "expected embedded Python blocks")
+        compiled_names: set[str] = set()
+        for label, raw in snippets:
+            source = textwrap.dedent(raw.replace('\\"', '"'))
+            try:
+                tree = ast.parse(source)
+            except SyntaxError as exc:
+                self.fail(f"{label} failed to compile: {exc}\n{source[:400]}")
+            compile(source, f"<{label}>", "exec")
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    compiled_names.add(node.name)
+        self.assertIn("engine_curl_args", compiled_names)
+        self.assertIn("build_bootstrap_extra_vars", compiled_names)
+        # Nested def after return would not appear as a top-level FunctionDef.
+        bootstrap = next(src for name, src in snippets if name == "BOOTSTRAP_PY")
+        bootstrap_tree = ast.parse(textwrap.dedent(bootstrap))
+        top_level = {
+            node.name
+            for node in bootstrap_tree.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertEqual(
+            top_level,
+            {"engine_curl_args", "build_bootstrap_extra_vars"},
+        )
 
     def test_generated_callers_render_for_every_role(self):
         jinja = Environment(loader=FileSystemLoader(str(ROOT)))
@@ -1305,6 +1606,8 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
                 yaml.safe_load(rendered)
                 self.assertIn(f"caller_role: {role}", rendered)
                 self.assertEqual("AAP_ENGINE_TOKEN" in rendered, role == "control")
+                self.assertEqual("aap_engine_host:" in rendered, role == "control")
+                self.assertEqual("vars.AAP_ENGINE_HOST" in rendered, role == "control")
             with self.subTest(provider="gitlab", role=role):
                 rendered = jinja.get_template(
                     "templates/gitlab-ci-caller.yml.j2"
@@ -1313,28 +1616,19 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
                 self.assertIn(f"CASC_CALLER_ROLE: '{role}'", rendered)
 
     def test_dispatch_pause_skips_only_tenant_onboarding_scope(self):
-        with mock.patch.object(
-            casc_runtime, "resolve_env_creds", return_value=("https://aap", ["-H", "token"])
-        ), mock.patch.object(casc_runtime, "launch_dispatcher", return_value=42) as launch, mock.patch.object(
-            casc_runtime, "wait_for_terminal"
-        ):
-            casc_runtime.run_bounded_onboarding(
-                environments=["dev"],
-                tenant_id="stores",
-                control_revision="a" * 40,
-                poll_timeout=1,
-                jt_name="dispatcher",
-                tenant_dispatch_enabled=False,
-            )
-        self.assertEqual(launch.call_count, 1)
-        self.assertEqual(launch.call_args.kwargs["extra_vars"]["dispatch_scope"], "platform")
         for pipeline in PIPELINES:
             content = pipeline.read_text()
             self.assertIn("dispatch_enabled", content, pipeline)
+            # Unused aggregate tenant_ids output/env must stay gone.
+            self.assertNotRegex(content, r"(?m)^\s*tenant_ids:")
+            self.assertNotIn('echo "tenant_ids=', content, pipeline)
+            self.assertNotIn("BOOTSTRAP_TENANT_IDS", content, pipeline)
             if "gitlab" in str(pipeline):
                 self.assertIn("BOOTSTRAP_DISPATCH_TENANT_IDS", content)
+                self.assertIn("BOOTSTRAP_FANOUT_TENANT_IDS", content)
             else:
                 self.assertIn("dispatch_tenant_ids", content)
+                self.assertIn("fanout_tenant_ids", content)
 
     def test_cross_namespace_clone_paths_are_collision_safe(self):
         role = (ROOT / "roles/git_clone_repos/tasks/main.yml").read_text()
@@ -1399,290 +1693,7 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertNotIn(name, all_text)
 
 
-class MigrationAndDocumentationTests(unittest.TestCase):
-    def test_migration_does_not_synthesize_naming_policy(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "legacy"
-            source.mkdir()
-            (source / "config.yml").write_text(
-                "platform_scm_org: example\nplatform_repo: casc-platform-global\n"
-                "env_branch_map:\n  dev: develop\n  prd: main\n",
-                encoding="utf-8",
-            )
-            (source / "tenants.yml").write_text("tenants: []\n", encoding="utf-8")
-            (source / "base").mkdir()
-            output = Path(tmp) / "out"
-            rc = migrate_control_plane.plan_legacy_split(
-                argparse_namespace(
-                    source_repo=str(source),
-                    output_dir=str(output),
-                    control_scm_org="example",
-                    platform_scm_org="example",
-                    control_repo="casc-platform-control",
-                    control_branch="main",
-                    platform_repo_name="",
-                    apply=False,
-                )
-            )
-            self.assertEqual(rc, 0)
-            self.assertFalse(
-                (output / "casc-platform-control" / "naming-rules.yml").exists()
-            )
-            migrated = yaml.safe_load(
-                (output / "casc-platform-control" / "config.yml").read_text(
-                    encoding="utf-8"
-                )
-            )
-            self.assertEqual(migrated["platform_repo"], "casc-platform-global")
-            self.assertNotIn("platform_repo_pattern", migrated)
-            self.assertNotIn("repo_mode", migrated)
-
-    def test_migration_preserves_scalars_and_emits_runtime_valid_tenants(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "legacy"
-            source.mkdir()
-            (source / "config.yml").write_text(
-                "platform_scm_org: example\n"
-                "platform_repo_pattern: combined\n"
-                "platform_repos:\n"
-                "  - resource_type: combined\n"
-                "    name: ww-governed-platform\n"
-                "repo_mode: existing\n"
-                "env_branch_map:\n  dev: develop\n  prd: main\n",
-                encoding="utf-8",
-            )
-            (source / "tenants.yml").write_text(
-                "tenants:\n"
-                "  - tenant_id: stores\n"
-                "    team_name: Stores Automation\n"
-                "    tenant_scm_org: ww-tenants\n"
-                "    repo_pattern: combined\n"
-                "    repositories:\n"
-                "      - ww-tenant-stores\n"
-                "    onboarding_mode: greenfield\n"
-                "    status: active\n",
-                encoding="utf-8",
-            )
-            (source / "base").mkdir()
-            output = Path(tmp) / "out"
-            rc = migrate_control_plane.plan_legacy_split(
-                argparse_namespace(
-                    source_repo=str(source),
-                    output_dir=str(output),
-                    control_scm_org="example",
-                    platform_scm_org="example",
-                    control_repo="casc-platform-control",
-                    control_branch="main",
-                    platform_repo_name="",
-                    apply=False,
-                )
-            )
-            self.assertEqual(rc, 0)
-            self.assertTrue((output / "ww-governed-platform" / "base").exists())
-            migrated_cfg = yaml.safe_load(
-                (output / "casc-platform-control" / "config.yml").read_text(
-                    encoding="utf-8"
-                )
-            )
-            self.assertEqual(migrated_cfg["platform_repo"], "ww-governed-platform")
-            self.assertNotIn("platform_repos", migrated_cfg)
-            self.assertNotIn("platform_repo_pattern", migrated_cfg)
-            self.assertNotIn("repo_mode", migrated_cfg)
-            migrated_tenants = yaml.safe_load(
-                (output / "casc-platform-control" / "tenants.yml").read_text(
-                    encoding="utf-8"
-                )
-            )
-            tenant = migrated_tenants["tenants"][0]
-            self.assertEqual(tenant["repo_name"], "ww-tenant-stores")
-            self.assertNotIn("repo_pattern", tenant)
-            self.assertNotIn("repositories", tenant)
-            # Transformed tenants.yml must validate under the new runtime contract.
-            casc_runtime.validate_tenant_registry(migrated_tenants, migrated_cfg)
-
-    def test_migration_rejects_invalid_scalars_and_preserves_repository(self):
-        def run_split(tmp, config_body, tenants_body="tenants: []\n"):
-            source = Path(tmp) / "legacy"
-            source.mkdir()
-            (source / "config.yml").write_text(config_body, encoding="utf-8")
-            (source / "tenants.yml").write_text(tenants_body, encoding="utf-8")
-            (source / "base").mkdir()
-            return migrate_control_plane.plan_legacy_split(
-                argparse_namespace(
-                    source_repo=str(source),
-                    output_dir=str(Path(tmp) / "out"),
-                    control_scm_org="example",
-                    platform_scm_org="example",
-                    control_repo="casc-platform-control",
-                    control_branch="main",
-                    platform_repo_name="",
-                    apply=False,
-                )
-            )
-
-        for invalid in ("platform_repo: 123\n", "platform_repo: []\n", "platform_repo: ''\n"):
-            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmp:
-                with self.assertRaises(SystemExit) as ctx:
-                    run_split(
-                        tmp,
-                        "platform_scm_org: example\n"
-                        + invalid
-                        + "env_branch_map:\n  dev: develop\n",
-                    )
-                self.assertIn("platform_repo must be a non-empty string", str(ctx.exception))
-
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(SystemExit) as ctx:
-                run_split(
-                    tmp,
-                    "platform_scm_org: example\n"
-                    "platform_repo: casc-platform-global\n"
-                    "env_branch_map:\n  dev: develop\n",
-                    "tenants:\n"
-                    "  - tenant_id: stores\n"
-                    "    team_name: Stores\n"
-                    "    tenant_scm_org: ww\n"
-                    "    repo_name: 123\n"
-                    "    onboarding_mode: greenfield\n",
-                )
-            message = str(ctx.exception)
-            self.assertTrue(
-                "repo_name must be a non-empty string" in message
-                or "not runtime-valid" in message
-            )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            rc = run_split(
-                tmp,
-                "platform_scm_org: example\n"
-                "platform_repo: casc-platform-global\n"
-                "env_branch_map:\n  dev: develop\n",
-                "tenants:\n"
-                "  - tenant_id: stores\n"
-                "    team_name: Stores Automation\n"
-                "    tenant_scm_org: ww-tenants\n"
-                "    repository: ww-custom\n"
-                "    onboarding_mode: greenfield\n"
-                "    status: active\n",
-            )
-            self.assertEqual(rc, 0)
-            migrated = yaml.safe_load(
-                (Path(tmp) / "out/casc-platform-control/tenants.yml").read_text(
-                    encoding="utf-8"
-                )
-            )
-            tenant = migrated["tenants"][0]
-            self.assertEqual(tenant["repo_name"], "ww-custom")
-            self.assertNotIn("repository", tenant)
-            cfg = yaml.safe_load(
-                (Path(tmp) / "out/casc-platform-control/config.yml").read_text(
-                    encoding="utf-8"
-                )
-            )
-            casc_runtime.validate_tenant_registry(migrated, cfg)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(SystemExit) as ctx:
-                run_split(
-                    tmp,
-                    "platform_scm_org: example\n"
-                    "platform_repo: casc-platform-global\n"
-                    "env_branch_map:\n  dev: develop\n",
-                    "tenants:\n"
-                    "  - tenant_id: stores\n"
-                    "    team_name: Stores\n"
-                    "    tenant_scm_org: ww\n"
-                    "    repo_name: one-repo\n"
-                    "    repository: other-repo\n"
-                    "    onboarding_mode: greenfield\n",
-                )
-            self.assertIn("conflicting repository scalars", str(ctx.exception).lower())
-
-    def test_migration_fails_closed_on_unconsolidated_per_resource(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "legacy"
-            source.mkdir()
-            (source / "config.yml").write_text(
-                "platform_scm_org: example\n"
-                "platform_repo_pattern: per-resource-type\n"
-                "platform_repos:\n"
-                "  - resource_type: organizations\n"
-                "    name: ww-orgs\n"
-                "  - resource_type: teams\n"
-                "    name: ww-teams\n"
-                "env_branch_map:\n  dev: develop\n  prd: main\n",
-                encoding="utf-8",
-            )
-            (source / "tenants.yml").write_text("tenants: []\n", encoding="utf-8")
-            with self.assertRaises(SystemExit) as ctx:
-                migrate_control_plane.plan_legacy_split(
-                    argparse_namespace(
-                        source_repo=str(source),
-                        output_dir=str(Path(tmp) / "out"),
-                        control_scm_org="example",
-                        platform_scm_org="example",
-                        control_repo="casc-platform-control",
-                        control_branch="main",
-                        platform_repo_name="",
-                        apply=False,
-                    )
-                )
-            self.assertIn("manually consolidated", str(ctx.exception))
-
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "legacy"
-            source.mkdir()
-            (source / "config.yml").write_text(
-                "platform_scm_org: example\n"
-                "platform_repos:\n"
-                "  - resource_type: organizations\n"
-                "    name: ww-orgs\n"
-                "env_branch_map:\n  dev: develop\n",
-                encoding="utf-8",
-            )
-            (source / "tenants.yml").write_text("tenants: []\n", encoding="utf-8")
-            with self.assertRaises(SystemExit) as ctx:
-                migrate_control_plane.plan_legacy_split(
-                    argparse_namespace(
-                        source_repo=str(source),
-                        output_dir=str(Path(tmp) / "out"),
-                        control_scm_org="example",
-                        platform_scm_org="example",
-                        control_repo="casc-platform-control",
-                        control_branch="main",
-                        platform_repo_name="",
-                        apply=False,
-                    )
-                )
-            self.assertIn("manually consolidated", str(ctx.exception))
-            self.assertIn("platform_repos", str(ctx.exception))
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tenants = Path(tmp) / "tenants.yml"
-            tenants.write_text(
-                "tenants:\n"
-                "  - tenant_id: stores\n"
-                "    team_name: Stores\n"
-                "    tenant_scm_org: ww\n"
-                "    repo_names:\n"
-                "      - stores-projects\n",
-                encoding="utf-8",
-            )
-            with self.assertRaises(SystemExit) as ctx:
-                migrate_control_plane.plan_tenant_identity_migration(
-                    argparse_namespace(
-                        tenants_file=str(tenants),
-                        from_tenant_id="stores",
-                        to_tenant_id="",
-                        to_scm_org="",
-                        to_repo_name="stores-combined",
-                        to_aap_organization="",
-                        output_dir=str(Path(tmp) / "out"),
-                    )
-                )
-            self.assertIn("manually consolidated", str(ctx.exception))
-            self.assertIn("repo_names", str(ctx.exception))
-
+class DocumentationContractTests(unittest.TestCase):
     def test_required_docs_cover_lean_contract(self):
         docs = [
             ROOT / "README.md",
@@ -1690,6 +1701,7 @@ class MigrationAndDocumentationTests(unittest.TestCase):
             ROOT / "docs/NONPRODUCTION_VALIDATION.md",
             ROOT / "docs/pipeline-trigger-logic.md",
             ROOT / "docs/resource-deletion-capabilities.md",
+            ROOT / "docs/TENANT_RETIREMENT_RUNBOOK.md",
             ROOT / "templates/genesis-readme.md.j2",
         ]
         combined = "\n".join(path.read_text() for path in docs)
@@ -1705,6 +1717,29 @@ class MigrationAndDocumentationTests(unittest.TestCase):
         guide = (ROOT / "docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md").read_text()
         self.assertIn("combined-only", guide)
         self.assertNotIn("Per-resource-type layouts remain available", guide)
+        # ROADMAP-010 removed product advertising of these terms.
+        for stale in (
+            "bootstrap_dispatch_fanout",
+            "onboarding_dispatch",
+            "dispatcher_concurrency",
+        ):
+            self.assertNotIn(stale, combined, stale)
+        self.assertIn("tenant retirement", combined.lower())
+        self.assertIn("fanout", combined.lower())
+        self.assertIn("AAP_ENV_TARGETS_JSON", guide)
+        trigger = (ROOT / "docs/pipeline-trigger-logic.md").read_text()
+        self.assertIn("`fanout`", trigger)
+        nonprod = (ROOT / "docs/NONPRODUCTION_VALIDATION.md").read_text()
+        self.assertIn("skips Bootstrap, fan-out, and trigger", nonprod)
+        retirement = (ROOT / "docs/TENANT_RETIREMENT_RUNBOOK.md").read_text()
+        self.assertIn("Remove markers (required before registry removal)", retirement)
+        self.assertLess(
+            retirement.index("Remove markers"),
+            retirement.index("Remove registry entry"),
+        )
+        self.assertIn("[skip dispatch]", retirement)
+        self.assertIn("_retirement_archive/", retirement)
+        self.assertIn("outside `base/`", retirement)
 
 
 if __name__ == "__main__":

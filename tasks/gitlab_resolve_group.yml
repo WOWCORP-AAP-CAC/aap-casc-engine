@@ -1,0 +1,60 @@
+---
+# Resolve a GitLab group numeric ID from its full path (create-mode only).
+#
+# Required:
+#   gitlab_group_full_path: group full_path (e.g. parent/child)
+#   scm_base_url: GitLab base URL
+#   scm_api_token: PRIVATE-TOKEN
+#
+# Sets:
+#   gitlab_resolved_namespace_id: numeric group id (string)
+#
+# Fails before caller mutation on 401/403/404/other API failure or full_path mismatch.
+# Uses exact GET /groups/<URL-encoded-full-path> — not search.
+
+- name: "GL – Resolve group ID from full path"
+  ansible.builtin.uri:
+    url: "{{ scm_base_url }}/api/v4/groups/{{ gitlab_group_full_path | urlencode() | replace('/', '%2F') }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ scm_api_token }}"
+    status_code: [200, 401, 403, 404]
+    return_content: true
+  register: _gl_group_lookup
+  failed_when: false
+
+- name: "GL – Fail closed when group lookup is unauthorized or forbidden"
+  ansible.builtin.fail:
+    msg: >-
+      GitLab group lookup failed for '{{ gitlab_group_full_path }}'
+      (HTTP {{ _gl_group_lookup.status }}). Refusing to mutate repositories.
+      Ensure the SCM token can read the group and the full path is correct.
+  when: _gl_group_lookup.status in [401, 403]
+
+- name: "GL – Fail closed when group is missing"
+  ansible.builtin.fail:
+    msg: >-
+      GitLab group '{{ gitlab_group_full_path }}' was not found (HTTP 404).
+      Create the group first or correct the SCM org/group path. Refusing to mutate.
+  when: _gl_group_lookup.status == 404
+
+- name: "GL – Fail closed on unexpected group lookup status"
+  ansible.builtin.fail:
+    msg: >-
+      GitLab group lookup for '{{ gitlab_group_full_path }}' returned HTTP
+      {{ _gl_group_lookup.status }}. Refusing to mutate repositories.
+  when: _gl_group_lookup.status != 200
+
+- name: "GL – Require exact full_path match"
+  ansible.builtin.assert:
+    that:
+      - (_gl_group_lookup.json.full_path | default('')) == gitlab_group_full_path
+      - _gl_group_lookup.json.id is defined
+    fail_msg: >-
+      GitLab group lookup full_path mismatch for '{{ gitlab_group_full_path }}'
+      (API returned '{{ _gl_group_lookup.json.full_path | default('') }}').
+      Refusing to mutate repositories.
+
+- name: "GL – Export resolved namespace ID"
+  ansible.builtin.set_fact:
+    gitlab_resolved_namespace_id: "{{ _gl_group_lookup.json.id | string }}"

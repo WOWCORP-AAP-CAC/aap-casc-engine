@@ -11,25 +11,6 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-{% if caller_role | default('tenant') == 'control' %}
-    inputs:
-      operation:
-        description: "Protected control operation (leave empty for normal control validation)"
-        required: false
-        default: ""
-        type: choice
-        options:
-          - ""
-          - onboarding_dispatch
-      tenant_id:
-        description: "Required when operation=onboarding_dispatch"
-        required: false
-        type: string
-      control_revision:
-        description: "Optional pinned control commit SHA"
-        required: false
-        type: string
-{% endif %}
 
 jobs:
   casc:
@@ -43,9 +24,6 @@ jobs:
       bootstrap_jt_name: {{ bootstrap_jt_name | default('jt-platform-bootstrap_tenant', true) }}
 {% if caller_role | default('tenant') == 'control' %}
       aap_engine_host: {% raw %}${{ vars.AAP_ENGINE_HOST }}{% endraw %}
-      operation: {% raw %}${{ github.event.inputs.operation || '' }}{% endraw %}
-      tenant_id: {% raw %}${{ github.event.inputs.tenant_id || '' }}{% endraw %}
-      control_revision: {% raw %}${{ github.event.inputs.control_revision || '' }}{% endraw %}
 {% endif %}
     secrets:
       AAP_ENV_TARGETS_JSON: {% raw %}${{ secrets.AAP_ENV_TARGETS_JSON }}{% endraw %}

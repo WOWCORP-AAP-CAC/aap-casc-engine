@@ -1,12 +1,11 @@
 ---
 # process_casc_config — Process CasC YAML files from a cloned repository
 #
-# Implements folder-based environment layering:
+# Folder layout only:
 #   base/    — resources applied to ALL environments
 #   <env>/   — environment-specific overrides merged on top of base
 #
-# Flat-file mode: if no base/ directory exists, all *.yml at the repo root
-# are read without env filtering (supports simple repos).
+# Flat-root YAML is not supported. Repositories must contain base/.
 #
 # Merge strategy (driven by schemas/resource-types.yml):
 #   - list resources: items matched by identity_field, recursively merged
@@ -16,7 +15,7 @@
 #   repo_clone_dir: path to the cloned repo
 #   repo_scope:     scope suffix (e.g., platform, myorg01)
 #   output_dir:     directory to write processed YAML files
-#   env_filter:     target environment (e.g., dev, prd) — ignored in flat-file mode
+#   env_filter:     target environment (e.g., dev, prd)
 
 - name: "Ensure output directory exists"
   ansible.builtin.file:
@@ -45,13 +44,21 @@
       - "{{ casc_resource_types_file }}"
   changed_when: false
 
-- name: "Detect repo layout (folder-based vs flat-file)"
+- name: "Detect base/ directory"
   ansible.builtin.stat:
     path: "{{ repo_clone_dir }}/base"
   register: _base_dir
 
+- name: "Require folder-based layout (base/ directory)"
+  ansible.builtin.assert:
+    that:
+      - _base_dir.stat.exists
+      - _base_dir.stat.isdir
+    fail_msg: >-
+      CasC desired-state repositories must use folder layout with a base/
+      directory. Flat-root YAML is not supported. Missing: {{ repo_clone_dir }}/base
+
 - name: "Process with folder-based layout"
-  when: _base_dir.stat.exists and _base_dir.stat.isdir
   block:
     - name: "Find base YAML files"
       ansible.builtin.find:
@@ -171,64 +178,6 @@
         loop_var: _resource_entry
         label: "{{ _resource_entry.key }}"
 
-- name: "Process with flat-file layout (no base/ directory)"
-  when: not (_base_dir.stat.exists and _base_dir.stat.isdir)
-  block:
-    - name: "Find all YAML config files at repo root"
-      ansible.builtin.find:
-        paths: "{{ repo_clone_dir }}"
-        patterns: "*.yml,*.yaml"
-        recurse: false
-        excludes:
-          - ".github"
-          - ".gitlab-ci*"
-      register: _flat_files
-
-    - name: "Read flat YAML files"
-      ansible.builtin.slurp:
-        src: "{{ item.path }}"
-      loop: "{{ _flat_files.files | default([]) }}"
-      loop_control:
-        label: "{{ item.path | basename }}"
-      register: _flat_contents
-      when: _flat_files.files | default([]) | length > 0
-
-    - name: "Validate flat files have exactly one recognized top-level key"
-      ansible.builtin.assert:
-        that:
-          - (_parsed_data | dict2items | length) == 1
-          - (_parsed_data | dict2items | first).key in casc_allowed_resource_keys
-        fail_msg: >-
-          INVALID: {{ item.source | basename }} —
-          {% if (_parsed_data | dict2items | length) != 1 %}
-          has {{ _parsed_data | dict2items | length }} top-level keys.
-          {% else %}
-          uses unknown key "{{ (_parsed_data | dict2items | first).key }}".
-          {% endif %}
-          Allowed: {{ casc_allowed_resource_keys | join(', ') }}.
-        quiet: true
-      vars:
-        _parsed_data: "{{ item.content | b64decode | from_yaml }}"
-      loop: "{{ _flat_contents.results | default([]) }}"
-      loop_control:
-        label: "{{ item.source | basename }}"
-
-    - name: "Initialize merged resources for flat mode"
-      ansible.builtin.set_fact:
-        merged_resources: {}
-
-    - name: "Aggregate flat YAML into resource map"
-      ansible.builtin.set_fact:
-        merged_resources: "{{ merged_resources | combine({_resource_key: _aggregated}) }}"
-      vars:
-        _file_data: "{{ item.content | b64decode | from_yaml }}"
-        _resource_key: "{{ (_file_data | dict2items | first).key }}"
-        _resource_value: "{{ (_file_data | dict2items | first).value }}"
-        _aggregated: "{{ (merged_resources[_resource_key] | default({})) | combine(_resource_value, recursive=true) if _resource_value is mapping else (merged_resources[_resource_key] | default([])) + _resource_value }}"
-      loop: "{{ _flat_contents.results | default([]) }}"
-      loop_control:
-        label: "{{ item.source | basename }}"
-
 - name: "Write scope-suffixed YAML files to output directory"
   ansible.builtin.copy:
     content: "{{ {item.key + '_' + repo_scope: item.value} | to_nice_yaml(indent=2) }}"
@@ -243,7 +192,7 @@
   ansible.builtin.debug:
     msg: >-
       Processed {{ repo_clone_dir | basename }}
-      → layout: {{ 'folder-based' if (_base_dir.stat.exists and _base_dir.stat.isdir) else 'flat-file' }}
+      → layout: folder-based
       → scope: {{ repo_scope }}
-      {{ '→ env: ' + env_filter if (_base_dir.stat.exists and _base_dir.stat.isdir) and env_filter is defined else '' }}
+      {{ '→ env: ' + env_filter if env_filter is defined else '' }}
       → {{ merged_resources | default({}) | length }} resource types written to {{ output_dir }}

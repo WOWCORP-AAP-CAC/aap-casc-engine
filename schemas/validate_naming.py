@@ -160,11 +160,19 @@ def load_env_names(config_dir: str, control_config: str = "") -> list[str]:
     return names
 
 
-def desired_state_search_dirs(config_dir: str, control_config: str = "") -> list[str]:
+def desired_state_search_dirs(
+    config_dir: str, control_config: str = "", caller_role: str = "tenant"
+) -> list[str]:
     """Return only base/ plus env_branch_map environment directories that exist."""
-    dirs: list[str] = []
-    if os.path.isdir(os.path.join(config_dir, "base")):
-        dirs.append("base")
+    role = (caller_role or "tenant").strip().lower()
+    if role == "control":
+        return []
+    if not os.path.isdir(os.path.join(config_dir, "base")):
+        raise ValueError(
+            "Platform/tenant repositories require a base/ directory; "
+            "flat-root desired state is not supported"
+        )
+    dirs: list[str] = ["base"]
     for env_name in load_env_names(config_dir, control_config):
         if os.path.isdir(os.path.join(config_dir, env_name)):
             dirs.append(env_name)
@@ -186,6 +194,12 @@ def validate_tree(
         return []
 
     errors: list[str] = []
+    try:
+        search_dirs = desired_state_search_dirs(
+            config_dir, control_config=control_config, caller_role=role
+        )
+    except ValueError as exc:
+        return [str(exc)]
     skip_dirs = {
         ".schemas",
         ".engine",
@@ -197,9 +211,7 @@ def validate_tree(
         ".aap-casc-engine",
     }
     skip_files = {"config.yml", "tenants.yml", "naming-rules.yml"}
-    for search_dir in desired_state_search_dirs(
-        config_dir, control_config=control_config
-    ):
+    for search_dir in search_dirs:
         start = os.path.join(config_dir, search_dir)
         for root, dirs, files in os.walk(start):
             dirs[:] = [directory for directory in dirs if directory not in skip_dirs]

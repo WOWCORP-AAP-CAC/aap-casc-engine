@@ -18,6 +18,7 @@ Satellite documents (linked, not duplicated):
 - [Pipeline Trigger Logic](pipeline-trigger-logic.md)
 - [Nonproduction Validation](NONPRODUCTION_VALIDATION.md)
 - [Resource Deletion Capabilities](resource-deletion-capabilities.md)
+- [Tenant Retirement Runbook](TENANT_RETIREMENT_RUNBOOK.md)
 
 ### Validation status
 
@@ -253,16 +254,14 @@ platform_repo: casc-platform-global
 repo_mode: create
 repo_visibility: private
 create_missing_env_branches: true
-bootstrap_dispatch_fanout: true
 env_branch_map:
   dev: develop
   tst: release/tst
   prd: main
 ```
 
-Launch-time overrides (still lowercase): `repo_mode`, `env_branch_map`, GitLab
-`platform_namespace_id` / `control_namespace_id`, JT name overrides
-(`genesis_jt_name`, `bootstrap_jt_name`, `dispatcher_jt_name`,
+Launch-time overrides (still lowercase): `repo_mode`, `env_branch_map`, JT name
+overrides (`genesis_jt_name`, `bootstrap_jt_name`, `dispatcher_jt_name`,
 `drift_detection_jt_name`).
 
 Use `repo_mode=existing` only when governance pre-creates repositories (see A4).
@@ -296,12 +295,16 @@ runtime, not by marking those fields survey-required.
 | `team_name` | No | Engine: Greenfield requires it; Brownfield rejects it |
 | `repo_mode`, `repo_visibility` | No | Defaults apply when omitted |
 | `repo_name` | No | Optional combined tenant repository override |
-| `tenant_scm_namespace_id` | No | GitLab create mode when needed |
 | `dispatch_enabled` | No | Optional override; empty uses registry/default |
 | `control_revision` | No | CI pin when supplied; mismatch fails closed |
 
 Do not configure team-lead, user-password, or SCM collaborator survey questions.
 Do not survey `control_scm_org`, `control_repo`, or `control_branch`.
+
+GitLab create-mode now resolves groups via an exact GET call to
+`/groups/<URL-encoded-full-path>` (tasks/gitlab_resolve_group.yml) rather than
+requiring numeric namespace IDs. Failures are detected before any SCM mutation
+occurs.
 
 CI Bootstrap launches send a normalized API `extra_vars` payload built from the
 tenant registry (always includes the survey-required identity fields plus
@@ -441,10 +444,9 @@ Keys must match `env_branch_map` environment names used at runtime.
 | Pipeline job | Secrets / vars used |
 |---|---|
 | `validate` (push/PR) | `ENGINE_REPO_TOKEN`, `CONTROL_REPO_TOKEN` — **no** deploy secrets |
-| `bootstrap` | `ENGINE_REPO_TOKEN`, `CONTROL_REPO_TOKEN`, `AAP_ENGINE_TOKEN` + variable `AAP_ENGINE_HOST` / input `aap_engine_host` |
-| `fanout` | `CONTROL_REPO_TOKEN`, `AAP_ENV_TARGETS_JSON` |
+| `bootstrap` | `ENGINE_REPO_TOKEN`, `CONTROL_REPO_TOKEN`, `AAP_ENGINE_TOKEN` + variable `AAP_ENGINE_HOST` (via control caller `aap_engine_host` input) |
+| `fanout` | `CONTROL_REPO_TOKEN`, `AAP_ENV_TARGETS_JSON` — bounded onboarding after Greenfield Bootstrap |
 | `trigger` | `CONTROL_REPO_TOKEN`, `AAP_ENV_TARGETS_JSON` |
-| `onboarding_dispatch` | `ENGINE_REPO_TOKEN` (engine helper checkout), `CONTROL_REPO_TOKEN`, `AAP_ENV_TARGETS_JSON` |
 
 Configure secrets as protected/masked where the provider allows. Scope deploy
 secrets away from pull-request contexts. Fork PRs and environments without
@@ -471,17 +473,15 @@ following as template-parity guidance.
 | `AAP_ENGINE_TOKEN` | Yes / masked | **control** | Bootstrap Execute token |
 | `ENGINE_PROJECT_PATH` | Protected | all callers (seeded) | Path to engine project for `CI_JOB_TOKEN` clone (for example `example-platform/aap-casc-engine`) |
 | `CASC_CALLER_ROLE` | Protected | seeded per caller | `control` \| `platform` \| `tenant` |
-| `CASC_OPERATION` | Protected | control (web/manual) | Empty, or `onboarding_dispatch` |
-| `TENANT_ID` | Protected | control when using onboarding | Required with `CASC_OPERATION=onboarding_dispatch` |
 | `CONTROL_REVISION` | Optional | control / jobs | Pin control SHA; empty = branch HEAD |
-| `POLL_TIMEOUT_MINUTES` | Optional | callers / template default `30` | Dispatcher/fanout/onboarding poll window |
+| `POLL_TIMEOUT_MINUTES` | Optional | callers / template default `30` | Dispatcher poll window |
 | `BOOTSTRAP_POLL_TIMEOUT_MINUTES` | Optional | control / template default `15` | Bootstrap job poll window |
 | `CI_JOB_TOKEN` allowlist | n/a | Engine project → Job token permissions | Allow inbound CI job token access from control/platform/tenant projects that `include:` / clone the engine template |
 
 Also set seeded coordinates as needed: `CONTROL_SCM_ORG`, `CONTROL_REPO`,
-`CONTROL_BRANCH`. GitLab create-mode needs numeric namespace IDs
-(`platform_namespace_id` / `control_namespace_id` / tenant namespace) as Genesis
-or Bootstrap lowercase inputs.
+`CONTROL_BRANCH`. GitLab create-mode group resolution now uses path-based lookup
+(GET `/groups/<URL-encoded-full-path>` via `tasks/gitlab_resolve_group.yml`)
+instead of requiring numeric namespace IDs in Genesis or Bootstrap inputs.
 
 #### A3.4 Pipeline configuration (public operator inputs)
 
@@ -490,10 +490,8 @@ Concise public settings (not internal derived variables):
 | Setting | GitHub | GitLab | Default | Purpose |
 |---|---|---|---|---|
 | `caller_role` / `CASC_CALLER_ROLE` | workflow `with:` | CI variable | `tenant` | Selects secret set and dispatch scope |
-| `poll_timeout_minutes` / `POLL_TIMEOUT_MINUTES` | reusable workflow input | CI variable | `30` | Poll Dispatcher/fanout/onboarding to terminal |
+| `poll_timeout_minutes` / `POLL_TIMEOUT_MINUTES` | reusable workflow input | CI variable | `30` | Poll Dispatcher to terminal |
 | Bootstrap poll | **Not a workflow input** — reusable workflow currently hard-defaults to **15 minutes** (`BOOTSTRAP_POLL_TIMEOUT_MINUTES` fallback in-job) | `BOOTSTRAP_POLL_TIMEOUT_MINUTES` CI variable (configurable) | `15` | Poll Bootstrap JT |
-| `operation` / `CASC_OPERATION` | control `workflow_dispatch` | control web pipeline | empty | Protected `onboarding_dispatch` |
-| `tenant_id` / `TENANT_ID` | control dispatch input | CI variable | empty | Required for onboarding continuation |
 | `control_revision` / `CONTROL_REVISION` | workflow input | CI variable | empty → branch HEAD | Pin control metadata |
 | `AAP_ENGINE_HOST` | GitHub Actions **variable** (control) | CI variable (control) | required for Bootstrap | Management AAP API host — not a Genesis JT field |
 | JT name overrides | workflow inputs | control `config.yml` + template defaults | documented JT names | Customer-renamed templates |
@@ -530,6 +528,7 @@ control_branch: main
 platform_repo: casc-platform-global
 repo_mode: create
 repo_visibility: private
+create_missing_env_branches: true
 env_branch_map:
   dev: develop
   tst: release/tst
@@ -578,9 +577,15 @@ For governed `repo_mode=existing`, pre-create `stores-aap-casc` (or the default
 4. Greenfield Bootstrap writes Organization + Team foundation on every mapped
    platform branch and scaffolds every mapped tenant branch. It does **not**
    create users, RBAC, Galaxy associations, EE associations, or SCM memberships.
-5. If `bootstrap_dispatch_fanout=true`, onboarding dispatches platform scope
-   then only the new tenant per environment (never `full`). If false, complete
-   via protected control `onboarding_dispatch`.
+5. After Bootstrap completes, the control pipeline automatically runs the
+   **`fanout` job** (bounded onboarding): platform scope first, then only the
+   new tenant(s) across all environments. Brownfield tenants receive no
+   automatic onboarding fan-out. A platform foundation failure blocks tenant
+   dispatch. If `fanout` fails after Bootstrap already wrote markers, **retry
+   only the failed `fanout` job** (GitHub “Re-run failed jobs” / GitLab retry
+   on `fanout:dispatcher`). Do **not** rerun the full control pipeline for
+   recovery: `corrected` and `activated` tenants produce no Bootstrap action
+   once a marker exists, so a full rerun will not recreate fan-out inputs.
 6. If `dispatch_enabled=false`, scaffolding and foundation still run; tenant
    apply waits until re-enabled.
 
@@ -636,13 +641,14 @@ Source tags:
 | `repo_mode` | `REPO_MODE` | `survey`/`fixed` | `create` | Launch-time only; not in `config.yml` |
 | `repo_visibility` | `REPO_VISIBILITY` | `survey`/`fixed` | `private` | `private` \| `public` |
 | `create_missing_env_branches` | `CREATE_MISSING_ENV_BRANCHES` | `fixed`/`survey` | `true` | Create missing mapped branches |
-| `bootstrap_dispatch_fanout` | `BOOTSTRAP_DISPATCH_FANOUT` | `fixed`/`survey` | `true` | Persisted to `config.yml` |
 | `env_branch_map` | — | `survey`/`fixed` | see playbook | Ordered low→high map |
 | `genesis_jt_name` / `bootstrap_jt_name` / `dispatcher_jt_name` / `drift_detection_jt_name` | `GENESIS_JT_NAME` / … | `fixed`/`survey` | documented defaults | Seeded into `job_templates.*` |
-| `platform_namespace_id` / `control_namespace_id` | `PLATFORM_NAMESPACE_ID` / `CONTROL_NAMESPACE_ID` | `survey` | — | GitLab create mode |
 
 `AAP_ENGINE_HOST` is **not** a Genesis JT input for caller wiring. Configure it
 as a control-pipeline GitHub Actions variable / GitLab CI variable only (see A3).
+
+GitLab create-mode group resolution now uses path-based lookup (GET
+`/groups/<URL-encoded-full-path>`) instead of requiring numeric namespace IDs.
 
 Legacy topology inputs are rejected: `platform_repo_pattern`,
 `platform_repo_names`, `repo_pattern`, `repo_names`, and matching `*_JSON`
@@ -656,10 +662,12 @@ env vars.
 | `control_scm_org`, `control_repo`, `control_branch` | `control` | Copied into JT fixed Variables (lowercase) |
 | `platform_scm_org`, `platform_repo` | `control` | Combined platform scalar |
 | `create_missing_env_branches` | `control` | Boolean |
-| `bootstrap_dispatch_fanout` | `control` | Boolean |
-| `dispatcher_concurrency` | `control` | Seeded `serialized` |
 | `job_templates.*` | `control` | Customer JT names |
 | `env_branch_map` | `control` | Must align with `AAP_ENV_TARGETS_JSON` keys used in CI |
+
+Dispatcher concurrency (`allow_simultaneous=false` on the Dispatcher JT) is
+required for the production serialized baseline. This is not a `config.yml`
+field.
 
 Example:
 
@@ -672,8 +680,6 @@ control_branch: main
 platform_scm_org: example-platform
 platform_repo: casc-platform-global
 create_missing_env_branches: true
-bootstrap_dispatch_fanout: true
-dispatcher_concurrency: serialized
 job_templates:
   genesis: jt-platform-genesis
   bootstrap: jt-platform-bootstrap_tenant
@@ -693,7 +699,6 @@ env_branch_map:
 | `aap_organization` | `tenant` | optional | required | Exact AAP Organization name |
 | `team_name` | `tenant` | required | forbidden | Greenfield Team only |
 | `tenant_scm_org` | `tenant` | required | required | Tenant SCM org/group |
-| `tenant_scm_namespace_id` | `tenant` | GitLab when needed | GitLab when needed | Numeric ID |
 | `repo_name` | `tenant` | optional | optional | Combined repo override |
 | `repo_mode` | `tenant` | optional | optional | Persisted for Bootstrap |
 | `repo_visibility` | `tenant` | optional | optional | Default `private` |
@@ -711,7 +716,7 @@ customer inputs. Legacy `repo_pattern` / `repo_names` are rejected.
 | — | `SCM_TOKEN` | `cred` | Required (write credential) |
 | `scm_base_url`, control coordinates, `engine_repo` | matching UPPER | `fixed` | Trust boundary — not surveyed |
 | `control_revision` | `CONTROL_REVISION` | `survey` + `pipeline` | Must be on Bootstrap survey allowlist; CI pin; mismatch fails closed |
-| `tenant_id`, `onboarding_mode`, `aap_organization`, `team_name`, `tenant_scm_org`, `repo_mode`, `repo_visibility`, `repo_name`, `tenant_scm_namespace_id`, `dispatch_enabled` | matching UPPER where playbook looks up env | `survey` / `pipeline` | All must appear on the Bootstrap survey so API `extra_vars` are accepted |
+| `tenant_id`, `onboarding_mode`, `aap_organization`, `team_name`, `tenant_scm_org`, `repo_mode`, `repo_visibility`, `repo_name`, `dispatch_enabled` | matching UPPER where playbook looks up env | `survey` / `pipeline` | All must appear on the Bootstrap survey so API `extra_vars` are accepted |
 
 ### B5. Branch and pipeline model
 
@@ -720,8 +725,7 @@ customer inputs. Legacy `repo_pattern` / `repo_names` are rejected.
 | Push to mapped desired-state branch | Validate + dispatch caller scope to mapped env |
 | Push to feature branch | Validate only |
 | Pull/merge request | Validate only; no deploy credentials |
-| Control push changing `tenants.yml` | Validate, lifecycle diff, Bootstrap, bounded fan-out when enabled |
-| Protected `onboarding_dispatch` | Resume one pending Greenfield tenant |
+| Control push changing `tenants.yml` | Validate, lifecycle diff, Bootstrap, automatic bounded onboarding for Greenfield only |
 | `[skip dispatch]` commit | Validation only |
 
 See [Pipeline Trigger Logic](pipeline-trigger-logic.md).
@@ -789,6 +793,16 @@ never validates filenames.
 ### C3. Scaffold lifecycle (combined-only)
 
 First matching `.aap-casc-engine/tenant-scaffold.yml` is the lifecycle boundary.
+
+**Marker SCAFFOLD_VERSION 4** (current) includes:
+- `tenant_id`, `aap_organization`, `team_name` (Greenfield only)
+- `tenant_scm_org`, `repository` (resolved combined repo name)
+- `onboarding_mode`, `repo_mode`, `repo_visibility`
+- GitLab: resolved group/namespace details via path-based lookup (no numeric IDs stored)
+
+Removed from marker v4:
+- Numeric `*_namespace_id` fields (GitLab groups now resolved on-demand via
+  tasks/gitlab_resolve_group.yml using exact GET `/groups/<URL-encoded-full-path>`)
 
 | Field group | Before any marker | After any marker |
 |---|---|---|
@@ -864,10 +878,16 @@ the marker. Rejected: any change away from those values after the marker exists.
   desired-state apply waits until re-enabled, then use mapped-branch merge or
   protected manual dispatch.
 
-#### `bootstrap_dispatch_fanout=false`
+#### Greenfield onboarding
 
-Complete pending Greenfield onboarding with protected control
-`onboarding_dispatch` for that `tenant_id` (requires control secrets/variables).
+After Bootstrap completes for a Greenfield tenant, the control pipeline
+automatically runs the **`fanout` job** (bounded onboarding): platform scope
+first, then only the new tenant(s) across all environments. If
+`dispatch_enabled=false`, scaffolding and foundation still run; tenant apply
+waits until re-enabled. If `fanout` fails after markers exist, retry only the
+failed `fanout` job — do not rely on a full control pipeline rerun. To resume
+after re-enabling dispatch, merge a change to the tenant repository or manually
+trigger the tenant's Dispatcher jobs.
 
 #### Control revision mismatch
 

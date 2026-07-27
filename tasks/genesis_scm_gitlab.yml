@@ -5,9 +5,37 @@
 # Control files are never written to desired-state repositories.
 #
 # Required variables: control_scm_org, control_repo, control_branch, genesis_repos,
-#   platform_repos, scm_api_token, and, for repo_mode=create, the platform and
-#   control namespace IDs,
-#   repo_visibility, _config_yml_content, _tenants_yml_content
+#   platform_repos, scm_api_token, platform_scm_org, repo_visibility,
+#   _config_yml_content, _tenants_yml_content
+# For repo_mode=create, namespace IDs are resolved internally from SCM org paths.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Step 0: Resolve GitLab group IDs (create-mode only; fail before mutation)
+# ═══════════════════════════════════════════════════════════════════════════
+
+- name: "GL – Resolve control group namespace ID"
+  ansible.builtin.include_tasks: gitlab_resolve_group.yml
+  vars:
+    gitlab_group_full_path: "{{ control_scm_org }}"
+  when: repo_mode == 'create'
+
+- name: "GL – Store control namespace ID"
+  ansible.builtin.set_fact:
+    _gl_control_namespace_id: "{{ gitlab_resolved_namespace_id }}"
+  when: repo_mode == 'create'
+
+- name: "GL – Resolve platform group namespace ID"
+  ansible.builtin.include_tasks: gitlab_resolve_group.yml
+  vars:
+    gitlab_group_full_path: "{{ platform_scm_org }}"
+  when:
+    - repo_mode == 'create'
+    - platform_scm_org != control_scm_org
+
+- name: "GL – Store platform namespace ID (same group as control when paths match)"
+  ansible.builtin.set_fact:
+    _gl_platform_namespace_id: "{{ _gl_control_namespace_id if platform_scm_org == control_scm_org else gitlab_resolved_namespace_id }}"
+  when: repo_mode == 'create'
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Step 1: Create all platform repos (tolerates already-exists)
@@ -23,7 +51,7 @@
     body:
       name: "{{ item.name }}"
       description: "{{ item.description }}"
-      namespace_id: "{{ control_namespace_id if item.repository_class == 'control' else platform_namespace_id }}"
+      namespace_id: "{{ _gl_control_namespace_id if item.repository_class == 'control' else _gl_platform_namespace_id }}"
       visibility: "{{ repo_visibility }}"
       initialize_with_readme: true
     status_code: [200, 201, 400]
@@ -33,7 +61,7 @@
   register: _gl_repo_result
   loop: "{{ genesis_repos }}"
   loop_control:
-    label: "{{ item.name }}@{{ control_namespace_id if item.repository_class == 'control' else platform_namespace_id }}"
+    label: "{{ item.name }}@{{ _gl_control_namespace_id if item.repository_class == 'control' else _gl_platform_namespace_id }}"
   when: repo_mode == 'create'
 
 - name: "GL – Look up project IDs"

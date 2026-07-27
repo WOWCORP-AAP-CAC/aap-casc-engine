@@ -37,16 +37,10 @@
     control_repo: "{{ lookup('env', 'CONTROL_REPO') | default('casc-platform-control', true) }}"
     control_branch: "{{ lookup('env', 'CONTROL_BRANCH') | default('main', true) }}"
     engine_repo: "{{ lookup('env', 'ENGINE_REPO') | default('aap-casc-engine', true) }}"
-    aap_engine_host: "{{ lookup('env', 'AAP_ENGINE_HOST') | default('', true) }}"
     repo_visibility: "{{ lookup('env', 'REPO_VISIBILITY') | default('private', true) }}"
     _repo_private: "{{ repo_visibility == 'private' }}"
     repo_mode: "{{ lookup('env', 'REPO_MODE') | default('create', true) }}"
     platform_repo: "{{ lookup('env', 'PLATFORM_REPO') | default('casc-platform-global', true) }}"
-
-    # GitLab-specific: numeric namespace IDs. control_namespace_id defaults to the
-    # platform namespace; set it explicitly when control_scm_org is a different group.
-    platform_namespace_id: "{{ lookup('env', 'PLATFORM_NAMESPACE_ID') | default('') }}"
-    control_namespace_id: "{{ lookup('env', 'CONTROL_NAMESPACE_ID') | default(lookup('env', 'PLATFORM_NAMESPACE_ID') | default('', true), true) }}"
 
     # Day-0 environment topology — provided via JT extra_vars or survey.
     env_branch_map:
@@ -56,7 +50,6 @@
       prd: main
 
     create_missing_env_branches: "{{ lookup('env', 'CREATE_MISSING_ENV_BRANCHES') | default(true, true) | bool }}"
-    bootstrap_dispatch_fanout: "{{ lookup('env', 'BOOTSTRAP_DISPATCH_FANOUT') | default(true, true) | bool }}"
     genesis_jt_name: "{{ lookup('env', 'GENESIS_JT_NAME') | default('jt-platform-genesis', true) }}"
     bootstrap_jt_name: "{{ lookup('env', 'BOOTSTRAP_JT_NAME') | default('jt-platform-bootstrap_tenant', true) }}"
     dispatcher_jt_name: "{{ lookup('env', 'DISPATCHER_JT_NAME') | default('jt-platform-casc_dispatcher', true) }}"
@@ -175,20 +168,6 @@
           - repo_visibility in ['public', 'private']
         fail_msg: >-
           repo_visibility must be 'public' or 'private'. Got: '{{ repo_visibility }}'.
-
-    - name: "Validate GitLab-specific inputs"
-      ansible.builtin.assert:
-        that:
-          - platform_namespace_id | length > 0
-          - control_namespace_id | length > 0
-          - control_scm_org == platform_scm_org or (control_namespace_id | string) != (platform_namespace_id | string)
-        fail_msg: >-
-          GitLab Genesis requires platform_namespace_id and control_namespace_id.
-          When control_scm_org differs from platform_scm_org, set CONTROL_NAMESPACE_ID
-          to the numeric ID of the control group (must not equal PLATFORM_NAMESPACE_ID).
-      when:
-        - scm_provider == 'gitlab'
-        - repo_mode == 'create'
 
     - name: "Validate env_branch_map structure"
       ansible.builtin.assert:

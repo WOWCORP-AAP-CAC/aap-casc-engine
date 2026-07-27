@@ -11,7 +11,6 @@ import base64
 import json
 import os
 import re
-import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -47,68 +46,6 @@ DEFAULT_JT = {
     "dispatcher": "jt-platform-casc_dispatcher",
     "drift_detection": "jt-platform-drift_detection",
 }
-
-
-def normalize_host(raw: str) -> str:
-    raw = (raw or "").rstrip("/")
-    if raw.startswith("http://") or raw.startswith("https://"):
-        return raw
-    return f"https://{raw}"
-
-
-def mask_token(token: str) -> None:
-    if not token:
-        return
-    # GitHub Actions
-    print(f"::add-mask::{token}")
-    # Also emit a sanitized notice for GitLab logs
-    if os.environ.get("GITLAB_CI"):
-        print("Masked AAP launcher token for subsequent log lines.")
-
-
-def resolve_env_creds(env_key: str, targets_json: str | None = None) -> tuple[str, list[str]]:
-    raw = targets_json if targets_json is not None else os.environ.get("AAP_ENV_TARGETS_JSON", "")
-    if not raw:
-        raise ValueError(f"AAP_ENV_TARGETS_JSON is required for env={env_key}")
-    try:
-        targets = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError("AAP_ENV_TARGETS_JSON must be valid JSON") from exc
-    if not isinstance(targets, dict):
-        raise ValueError("AAP_ENV_TARGETS_JSON must be a JSON object keyed by environment")
-    entry = targets.get(env_key)
-    if not isinstance(entry, dict):
-        raise ValueError(f"No credentials found for env={env_key}")
-    host = entry.get("host")
-    token = entry.get("token")
-    if not host or not token:
-        raise ValueError(f"env={env_key} requires non-empty host and token")
-    if entry.get("username") or entry.get("password"):
-        raise ValueError(f"env={env_key} must use bearer token only; username/password is rejected")
-    mask_token(str(token))
-    return normalize_host(str(host)), ["-H", f"Authorization: Bearer {token}"]
-
-
-def wait_for_terminal(host: str, auth_args: list[str], job_id: int, timeout_minutes: int) -> None:
-    checks = max(1, int(timeout_minutes) * 6)
-    for i in range(1, checks + 1):
-        subprocess.run(["sleep", "10"], check=False)
-        result = subprocess.run(
-            ["curl", "-sk"] + auth_args + [f"{host}/api/controller/v2/jobs/{job_id}/"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        try:
-            status = json.loads(result.stdout).get("status", "unknown")
-        except json.JSONDecodeError:
-            status = "unknown"
-        print(f"  Status: {status} ({i}/{checks})")
-        if status == "successful":
-            return
-        if status in ("failed", "error", "canceled"):
-            raise RuntimeError(f"Dispatcher job {job_id} ended {status}")
-    raise RuntimeError(f"Dispatcher job {job_id} did not complete within {timeout_minutes} minutes")
 
 
 def load_yaml_file(path: str) -> dict[str, Any]:
@@ -174,14 +111,31 @@ def load_env_names(root: str, control_config: str = "") -> list[str]:
     return names
 
 
-def desired_state_search_dirs(root: str, control_config: str = "") -> list[str]:
+def require_base_directory(root: str, caller_role: str = "tenant") -> None:
+    """Fail closed when platform/tenant repos lack base/ (control exempt)."""
+    role = (caller_role or "tenant").strip().lower()
+    if role == "control":
+        return
+    if not os.path.isdir(os.path.join(root, "base")):
+        raise ValueError(
+            "Platform/tenant repositories require a base/ directory; "
+            "flat-root desired state is not supported"
+        )
+
+
+def desired_state_search_dirs(
+    root: str, control_config: str = "", caller_role: str = "tenant"
+) -> list[str]:
     """Return only base/ plus env_branch_map environment directories that exist.
 
     Unrelated top-level directories (docs/, governance/, etc.) are never scanned.
+    Platform/tenant callers require base/; control callers are exempt.
     """
-    dirs: list[str] = []
-    if os.path.isdir(os.path.join(root, "base")):
-        dirs.append("base")
+    require_base_directory(root, caller_role=caller_role)
+    role = (caller_role or "tenant").strip().lower()
+    if role == "control":
+        return []
+    dirs: list[str] = ["base"]
     for env_name in load_env_names(root, control_config):
         if os.path.isdir(os.path.join(root, env_name)):
             dirs.append(env_name)
@@ -204,8 +158,11 @@ def iter_resource_yaml_files(
     if role == "control":
         return []
 
+    require_base_directory(root, caller_role=role)
     paths: list[str] = []
-    for search_dir in desired_state_search_dirs(root, control_config=control_config):
+    for search_dir in desired_state_search_dirs(
+        root, control_config=control_config, caller_role=role
+    ):
         start = os.path.join(root, search_dir)
         for current, dirs, files in os.walk(start):
             dirs[:] = [name for name in dirs if name not in EXCLUDED_RESOURCE_DIRS]
@@ -230,6 +187,8 @@ def validate_structure(
     if role == "control":
         print("Control repo: skipping desired-state structural validation")
         return
+
+    require_base_directory(root, caller_role=role)
 
     resource_types: dict[str, Any] = {
         "defaults": {"value_type": "list", "identity_field": "name"},
@@ -591,7 +550,6 @@ TENANT_RECORD_FIELDS = {
     "aap_organization",
     "team_name",
     "tenant_scm_org",
-    "tenant_scm_namespace_id",
     "repo_mode",
     "repo_visibility",
     "repo_name",
@@ -635,13 +593,6 @@ def normalize_tenant_record(record: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Tenant {tenant_id} brownfield onboarding does not accept team_name")
 
     tenant_scm_org = _required_string(record, "tenant_scm_org", tenant_id)
-    namespace_id = record.get("tenant_scm_namespace_id")
-    if namespace_id not in (None, ""):
-        if not isinstance(namespace_id, (str, int)) or not str(namespace_id).strip():
-            raise ValueError(
-                f"Tenant {tenant_id} tenant_scm_namespace_id must be a non-empty scalar"
-            )
-        namespace_id = str(namespace_id).strip()
     repo_mode = record.get("repo_mode", "create")
     status = record.get("status", "active")
     repo_visibility = record.get("repo_visibility", "private")
@@ -671,10 +622,6 @@ def normalize_tenant_record(record: dict[str, Any]) -> dict[str, Any]:
         }
     )
     normalized.pop("repo_name", None)
-    if namespace_id not in (None, ""):
-        normalized["tenant_scm_namespace_id"] = namespace_id
-    else:
-        normalized.pop("tenant_scm_namespace_id", None)
     if onboarding_mode == "greenfield":
         normalized["team_name"] = team_name
     else:
@@ -755,15 +702,7 @@ def validate_tenant_registry(
     return normalized
 
 
-def find_tenant(tenants_doc: dict[str, Any], tenant_id: str) -> dict[str, Any]:
-    requested = validate_tenant_id(tenant_id)
-    for tenant in validate_tenant_registry(tenants_doc):
-        if tenant["tenant_id"] == requested:
-            return tenant
-    raise ValueError(f"Tenant tenant_id={requested} is not registered in tenants.yml")
-
-
-SCAFFOLD_VERSION = 3
+SCAFFOLD_VERSION = 4
 
 
 def build_scaffold_marker(
@@ -786,9 +725,6 @@ def build_scaffold_marker(
         "onboarding_mode": normalized["onboarding_mode"],
         "repository": repository,
     }
-    namespace_id = normalized.get("tenant_scm_namespace_id")
-    if namespace_id not in (None, ""):
-        marker["tenant_scm_namespace_id"] = str(namespace_id)
     if normalized["onboarding_mode"] == "greenfield":
         marker["team_name"] = normalized["team_name"]
     return marker
@@ -829,7 +765,6 @@ def tenant_immutable_projection(tenant: dict[str, Any]) -> dict[str, Any]:
         "tenant_id": normalized["tenant_id"],
         "aap_organization": normalized["aap_organization"],
         "tenant_scm_org": normalized["tenant_scm_org"],
-        "tenant_scm_namespace_id": str(normalized.get("tenant_scm_namespace_id") or ""),
         "repo_mode": normalized["repo_mode"],
         "repo_visibility": normalized["repo_visibility"],
         "onboarding_mode": normalized["onboarding_mode"],
@@ -1008,7 +943,6 @@ def resolve_bootstrap_request(
         "aap_organization",
         "team_name",
         "tenant_scm_org",
-        "tenant_scm_namespace_id",
         "repo_mode",
         "repo_name",
         "onboarding_mode",
@@ -1034,235 +968,6 @@ def resolve_bootstrap_request(
     return registered_public, True
 
 
-def github_file_exists(org: str, repo: str, path: str, ref: str, token: str) -> bool:
-    try:
-        github_raw(org, repo, path, ref, token)
-        return True
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return False
-        raise
-
-
-def gitlab_file_exists(
-    api_url: str, project: str, path: str, ref: str, token: str
-) -> bool:
-    try:
-        gitlab_raw(api_url, project, path, ref, token)
-        return True
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return False
-        raise
-
-
-# Greenfield foundation artifacts written by Bootstrap.
-FOUNDATION_RESOURCES = (("organizations", "organizations"), ("teams", "teams"))
-
-
-def iter_foundation_targets(cfg: dict[str, Any], tenant_id: str) -> list[tuple[str, str]]:
-    """Return (repo_name, path) pairs for every required greenfield foundation file."""
-    tenant_id = validate_tenant_id(tenant_id)
-    platform_repo = platform_repo_name(cfg)
-    return [
-        (platform_repo, f"base/{combined_folder}/{tenant_id}.yml")
-        for _resource_type, combined_folder in FOUNDATION_RESOURCES
-    ]
-
-
-def validate_onboarding_preflight(
-    *,
-    provider: str,
-    control_org: str,
-    control_repo: str,
-    control_revision: str,
-    control_token: str,
-    tenant_id: str,
-    scm_token: str | None = None,
-    gitlab_api: str | None = None,
-) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
-    cfg = load_yaml_file("config.yml")
-    tenants_doc = load_yaml_file("tenants.yml")
-    normalized_tenants = validate_tenant_registry(tenants_doc, cfg)
-    tenant = next((item for item in normalized_tenants if item["tenant_id"] == validate_tenant_id(tenant_id)), None)
-    if tenant is None:
-        raise ValueError(f"Tenant tenant_id={tenant_id} is not registered in tenants.yml")
-    status = tenant.get("status", "active")
-    if status != "active":
-        raise ValueError(f"Tenant {tenant_id} status={status}; onboarding_dispatch requires active")
-    onboarding_mode = tenant.get("onboarding_mode", "greenfield")
-    if onboarding_mode != "greenfield":
-        raise ValueError(
-            f"Tenant {tenant_id} onboarding_mode={onboarding_mode}; "
-            "onboarding_dispatch is greenfield-only"
-        )
-    tenant_scm_org = tenant.get("tenant_scm_org")
-    if not tenant_scm_org:
-        raise ValueError(f"Tenant {tenant_id} is missing tenant_scm_org")
-    repository = tenant["repository"]
-    env_map = cfg.get("env_branch_map") or {}
-    if not isinstance(env_map, dict) or not env_map:
-        raise ValueError("config.yml env_branch_map must be a non-empty mapping")
-    mapped_branches = list(dict.fromkeys(env_map.values()))
-
-    token = scm_token or control_token
-    missing_markers = []
-    for branch in mapped_branches:
-        marker = ".aap-casc-engine/tenant-scaffold.yml"
-        if provider == "github":
-            exists = github_file_exists(
-                tenant_scm_org, repository, marker, branch, token
-            )
-        else:
-            exists = gitlab_file_exists(
-                gitlab_api or os.environ["CI_API_V4_URL"],
-                f"{tenant_scm_org}/{repository}",
-                marker,
-                branch,
-                token,
-            )
-        if not exists:
-            missing_markers.append(
-                f"{tenant_scm_org}/{repository}@{branch}:{marker}"
-            )
-    if missing_markers:
-        raise ValueError(
-            "Incomplete scaffold markers for onboarding_dispatch: " + ", ".join(missing_markers)
-        )
-
-    platform_scm_org = cfg.get("platform_scm_org") or control_org
-    missing_foundation = []
-    for branch in dict.fromkeys(env_map.values()):
-        for repo_name, path in iter_foundation_targets(cfg, tenant_id):
-            if provider == "github":
-                ok = github_file_exists(platform_scm_org, repo_name, path, branch, token)
-            else:
-                ok = gitlab_file_exists(
-                    gitlab_api or os.environ["CI_API_V4_URL"],
-                    f"{platform_scm_org}/{repo_name}",
-                    path,
-                    branch,
-                    token,
-                )
-            if not ok:
-                missing_foundation.append(f"{platform_scm_org}/{repo_name}@{branch}:{path}")
-    if missing_foundation:
-        raise ValueError(
-            "Missing greenfield foundation files for onboarding_dispatch: "
-            + ", ".join(missing_foundation[:12])
-            + (" ..." if len(missing_foundation) > 12 else "")
-        )
-
-    print(
-        f"Onboarding preflight OK for tenant={tenant_id} "
-        f"control={control_org}/{control_repo}@{control_revision}"
-    )
-    return cfg, tenant, list(env_map.keys())
-
-
-def launch_dispatcher(
-    *,
-    host: str,
-    auth_args: list[str],
-    jt_name: str,
-    extra_vars: dict[str, Any],
-    require_serialized: bool = True,
-) -> int:
-    jt_result = subprocess.run(
-        ["curl", "-sk"] + auth_args + [f"{host}/api/controller/v2/job_templates/?name={jt_name}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    try:
-        jt_data = json.loads(jt_result.stdout)
-        jt_id = jt_data["results"][0]["id"]
-    except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"JT '{jt_name}' not found on {host}") from exc
-    if require_serialized and jt_data["results"][0].get("allow_simultaneous", False):
-        raise RuntimeError("Dispatcher JT has allow_simultaneous=true — must be false for serialized mode")
-    launch = subprocess.run(
-        ["curl", "-sk", "-X", "POST"]
-        + auth_args
-        + [
-            "-H",
-            "Content-Type: application/json",
-            "-d",
-            json.dumps({"extra_vars": json.dumps(extra_vars)}),
-            f"{host}/api/controller/v2/job_templates/{jt_id}/launch/",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    try:
-        job_id = json.loads(launch.stdout).get("id")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Failed to launch dispatcher: {launch.stdout[:200]}") from exc
-    if not job_id:
-        raise RuntimeError(f"Failed to launch dispatcher: {launch.stdout[:200]}")
-    return int(job_id)
-
-
-def run_bounded_onboarding(
-    *,
-    environments: list[str],
-    tenant_id: str,
-    control_revision: str,
-    poll_timeout: int,
-    jt_name: str,
-    tenant_dispatch_enabled: bool = True,
-    trigger_source: str = "onboarding-dispatch",
-) -> None:
-    if not tenant_id:
-        raise ValueError("tenant_id is required")
-    if not environments:
-        raise ValueError("No environments in env_branch_map")
-
-    resolved: dict[str, tuple[str, list[str]]] = {}
-    errors = []
-    for env in environments:
-        try:
-            resolved[env] = resolve_env_creds(env)
-        except ValueError as exc:
-            errors.append(str(exc))
-    if errors:
-        for err in errors:
-            print(f"ERROR: {err}")
-        raise SystemExit(1)
-
-    for env in environments:
-        host, auth_args = resolved[env]
-        print(f"\n=== Onboarding env={env} on {host} ===")
-        scopes = [("platform", "")]
-        if tenant_dispatch_enabled:
-            scopes.append(("tenant", tenant_id))
-        else:
-            print(f"  Tenant {tenant_id} dispatch is paused; applying platform foundation only.")
-        for scope, selected_tenant_id in scopes:
-            extra_vars = {
-                "target_env": env,
-                "dispatch_scope": scope,
-                "tenant_id": selected_tenant_id,
-                "control_revision": control_revision,
-                "trigger_source": trigger_source,
-            }
-            if scope == "full":
-                raise RuntimeError("Refusing to launch full scope from onboarding path")
-            job_id = launch_dispatcher(
-                host=host,
-                auth_args=auth_args,
-                jt_name=jt_name,
-                extra_vars=extra_vars,
-            )
-            print(
-                f"  Dispatcher launched: job_id={job_id} scope={scope} "
-                f"tenant={selected_tenant_id or '-'}"
-            )
-            wait_for_terminal(host, auth_args, job_id, poll_timeout)
-    print("\n=== Bounded onboarding dispatch complete ===")
-
-
 def cmd_ensure_control(args: argparse.Namespace) -> int:
     revision = ensure_control_files(
         provider=args.provider,
@@ -1280,53 +985,6 @@ def cmd_ensure_control(args: argparse.Namespace) -> int:
             handle.write(f"control_revision={revision}\n")
     return 0
 
-
-def cmd_onboarding_dispatch(args: argparse.Namespace) -> int:
-    if args.operation != "onboarding_dispatch":
-        raise SystemExit("operation must be onboarding_dispatch")
-    if args.caller_role != "control":
-        raise SystemExit("onboarding_dispatch requires caller_role=control")
-    if args.repository != f"{args.control_scm_org}/{args.control_repo}":
-        raise SystemExit(
-            f"onboarding_dispatch requires repository {args.control_scm_org}/{args.control_repo}, "
-            f"got {args.repository}"
-        )
-    if args.ref_name and args.ref_name != args.control_branch:
-        raise SystemExit(
-            f"onboarding_dispatch requires control_branch={args.control_branch}, got {args.ref_name}"
-        )
-
-    control_revision = ensure_control_files(
-        provider=args.provider,
-        org=args.control_scm_org,
-        repo=args.control_repo,
-        branch=args.control_branch,
-        token=args.control_token,
-        revision=args.control_revision or None,
-        gitlab_api=args.gitlab_api,
-        dest_dir=".",
-    )
-    cfg, tenant, environments = validate_onboarding_preflight(
-        provider=args.provider,
-        control_org=args.control_scm_org,
-        control_repo=args.control_repo,
-        control_revision=control_revision,
-        control_token=args.control_token,
-        tenant_id=args.tenant_id,
-        scm_token=args.scm_token or args.control_token,
-        gitlab_api=args.gitlab_api,
-    )
-    jt_names = resolve_jt_names(cfg)
-    run_bounded_onboarding(
-        environments=environments,
-        tenant_id=args.tenant_id,
-        control_revision=control_revision,
-        poll_timeout=args.poll_timeout,
-        jt_name=jt_names["dispatcher"],
-        tenant_dispatch_enabled=tenant.get("dispatch_enabled", True),
-        trigger_source="onboarding-dispatch",
-    )
-    return 0
 
 
 def cmd_resolve_jt_names(args: argparse.Namespace) -> int:
@@ -1384,7 +1042,9 @@ def cmd_list_desired_state_dirs(args: argparse.Namespace) -> int:
         return 0
     try:
         for directory in desired_state_search_dirs(
-            args.root, control_config=args.control_config
+            args.root,
+            control_config=args.control_config,
+            caller_role=role,
         ):
             print(directory)
     except ValueError as exc:
@@ -1468,23 +1128,6 @@ def build_parser() -> argparse.ArgumentParser:
     ensure.add_argument("--dest-dir", default=".")
     ensure.add_argument("--github-output", default="")
     ensure.set_defaults(func=cmd_ensure_control)
-
-    onboard = sub.add_parser("onboarding-dispatch", help="Protected bounded onboarding continuation")
-    onboard.add_argument("--provider", choices=["github", "gitlab"], required=True)
-    onboard.add_argument("--operation", required=True)
-    onboard.add_argument("--caller-role", required=True)
-    onboard.add_argument("--repository", required=True)
-    onboard.add_argument("--ref-name", default="")
-    onboard.add_argument("--control-scm-org", required=True)
-    onboard.add_argument("--control-repo", required=True)
-    onboard.add_argument("--control-branch", required=True)
-    onboard.add_argument("--control-token", required=True)
-    onboard.add_argument("--scm-token", default="")
-    onboard.add_argument("--tenant-id", required=True)
-    onboard.add_argument("--control-revision", default="")
-    onboard.add_argument("--poll-timeout", type=int, default=30)
-    onboard.add_argument("--gitlab-api", default="")
-    onboard.set_defaults(func=cmd_onboarding_dispatch)
 
     jt = sub.add_parser("resolve-jt-names", help="Resolve JT names from config.yml")
     jt.add_argument("--config", default="config.yml")
