@@ -2,8 +2,9 @@
 # AAP Multi-Tenant CasC Engine - Bootstrap tenant SCM state.
 #
 # Greenfield creates a universal two-object foundation declaration: one AAP
-# Organization and one Team. Brownfield scaffolds SCM only. Users, RBAC,
-# credentials, execution environments, and SCM membership remain customer policy.
+# Organization (keyed) and one Team (atomic overlay). Brownfield scaffolds SCM
+# only. Users, RBAC, credentials, execution environments, and SCM membership
+# remain customer policy.
 
 - name: "AAP Multi-Tenant CasC Engine - Bootstrap Tenant"
   hosts: localhost

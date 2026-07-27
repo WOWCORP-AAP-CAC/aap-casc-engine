@@ -1,45 +1,42 @@
 ---
-# Allowed top-level YAML keys — must match infra.aap_configuration dispatch variable names.
-# Sourced from: infra.aap_configuration/roles/dispatch/defaults/main.yml
-# Override this list to restrict or extend accepted resource types per deployment.
+# Allowed top-level YAML keys — must match schemas/resource-types.yml exceptions.
+# Includes the 49 declarative collection dispatch vars plus two engine-side Hub
+# RBAC extensions (hub_roles, hub_group_roles). Action keys remain unsupported.
 casc_allowed_resource_keys:
-  # Gateway (AAP Platform)
+  # Keyed (scalar identity)
   - aap_organizations
-  - aap_applications
-  - aap_teams
   - aap_user_accounts
   - gateway_authenticators
-  - gateway_authenticator_maps
+  - gateway_service_keys
+  - gateway_role_definitions
+  - controller_credential_types
+  - controller_instances
+  - controller_instance_groups
+  - hub_namespaces
+  - eda_credential_types
+  # Raw settings
   - gateway_settings
+  - controller_settings
+  # Atomic (scoped/compound declarative — ROADMAP-001)
+  - aap_teams
+  - aap_applications
+  - gateway_authenticator_maps
   - gateway_http_ports
   - gateway_service_clusters
-  - gateway_service_keys
   - gateway_service_nodes
   - gateway_services
-  - gateway_role_definitions
-  - gateway_role_team_assignments
-  - gateway_role_user_assignments
   - gateway_routes
-  # Automation Hub
-  - hub_namespaces
+  - gateway_role_user_assignments
+  - gateway_role_team_assignments
   - hub_collections
+  - hub_roles
+  - hub_group_roles
   - hub_ee_registries
   - hub_ee_repositories
-  - hub_ee_repository_sync
   - hub_ee_images
   - hub_collection_remotes
   - hub_collection_repositories
-  - hub_collection_list
-  - hub_custom_collections
-  # Automation Hub RBAC (engine-side — not in collection dispatcher)
-  - hub_group_roles
-  - hub_roles
-  # Automation Controller
-  - controller_settings
-  - controller_instances
-  - controller_instance_groups
   - controller_labels
-  - controller_credential_types
   - controller_credentials
   - controller_credential_input_sources
   - controller_execution_environments
@@ -48,16 +45,11 @@ casc_allowed_resource_keys:
   - controller_inventories
   - controller_inventory_sources
   - controller_hosts
-  - controller_bulk_hosts
   - controller_groups
   - controller_templates
   - controller_workflows
   - controller_schedules
   - controller_roles
-  - controller_launch_jobs
-  - controller_workflow_launch_jobs
-  # Event-Driven Ansible (EDA)
-  - eda_credential_types
   - eda_credentials
   - eda_credential_input_sources
   - eda_controller_tokens
@@ -66,6 +58,4 @@ casc_allowed_resource_keys:
   - eda_decision_environments
   - eda_rulebook_activations
 
-# Path to the resource-types.yml metadata (relative to engine root).
-# Used to look up value_type and identity_field for merge and validation.
 casc_resource_types_file: "{{ playbook_dir }}/schemas/resource-types.yml"

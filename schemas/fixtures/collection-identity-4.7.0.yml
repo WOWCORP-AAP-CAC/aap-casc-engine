@@ -1,0 +1,94 @@
+---
+# Representative identity evidence for pinned infra.aap_configuration 4.7.0.
+# Companion inventory: schemas/collection-dispatch-4.7.0.yml
+# (53 unique active vars from roles/dispatch/defaults/main.yml).
+
+collection:
+  name: infra.aap_configuration
+  version: "4.7.0"
+
+scalar_identity_examples:
+  - var: aap_organizations
+    identity_field: name
+    evidence: "gateway_organizations README Unique value: name"
+  - var: aap_user_accounts
+    identity_field: username
+    evidence: "gateway_users README Unique value: username"
+  - var: gateway_authenticators
+    identity_field: name
+    evidence: "gateway_authenticators README Unique value: name"
+  - var: gateway_service_keys
+    identity_field: name
+    evidence: "gateway_service_keys README Unique value: name"
+  - var: gateway_role_definitions
+    identity_field: name
+    evidence: "gateway_role_definitions README: name must be unique"
+  - var: controller_credential_types
+    identity_field: name
+    evidence: "controller_credential_types README: name lookup"
+  - var: controller_instances
+    identity_field: hostname
+    evidence: "controller_instances README: hostname required"
+  - var: controller_instance_groups
+    identity_field: name
+    evidence: "controller_instance_groups README: name lookup"
+  - var: hub_namespaces
+    identity_field: name
+    evidence: "hub_namespace README: name lookup"
+  - var: eda_credential_types
+    identity_field: name
+    evidence: "eda_credential_types role: name is the object key"
+
+raw_examples:
+  - var: gateway_settings
+    evidence: "gateway_settings role accepts a settings mapping"
+  - var: controller_settings
+    evidence: "controller_settings role accepts a settings mapping (settings: {...})"
+
+# Declarative scoped/compound — merge_mode: atomic (ROADMAP-001).
+atomic_examples:
+  - var: aap_teams
+    naming_identity_field: name
+    evidence: "gateway_teams Unique value [name, organization]; atomic overlay"
+  - var: aap_applications
+    naming_identity_field: name
+    evidence: "scoped name+organization; atomic overlay"
+  - var: controller_projects
+    naming_identity_field: name
+    evidence: "organization-scoped; atomic overlay"
+  - var: controller_schedules
+    naming_identity_field: name
+    evidence: "scoped name+unified_job_template; atomic overlay"
+  - var: hub_collections
+    naming_identity_field: name
+    evidence: "compound namespace+name+version; naming uses scalar name"
+  - var: gateway_role_user_assignments
+    evidence: "compound RBAC assignment; atomic overlay"
+  - var: eda_credential_input_sources
+    evidence: "compound input-source family; present in 4.7.0 dispatch defaults"
+  - var: hub_roles
+    naming_identity_field: name
+    evidence: "engine-side Hub RBAC extension; scalar name"
+  - var: hub_group_roles
+    evidence: "engine-side Hub RBAC extension; compound groups+role_list"
+
+action_examples:
+  - var: controller_bulk_hosts
+    evidence: "bulk create via inventory+hosts; not declarative overlay state"
+  - var: controller_launch_jobs
+    evidence: "imperative job launch"
+  - var: controller_workflow_launch_jobs
+    evidence: "imperative workflow launch"
+  - var: hub_ee_repository_sync
+    evidence: "imperative sync action"
+
+# Optional-disabled publish variables (not in the active 53).
+# Enabled only when hub_configuration_dispatcher_roles_include_publish=true.
+optional_publish_examples:
+  - hub_collection_list
+  - hub_custom_collections
+
+# Engine-side extensions (supported atomic; not in the active 53 dispatcher vars).
+engine_extension_examples:
+  - hub_roles
+  - hub_group_roles

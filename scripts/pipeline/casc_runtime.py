@@ -48,12 +48,76 @@ DEFAULT_JT = {
 }
 
 
-def load_yaml_file(path: str) -> dict[str, Any]:
+class UnsafeString(str):
+    """Preserve Ansible !unsafe scalars through load/merge/dump."""
+
+
+def _unsafe_constructor(loader: yaml.Loader, node: yaml.Node) -> UnsafeString:
+    return UnsafeString(loader.construct_scalar(node))
+
+
+def _unsafe_representer(dumper: yaml.Dumper, data: UnsafeString) -> yaml.Node:
+    return dumper.represent_scalar("!unsafe", str(data))
+
+
+class CascLoader(yaml.SafeLoader):
+    pass
+
+
+class CascDumper(yaml.SafeDumper):
+    pass
+
+
+CascLoader.add_constructor("!unsafe", _unsafe_constructor)
+CascDumper.add_representer(UnsafeString, _unsafe_representer)
+
+
+def load_yaml_document(path: str) -> Any:
+    """Load YAML with CascLoader (!unsafe-aware). Any document root is allowed."""
     with open(path, encoding="utf-8") as handle:
-        data = yaml.safe_load(handle) or {}
+        return yaml.load(handle, Loader=CascLoader)
+
+
+def load_yaml_file(path: str) -> dict[str, Any]:
+    data = load_yaml_document(path) or {}
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
     return data
+
+
+def dump_yaml(data: Any) -> str:
+    """Consumer-facing dump — preserve author key order."""
+    return yaml.dump(
+        data,
+        Dumper=CascDumper,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+
+def dump_yaml_identity(data: Any) -> str:
+    """Canonical marker for exact-dict uniqueness (key-order insensitive).
+
+    Uses CascDumper so !unsafe scalars remain distinct from plain strings,
+    with sort_keys=True so semantically identical mappings dedupe.
+    """
+    return yaml.dump(
+        data,
+        Dumper=CascDumper,
+        sort_keys=True,
+        default_flow_style=False,
+    )
+
+
+def json_ready(value: Any) -> Any:
+    """Convert Casc YAML values (including UnsafeString) into JSON-serializable form."""
+    if isinstance(value, UnsafeString):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): json_ready(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_ready(item) for item in value]
+    return value
 
 
 EXCLUDED_RESOURCE_DIRS = {
@@ -175,32 +239,79 @@ def iter_resource_yaml_files(
     return sorted(paths)
 
 
-def validate_structure(
-    root: str,
-    resource_types_path: str,
-    allowed_keys_path: str = "",
-    caller_role: str = "tenant",
-    control_config: str = "",
-) -> None:
-    """Validate desired-state YAML shape for platform/tenant callers."""
-    role = (caller_role or "tenant").strip().lower()
-    if role == "control":
-        print("Control repo: skipping desired-state structural validation")
-        return
-
-    require_base_directory(root, caller_role=role)
-
-    resource_types: dict[str, Any] = {
-        "defaults": {"value_type": "list", "identity_field": "name"},
-        "exceptions": {},
-    }
-    if os.path.exists(resource_types_path):
-        loaded = load_yaml_file(resource_types_path)
-        resource_types.update(loaded)
+def validate_catalog_schema(resource_types: dict[str, Any]) -> None:
+    """Fail closed on catalog shape errors shared by CI and runtime."""
     defaults = resource_types.get("defaults") or {}
     exceptions = resource_types.get("exceptions") or {}
+    unsupported = resource_types.get("unsupported") or {}
+    if not isinstance(defaults, dict) or not isinstance(exceptions, dict):
+        raise ValueError("resource-types.yml defaults/exceptions must be mappings")
+    if not isinstance(unsupported, dict):
+        raise ValueError("resource-types.yml unsupported must be a mapping")
 
-    allowed_keys = None
+    for key, meta in exceptions.items():
+        if not isinstance(meta, dict):
+            raise ValueError(f'resource-types.yml exceptions["{key}"] must be a mapping')
+        merge_mode = meta.get("merge_mode", defaults.get("merge_mode"))
+        value_type = meta.get("value_type", defaults.get("value_type", "list"))
+        if merge_mode == "raw":
+            if value_type != "raw":
+                raise ValueError(
+                    f'resource-types.yml exceptions["{key}"] merge_mode "raw" '
+                    f'requires value_type: raw (got {value_type!r})'
+                )
+        elif merge_mode == "keyed":
+            if value_type != "list":
+                raise ValueError(
+                    f'resource-types.yml exceptions["{key}"] merge_mode "keyed" '
+                    f'requires value_type: list (got {value_type!r})'
+                )
+            if meta.get("identity_scalar", defaults.get("identity_scalar", True)) is not True:
+                raise ValueError(
+                    f'resource-types.yml exceptions["{key}"] keyed types require '
+                    f"identity_scalar: true"
+                )
+            id_field = meta.get("identity_field", defaults.get("identity_field", "name"))
+            if not isinstance(id_field, str) or not id_field:
+                raise ValueError(
+                    f'resource-types.yml exceptions["{key}"] keyed types require '
+                    f"identity_field"
+                )
+        elif merge_mode == "atomic":
+            if value_type != "list":
+                raise ValueError(
+                    f'resource-types.yml exceptions["{key}"] merge_mode "atomic" '
+                    f'requires value_type: list (got {value_type!r})'
+                )
+        else:
+            raise ValueError(
+                f'resource-types.yml exceptions["{key}"] merge_mode must be '
+                f'"keyed", "raw", or "atomic" (got {merge_mode!r})'
+            )
+
+    for key, meta in unsupported.items():
+        if not isinstance(meta, dict) or not str(meta.get("reason") or "").strip():
+            raise ValueError(
+                f'resource-types.yml unsupported["{key}"] requires a non-empty reason'
+            )
+        if meta.get("merge_mode") in {"keyed", "raw", "atomic"}:
+            raise ValueError(
+                f'resource-types.yml unsupported["{key}"] must not assign a supported '
+                f"merge_mode"
+            )
+        if key in exceptions:
+            raise ValueError(
+                f'resource-types.yml key "{key}" cannot be both supported and unsupported'
+            )
+
+
+def resolve_allowed_keys(
+    resource_types: dict[str, Any],
+    root: str,
+    allowed_keys_path: str = "",
+) -> set[str]:
+    exceptions = resource_types.get("exceptions") or {}
+    catalog_keys = set(exceptions)
     key_candidates = []
     if allowed_keys_path:
         key_candidates.append(allowed_keys_path)
@@ -212,63 +323,350 @@ def validate_structure(
             ),
         ]
     )
+    allowed_keys = None
     for candidate in key_candidates:
         if candidate and os.path.exists(candidate):
             allowed_keys = set(
                 (load_yaml_file(candidate).get("casc_allowed_resource_keys") or [])
             )
             break
+    if allowed_keys is None:
+        return catalog_keys
+    if allowed_keys != catalog_keys:
+        missing = sorted(catalog_keys - allowed_keys)
+        extra = sorted(allowed_keys - catalog_keys)
+        raise ValueError(
+            "casc_allowed_resource_keys must match resource-types.yml exceptions "
+            f"exactly. missing_from_allowlist={missing} "
+            f"extra_in_allowlist={extra}"
+        )
+    return allowed_keys
 
-    errors: list[str] = []
-    paths = iter_resource_yaml_files(
-        root, caller_role=role, control_config=control_config
+
+def _resource_meta(resource_types: dict[str, Any], key: str) -> dict[str, Any]:
+    defaults = resource_types.get("defaults") or {}
+    exceptions = resource_types.get("exceptions") or {}
+    meta = dict(defaults)
+    meta.update(exceptions.get(key) or {})
+    return meta
+
+
+def _exact_unique(items: list[Any]) -> list[Any]:
+    """Preserve order; drop exact duplicate mappings/scalars."""
+    seen: set[str] = set()
+    out: list[Any] = []
+    for item in items:
+        marker = dump_yaml_identity(item)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        out.append(item)
+    return out
+
+
+def _iter_layer_files(layer_root: str) -> list[tuple[str, str]]:
+    """Return (relpath, abspath) for YAML under layer_root, excluding samples."""
+    if not os.path.isdir(layer_root):
+        return []
+    found: list[tuple[str, str]] = []
+    for dirpath, dirnames, filenames in os.walk(layer_root):
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if d not in EXCLUDED_RESOURCE_DIRS and not d.startswith(".")
+        )
+        for name in sorted(filenames):
+            if not name.endswith((".yml", ".yaml")):
+                continue
+            if name.endswith(".sample") or name in EXCLUDED_RESOURCE_FILES:
+                continue
+            abspath = os.path.join(dirpath, name)
+            relpath = os.path.relpath(abspath, layer_root).replace("\\", "/")
+            found.append((relpath, abspath))
+    return found
+
+
+def _load_layer_documents(
+    layer_root: str,
+    allowed_keys: set[str],
+    unsupported: dict[str, Any],
+) -> dict[str, tuple[str, str, Any]]:
+    """Map relative path -> (abspath, resource_key, value)."""
+    docs: dict[str, tuple[str, str, Any]] = {}
+    for relpath, abspath in _iter_layer_files(layer_root):
+        data = load_yaml_file(abspath)
+        if len(data) != 1:
+            raise ValueError(
+                f"{abspath}: Expected exactly 1 top-level key, got {list(data)}"
+            )
+        key, value = next(iter(data.items()))
+        if key in unsupported:
+            raise ValueError(
+                f'{abspath}: Unsupported resource key "{key}" — '
+                f'{unsupported[key].get("reason", "unsupported")}'
+            )
+        if key not in allowed_keys:
+            raise ValueError(f'{abspath}: Unknown resource key "{key}"')
+        docs[relpath] = (abspath, key, value)
+    return docs
+
+
+def _validate_list_items(
+    key: str,
+    value: Any,
+    *,
+    abspath: str,
+    merge_mode: str,
+    id_field: str,
+    naming_supported: bool,
+) -> list[Any]:
+    if not isinstance(value, list):
+        raise ValueError(
+            f'{abspath}: Key "{key}" expected list, got {type(value).__name__}'
+        )
+    require_identity = merge_mode == "keyed" or (
+        merge_mode == "atomic" and naming_supported
     )
-    if not paths:
-        print("No desired-state YAML found — structural validation skipped")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f'{abspath}: Item {index} in "{key}" must be a mapping, '
+                f"got {type(item).__name__}"
+            )
+        if require_identity and id_field not in item:
+            raise ValueError(
+                f'{abspath}: Item {index} in "{key}" missing identity field '
+                f'"{id_field}"'
+            )
+    return value
+
+
+def merge_desired_state(
+    root: str,
+    env_filter: str,
+    resource_types_path: str,
+    allowed_keys_path: str = "",
+) -> dict[str, Any]:
+    """Merge base/ + <env>/ using the shared catalog contract (CI + runtime).
+
+    Path ownership: a relative path may contribute only one resource key across
+    base and env. Env replaces base at the same relative path.
+
+    keyed: identity overlay with hard uniqueness across the complete layer
+    raw: recursive dict combine (env wins)
+    atomic: path replace + concat + exact-dict unique; every item is a mapping
+    """
+    require_base_directory(root, caller_role="tenant")
+    resource_types = load_yaml_file(resource_types_path)
+    validate_catalog_schema(resource_types)
+    defaults = resource_types.get("defaults") or {}
+    exceptions = resource_types.get("exceptions") or {}
+    unsupported = resource_types.get("unsupported") or {}
+    allowed_keys = resolve_allowed_keys(resource_types, root, allowed_keys_path)
+
+    base_docs = _load_layer_documents(
+        os.path.join(root, "base"), allowed_keys, unsupported
+    )
+    env_root = os.path.join(root, env_filter) if env_filter else ""
+    env_docs = (
+        _load_layer_documents(env_root, allowed_keys, unsupported)
+        if env_root and os.path.isdir(env_root)
+        else {}
+    )
+
+    # Same relative path must keep the same resource key (replacement semantics).
+    for relpath, (env_path, env_key, _) in env_docs.items():
+        if relpath not in base_docs:
+            continue
+        base_path, base_key, _ = base_docs[relpath]
+        if base_key != env_key:
+            raise ValueError(
+                f'Path replace conflict at "{relpath}": base key "{base_key}" '
+                f'({base_path}) vs env key "{env_key}" ({env_path})'
+            )
+
+    def _group(
+        docs: dict[str, tuple[str, str, Any]],
+        *,
+        skip_paths: set[str] | None = None,
+    ) -> dict[str, list[tuple[str, Any, str]]]:
+        grouped: dict[str, list[tuple[str, Any, str]]] = {}
+        for relpath in sorted(docs):
+            if skip_paths and relpath in skip_paths:
+                continue
+            abspath, key, value = docs[relpath]
+            grouped.setdefault(key, []).append((relpath, value, abspath))
+        return grouped
+
+    # Atomic uses path replace (skip base paths present in env).
+    # Keyed/raw aggregate every file in each layer, then overlay/combine.
+    atomic_base = _group(base_docs, skip_paths=set(env_docs))
+    atomic_env = _group(env_docs)
+    keyed_base = _group(base_docs)
+    keyed_env = _group(env_docs)
+
+    all_keys = (
+        set(atomic_base)
+        | set(atomic_env)
+        | set(keyed_base)
+        | set(keyed_env)
+    )
+    merged: dict[str, Any] = {}
+    for key in sorted(all_keys):
+        if key not in exceptions:
+            raise ValueError(f'Unknown resource key "{key}"')
+        meta = _resource_meta(resource_types, key)
+        merge_mode = meta.get("merge_mode", defaults.get("merge_mode", "keyed"))
+        id_field = meta.get("identity_field", defaults.get("identity_field", "name"))
+        naming_supported = meta.get("naming_supported", True) is True
+
+        if merge_mode == "raw":
+            result: dict[str, Any] = {}
+            for relpath, value, abspath in keyed_base.get(key, []) + keyed_env.get(
+                key, []
+            ):
+                if not isinstance(value, dict):
+                    raise ValueError(
+                        f'{abspath}: Key "{key}" expected mapping (raw settings), '
+                        f"got {type(value).__name__}"
+                    )
+                result = _deep_combine(result, value)
+            merged[key] = result
+            continue
+
+        if merge_mode == "atomic":
+            ordered: list[Any] = []
+            for relpath, value, abspath in atomic_base.get(key, []) + atomic_env.get(
+                key, []
+            ):
+                items = _validate_list_items(
+                    key,
+                    value,
+                    abspath=abspath,
+                    merge_mode=merge_mode,
+                    id_field=id_field if isinstance(id_field, str) else "name",
+                    naming_supported=naming_supported,
+                )
+                ordered.extend(items)
+            merged[key] = _exact_unique(ordered)
+            continue
+
+        # keyed — hard uniqueness across the complete base layer and env layer
+        def _flatten(
+            layer_contrib: list[tuple[str, Any, str]], label: str
+        ) -> list[dict[str, Any]]:
+            items: list[dict[str, Any]] = []
+            seen: dict[Any, str] = {}
+            for relpath, value, abspath in layer_contrib:
+                validated = _validate_list_items(
+                    key,
+                    value,
+                    abspath=abspath,
+                    merge_mode="keyed",
+                    id_field=id_field,
+                    naming_supported=True,
+                )
+                for item in validated:
+                    ident = item[id_field]
+                    if ident in seen:
+                        raise ValueError(
+                            f'Key "{key}" duplicate keyed identity "{id_field}"='
+                            f"{ident!r} across {label} layer "
+                            f"({seen[ident]} and {abspath})"
+                        )
+                    seen[ident] = abspath
+                    items.append(item)
+            return items
+
+        base_list = _flatten(keyed_base.get(key, []), "base")
+        env_list = _flatten(keyed_env.get(key, []), "env")
+        env_by_id = {item[id_field]: item for item in env_list}
+        out_list: list[dict[str, Any]] = []
+        for item in base_list:
+            ident = item[id_field]
+            if ident in env_by_id:
+                out_list.append(_deep_combine(item, env_by_id[ident]))
+            else:
+                out_list.append(item)
+        base_ids = {item[id_field] for item in base_list}
+        for item in env_list:
+            if item[id_field] not in base_ids:
+                out_list.append(item)
+        merged[key] = out_list
+
+    return merged
+
+
+def validate_structure(
+    root: str,
+    resource_types_path: str,
+    allowed_keys_path: str = "",
+    caller_role: str = "tenant",
+    control_config: str = "",
+) -> None:
+    """Validate desired-state using the same merge contract as Dispatcher/Drift."""
+    role = (caller_role or "tenant").strip().lower()
+    if role == "control":
+        print("Control repo: skipping desired-state structural validation")
         return
 
-    for fpath in paths:
-        try:
-            data = load_yaml_file(fpath)
-        except Exception as exc:  # noqa: BLE001 - surface parse errors to CI
-            errors.append(f"{fpath}: Failed to parse YAML — {exc}")
-            continue
-        keys = list(data.keys())
-        if len(keys) != 1:
-            errors.append(
-                f"{fpath}: Expected exactly 1 top-level key, got {len(keys)}: {keys}"
-            )
-            continue
-        key = keys[0]
-        if allowed_keys is not None and key not in allowed_keys:
-            errors.append(
-                f'{fpath}: Unknown resource key "{key}" (not in casc_allowed_resource_keys)'
-            )
-            continue
-        exc_meta = exceptions.get(key) or {}
-        vtype = exc_meta.get("value_type", defaults.get("value_type", "list"))
-        id_field = exc_meta.get(
-            "identity_field", defaults.get("identity_field", "name")
-        )
-        value = data[key]
-        if vtype == "list":
-            if not isinstance(value, list):
-                errors.append(
-                    f'{fpath}: Key "{key}" expected list, got {type(value).__name__}'
-                )
-                continue
-            for index, item in enumerate(value):
-                if isinstance(item, dict) and id_field not in item:
-                    errors.append(
-                        f'{fpath}: Item {index} in "{key}" missing identity field '
-                        f'"{id_field}"'
-                    )
+    require_base_directory(root, caller_role=role)
+    resource_types = load_yaml_file(resource_types_path)
+    validate_catalog_schema(resource_types)
+    resolve_allowed_keys(resource_types, root, allowed_keys_path)
 
-    if errors:
-        raise ValueError(
-            "Structural validation errors:\n  " + "\n  ".join(errors)
+    # Exercise every base + mapped-environment combination (empty env = base only).
+    env_names = load_env_names(root, control_config=control_config)
+    targets = [""] + list(env_names)
+    for env_filter in targets:
+        merge_desired_state(
+            root=root,
+            env_filter=env_filter,
+            resource_types_path=resource_types_path,
+            allowed_keys_path=allowed_keys_path,
         )
     print("=== ALL YAML FILES PASSED STRUCTURAL VALIDATION ===")
+
+
+def _deep_combine(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in overlay.items():
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(value, dict)
+        ):
+            result[key] = _deep_combine(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def write_merged_resources(
+    merged: dict[str, Any], output_dir: str, repo_scope: str
+) -> None:
+    os.makedirs(output_dir, exist_ok=True)
+    for key, value in merged.items():
+        payload = {f"{key}_{repo_scope}": value}
+        dest = os.path.join(output_dir, f"{key}_{repo_scope}.yml")
+        with open(dest, "w", encoding="utf-8") as handle:
+            handle.write(dump_yaml(payload))
+
+
+def cmd_merge_desired_state(args: argparse.Namespace) -> int:
+    merged = merge_desired_state(
+        root=args.root,
+        env_filter=args.env,
+        resource_types_path=args.resource_types,
+        allowed_keys_path=args.allowed_keys,
+    )
+    write_merged_resources(merged, args.output_dir, args.repo_scope)
+    print(
+        f"=== MERGED {len(merged)} resource types → {args.output_dir} "
+        f"(scope={args.repo_scope}, env={args.env}) ==="
+    )
+    return 0
+
 
 
 def validate_explicit_deletions(
@@ -1113,6 +1511,20 @@ def cmd_diff_tenants(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_yaml_to_json(args: argparse.Namespace) -> int:
+    """Convert CasC YAML (!unsafe-aware) to JSON for OPA and other consumers."""
+    data = load_yaml_document(args.input)
+    payload = json.dumps(json_ready(data))
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            if not payload.endswith("\n"):
+                handle.write("\n")
+    else:
+        print(payload)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CasC CI runtime helpers")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1153,6 +1565,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["control", "platform", "tenant"],
     )
     structure.set_defaults(func=cmd_validate_structure)
+
+    merge = sub.add_parser(
+        "merge-desired-state",
+        help="Merge base/ + env desired state (keyed/raw/atomic) into output YAML",
+    )
+    merge.add_argument("--root", required=True)
+    merge.add_argument("--env", required=True)
+    merge.add_argument("--resource-types", required=True)
+    merge.add_argument("--allowed-keys", default="")
+    merge.add_argument("--output-dir", required=True)
+    merge.add_argument("--repo-scope", required=True)
+    merge.set_defaults(func=cmd_merge_desired_state)
 
     deletions = sub.add_parser(
         "validate-deletions", help="Reject explicit deletion without audited support"
@@ -1204,6 +1628,19 @@ def build_parser() -> argparse.ArgumentParser:
     tenant_diff.add_argument("--gitlab-api", default="")
     tenant_diff.add_argument("--output", default="tenant_actions.json")
     tenant_diff.set_defaults(func=cmd_diff_tenants)
+
+    y2j = sub.add_parser(
+        "yaml-to-json",
+        help="Convert CasC YAML to JSON (!unsafe-aware; for OPA input)",
+    )
+    y2j.add_argument("input", help="Input YAML path")
+    y2j.add_argument(
+        "--output",
+        "-o",
+        default="",
+        help="Output JSON path (default: stdout)",
+    )
+    y2j.set_defaults(func=cmd_yaml_to_json)
     return parser
 
 

@@ -9,7 +9,7 @@ This repository contains orchestration metadata only:
 
 - `config.yml` — repository topology, environment branches, and Job Template names
 - `tenants.yml` — tenant registry
-- `naming-rules.yml.sample` — inert naming-policy example (rename, adapt, and uncomment as `naming-rules.yml` to activate)
+- `naming-rules.yml.sample` — inert comprehensive naming-policy example covering cataloged `naming_supported` types (rename, adapt, and uncomment as `naming-rules.yml` to activate; never auto-activates)
 
 Do not place AAP desired-state resource YAML in this repository. Use the
 separate platform desired-state repository and its environment branches.
@@ -27,7 +27,7 @@ to AAP when the CI/CD pipeline triggers.
 
 ```yaml
 ---
-{{ repo.casc_key | default('controller_projects') }}:
+{{ repo.casc_key | default('aap_organizations') }}:
   - name: example-resource
     description: Replace with your actual configuration
 ```

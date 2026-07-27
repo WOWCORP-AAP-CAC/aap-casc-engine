@@ -57,8 +57,10 @@ support matrix. The formal compatibility and upgrade contract remains
 
 | Prerequisite | Baseline |
 |---|---|
-| Collection | `infra.aap_configuration >=4.0.0,<5.0.0` ([`collections/requirements.yml`](../collections/requirements.yml)) |
-| Execution environment | EE image that **already contains** that collection and its certified transitive dependencies (jobs do not install the collection at runtime) |
+| Collection | **Pinned** `infra.aap_configuration==4.7.0` ([`collections/requirements.yml`](../collections/requirements.yml)), discovered via `ansible-galaxy collection list` on the validated nonproduction project/EE. Do not widen to a range. |
+| Resource catalog | [`schemas/resource-types.yml`](../schemas/resource-types.yml) — keyed / raw / atomic merge modes (see Merge contract below); launch/bulk/sync actions under `unsupported`; `hub_roles` / `hub_group_roles` are engine-side Hub RBAC extensions |
+| Naming sample | Genesis seeds inert [`examples/naming-rules.yml.sample`](../examples/naming-rules.yml.sample) covering every `naming_supported: true` catalog type (neutral `REPLACE_ME` placeholders; never auto-activates) |
+| Execution environment | EE/project install that resolves the pinned collection and its certified transitive dependencies |
 | AAP API | Management AAP for Genesis/Bootstrap; each target AAP listed in `AAP_ENV_TARGETS_JSON` for Dispatcher |
 | SCM API | GitHub or GitLab token suitable for the chosen Genesis/Bootstrap `repo_mode` |
 | Pipelines | Protected secrets/variables per provider and caller role (Part A secrets) |
@@ -70,6 +72,23 @@ support matrix. The formal compatibility and upgrade contract remains
 | CI launcher → AAP API | Bearer token only (`AAP_ENGINE_TOKEN`, tokens inside `AAP_ENV_TARGETS_JSON`) |
 | Dispatcher apply (`site.yml`) | Username/password via `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, `CONTROLLER_VERIFY_SSL` |
 | Drift compare (`drift-detect.yml`) | `CONTROLLER_OAUTH_TOKEN` preferred when set; otherwise username/password |
+
+### Merge contract (keyed / raw / atomic)
+
+CI structural validation and Dispatcher/Drift merging share one routine
+(`casc_runtime.merge_desired_state`) and evaluate every `base/` + mapped
+environment combination.
+
+| Mode | Consumer shape | Overlay behavior |
+|---|---|---|
+| `keyed` | List of mappings with a scalar `identity_field` | Match by identity; env fields win; **hard uniqueness across the complete base layer and complete env layer** (not only within one file) |
+| `raw` | Mapping (for controller settings: nested `settings: {...}`) | Recursive dict combine; env keys win |
+| `atomic` | List of mappings (complete declarations) | Same relative path in env **replaces** that base path (keys must match); remaining paths concat; exact-dict unique |
+
+Path ownership: a relative path under `base/` and `<env>/` must declare the same
+resource key, or validation fails. Launch / bulk-host / sync keys stay
+unsupported. Credential-type injectors that need literal Jinja must use Ansible
+`!unsafe` scalars; the engine preserves that tag through merge output.
 
 ---
 
@@ -164,10 +183,10 @@ organization).
 
 #### Execution environment
 
-Attach an EE that **already contains** Ansible plus
-`infra.aap_configuration >=4.0.0,<5.0.0` (and certified transitive deps from
-Automation Hub). Do not rely on the JT to install collections during the job for
-this baseline. Assign the same EE to Genesis, Bootstrap, Dispatcher, and Drift.
+Attach an EE / project collection install that resolves the pinned
+`infra.aap_configuration==4.7.0` (and certified transitive deps from
+Automation Hub). Do not widen the pin to a range. Assign the same EE to Genesis,
+Bootstrap, Dispatcher, and Drift.
 
 #### Credential type: CasC SCM Token (exact)
 
@@ -970,7 +989,7 @@ evidence **outside** this engine repository.
 | Tenant ID rejected | Unsafe key | Use `^[a-z][a-z0-9_]*$`, max 64 |
 | Brownfield rejected | Org/team rules | Require `aap_organization`; omit `team_name` |
 | Marker conflict / immutable lifecycle | Post-scaffold identity change | Restore marker-owned values; no force-push |
-| Naming failure | Active `naming-rules.yml` | Align exact Organization/Team strings |
+| Naming failure | Active `naming-rules.yml` | Align exact Organization/Team (and other listed) identity strings |
 | Missing branch | Branch map gap | Create branches or enable creation |
 | Missing `CONTROL_REPO_TOKEN` | Secret not injected (fork/PR) or wrong role scope | Control caller: control+platform+tenants read; platform/tenant callers: control read only; do not expose deploy secrets to PRs |
 | CI `extra_vars` ignored | Key missing from survey with `ask_variables_on_launch=false` | Add the lowercase key to the JT survey allowlist |
@@ -990,9 +1009,11 @@ evidence **outside** this engine repository.
 - GitLab live validation parity
 - ROADMAP-008 formal support / upgrade matrix
 - Scoped Dispatcher concurrency beyond serialized baseline
-- Composite overlay identity for selected RBAC/role/input-source types
 - Drift coverage redesign and unmanaged-object semantics
 - Establishing any new unvalidated Drift multi-AAP baseline beyond the playbook
   env contract
 
-These must not be presented as completed by the current release.
+Atomic overlay merge for the declarative scoped/compound inventory (including
+Organization + Team foundation) is part of the current ROADMAP-011+001 train —
+not deferred. These remaining items must not be presented as completed by the
+current release.

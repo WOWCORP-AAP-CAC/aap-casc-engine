@@ -1,121 +1,307 @@
 ---
-# Per-resource-type validation and merge configuration.
+# Declarative CasC resource catalog (ROADMAP-011 + ROADMAP-001).
 #
-# defaults: applied to every resource key unless overridden in exceptions.
-#   value_type:     "list" (array of items) or "raw" (dict or list of name/value pairs)
-#   identity_field: field used to match items during base/env merge (list types only)
+# collection: exact pinned infra.aap_configuration release.
+# Inventory: schemas/collection-dispatch-4.7.0.yml derived from
+#   roles/dispatch/defaults/main.yml (53 unique active dispatcher vars).
 #
-# exceptions: keyed by dispatch variable name. Override any default.
+# merge_mode:
+#   keyed  — proven scalar identity; field overlay by identity_field
+#   raw    — settings dictionaries
+#   atomic — complete declarations; path replace + concat + exact-dict unique
 #
-# Usage:
-#   - CI structural validation: checks value_type + identity_field presence
-#   - process_casc_config role: drives base/env merge strategy
+# unsupported: action/imperative keys only (launch, bulk-create, sync).
+
+collection:
+  name: infra.aap_configuration
+  version: "4.7.0"
+  discovered_from: >-
+    Validated nonproduction project/EE install via
+    ansible-galaxy collection list infra.aap_configuration
 
 defaults:
   value_type: list
   identity_field: name
   identity_scalar: true
-  # Brownfield-safe default: absence from YAML never deletes a live object.
+  merge_mode: keyed
+  naming_supported: true
   deletion_supported: false
   deletion_field: state
   deletion_values:
     - absent
   deletion_evidence: ""
 
-# Seeded platform/tenant inventory explicitly audited as non-deleting until a
-# collection-role evidence review flips a key to true. Missing keys inherit
-# defaults.deletion_supported=false.
 exceptions:
+  # --- Proven scalar identity (keyed) ---
   aap_organizations:
-    value_type: list
+    merge_mode: keyed
+    naming_supported: true
     identity_field: name
-    deletion_supported: false
-  aap_teams:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
+    identity_evidence: "gateway_organizations README Unique value: name"
   aap_user_accounts:
-    value_type: list
+    merge_mode: keyed
+    naming_supported: true
     identity_field: username
-    deletion_supported: false
+    identity_evidence: "gateway_users README Unique value: username"
+  gateway_authenticators:
+    merge_mode: keyed
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "gateway_authenticators README Unique value: name"
+  gateway_service_keys:
+    merge_mode: keyed
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "gateway_service_keys README Unique value: name"
   gateway_role_definitions:
-    value_type: list
+    merge_mode: keyed
+    naming_supported: true
     identity_field: name
-    deletion_supported: false
-  gateway_role_user_assignments:
-    value_type: list
-    identity_field: user
-    deletion_supported: false
-  gateway_role_team_assignments:
-    value_type: list
-    identity_field: team
-    deletion_supported: false
+    identity_evidence: "gateway_role_definitions README: name must be unique"
   controller_credential_types:
-    value_type: list
+    merge_mode: keyed
+    naming_supported: true
     identity_field: name
-    deletion_supported: false
-  controller_execution_environments:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
-  controller_settings:
-    value_type: raw
-    identity_field: name
-    deletion_supported: false
-  controller_schedules:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
-  controller_projects:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
-  controller_credentials:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
-  controller_inventories:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
-  controller_templates:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
-  controller_workflows:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
-  controller_notifications:
-    value_type: list
-    identity_field: name
-    deletion_supported: false
-  gateway_settings:
-    value_type: raw
-    identity_field: name
-    deletion_supported: false
-  hub_group_roles:
-    value_type: list
-    identity_field: groups
-    identity_scalar: false
-    deletion_supported: false
-  gateway_users:
-    value_type: list
-    identity_field: username
-    deletion_supported: false
+    identity_evidence: "controller_credential_types README: name lookup"
   controller_instances:
-    value_type: list
+    merge_mode: keyed
+    naming_supported: true
     identity_field: hostname
-    deletion_supported: false
-  controller_roles:
-    value_type: list
-    identity_field: role
-    deletion_supported: false
+    identity_evidence: "controller_instances README: hostname required"
+  controller_instance_groups:
+    merge_mode: keyed
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "controller_instance_groups README: name lookup"
+  hub_namespaces:
+    merge_mode: keyed
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "hub_namespace README: name lookup"
+  eda_credential_types:
+    merge_mode: keyed
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "eda_credential_types role: name is the object key"
+
+  # --- Raw settings ---
+  gateway_settings:
+    merge_mode: raw
+    naming_supported: false
+    value_type: raw
+    identity_evidence: "raw settings dictionary; not list-keyed"
+  controller_settings:
+    merge_mode: raw
+    naming_supported: false
+    value_type: raw
+    identity_evidence: "raw settings mapping (settings: {...}); not list-keyed"
+
+  # --- Atomic (scoped/compound declarative) ---
+  # Path replace + concat + exact-dict unique. naming_supported may use
+  # identity_field for policy checks independently of merge matching.
+  aap_teams:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "scoped name+organization; atomic overlay (ROADMAP-001)"
+  aap_applications:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "scoped name+organization; atomic overlay (ROADMAP-001)"
+  gateway_authenticator_maps:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "compound name+authenticator; atomic overlay (ROADMAP-001)"
+  gateway_http_ports:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "compound uniqueness; atomic overlay (ROADMAP-001)"
+  gateway_service_clusters:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "compound uniqueness; atomic overlay (ROADMAP-001)"
+  gateway_service_nodes:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "compound uniqueness; atomic overlay (ROADMAP-001)"
+  gateway_services:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "compound uniqueness; atomic overlay (ROADMAP-001)"
+  gateway_routes:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "compound uniqueness; atomic overlay (ROADMAP-001)"
+  gateway_role_user_assignments:
+    merge_mode: atomic
+    naming_supported: false
+    identity_evidence: "compound RBAC assignment; atomic overlay (ROADMAP-001)"
+  gateway_role_team_assignments:
+    merge_mode: atomic
+    naming_supported: false
+    identity_evidence: "compound RBAC assignment; atomic overlay (ROADMAP-001)"
+  hub_collections:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "compound namespace+name+version; naming uses scalar name (ROADMAP-001)"
+  hub_roles:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    engine_extension: true
+    identity_evidence: >-
+      Engine-side Hub RBAC extension (not in collection dispatcher defaults);
+      hub_role README requires scalar name
+  hub_group_roles:
+    merge_mode: atomic
+    naming_supported: false
+    engine_extension: true
+    identity_evidence: >-
+      Engine-side Hub RBAC extension (not in collection dispatcher defaults);
+      compound groups+role_list; atomic overlay
+  hub_ee_registries:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  hub_ee_repositories:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  hub_ee_images:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  hub_collection_remotes:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  hub_collection_repositories:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  controller_labels:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+  controller_credentials:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
   controller_credential_input_sources:
-    value_type: list
-    identity_field: input_field_name
-    deletion_supported: false
+    merge_mode: atomic
+    naming_supported: false
+    identity_evidence: "compound input-source family; atomic overlay (ROADMAP-001)"
+  controller_execution_environments:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "optional org scope; atomic overlay (ROADMAP-001)"
+  controller_notifications:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+  controller_projects:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+  controller_inventories:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+  controller_inventory_sources:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "scoped name+inventory; atomic overlay (ROADMAP-001)"
+  controller_hosts:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "scoped name+inventory; atomic overlay (ROADMAP-001)"
+  controller_groups:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "scoped name+inventory; atomic overlay (ROADMAP-001)"
+  controller_templates:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+  controller_workflows:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+  controller_schedules:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "scoped name+unified_job_template; atomic overlay (ROADMAP-001)"
+  controller_roles:
+    merge_mode: atomic
+    naming_supported: false
+    identity_evidence: "compound role family; atomic overlay (ROADMAP-001)"
+  eda_credentials:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
   eda_credential_input_sources:
-    value_type: list
-    identity_field: input_field_name
-    deletion_supported: false
+    merge_mode: atomic
+    naming_supported: false
+    identity_evidence: "compound input-source family; atomic overlay (ROADMAP-001)"
+  eda_controller_tokens:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  eda_projects:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  eda_event_streams:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  eda_decision_environments:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+  eda_rulebook_activations:
+    merge_mode: atomic
+    naming_supported: true
+    identity_field: name
+    identity_evidence: "atomic overlay (ROADMAP-001)"
+
+unsupported:
+  controller_bulk_hosts:
+    reason: >-
+      Action-like bulk create (inventory+hosts; no declarative scalar identity).
+  controller_launch_jobs:
+    reason: Action/query key; not declarative desired state.
+  controller_workflow_launch_jobs:
+    reason: Action/query key; not declarative desired state.
+  hub_ee_repository_sync:
+    reason: Action/query key; not declarative desired state.

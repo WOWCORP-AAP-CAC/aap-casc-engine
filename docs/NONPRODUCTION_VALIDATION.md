@@ -91,8 +91,8 @@ Both must succeed and log that naming policy is inactive.
 
 ### Active and compliant
 
-Commit a customer Organization/Team policy to the control branch. Bootstrap a
-matching tenant and confirm preflight success.
+Commit a customer Organization + Team naming policy to the control branch.
+Bootstrap a matching tenant and confirm preflight success.
 
 ### Active and noncompliant
 
@@ -200,7 +200,38 @@ deletion declarations fail validation.
 Use an object with `state: absent`; verify both CI validation and a direct
 Dispatcher run fail before `infra.aap_configuration.dispatch` is invoked.
 
-## 11. Final evidence package
+## 11. Collection pin and declarative catalog
+
+1. Discover the installed collection on the validated nonproduction
+   project/EE (not from a developer laptop alone):
+
+   ```bash
+   ansible-galaxy collection list infra.aap_configuration
+   ```
+
+2. Confirm [`collections/requirements.yml`](../collections/requirements.yml)
+   pins that **exact** version (`4.7.0` for the current baseline).
+3. Confirm [`schemas/resource-types.yml`](../schemas/resource-types.yml)
+   `collection.version` matches the pin.
+4. Negative tests (CI structural validation must fail closed):
+   - YAML using action/query keys such as `controller_launch_jobs` or
+     `controller_bulk_hosts` is rejected as unsupported.
+   - Non-mapping list items (bare strings/numbers) are rejected.
+   - Duplicate keyed identities across the complete base or env layer are
+     rejected (not only within a single file).
+   - Atomic same-path files with different resource keys are rejected.
+   - Atomic non-mapping list items are rejected by both CI and merge.
+   - Unknown resource keys are rejected.
+   - Atomic types (teams, projects, RBAC) validate and merge via path replace
+     + concat; naming may still target `aap_teams.name`.
+5. Confirm `examples/naming-rules.yml.sample` stays inert (fully commented) and
+   covers every catalog type with `naming_supported: true`:
+
+   ```bash
+   python3 scripts/pipeline/generate_naming_sample.py --check
+   ```
+
+## 12. Final evidence package
 
 Archive run-specific evidence **outside** this reusable engine repository
 (engagement workspace or project vault). Do not commit customer/demo SCM org
@@ -209,10 +240,12 @@ names, AAP URLs, pipeline URLs, or job IDs into product docs.
 Record:
 
 - candidate engine SHA;
+- pinned `infra.aap_configuration` version evidence (`ansible-galaxy collection list`);
 - control revision for every run;
 - GitHub and GitLab pipeline URLs;
 - AAP job IDs and final statuses;
 - generated marker and foundation files from every branch;
 - custom repository-resolution proof;
-- all negative-test failures;
+- unsupported-key / action-key negative-test failures;
+- naming-sample `--check` result;
 - rollback decision and operator approval.

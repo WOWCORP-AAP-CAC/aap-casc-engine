@@ -66,9 +66,17 @@ identities inside YAML, not filenames.
 
 ### Prerequisites
 
-- Red Hat Ansible Automation Platform with an execution environment that already
-  contains `infra.aap_configuration >=4.0.0,<5.0.0` (tested baseline; formal
-  support matrix is ROADMAP-008).
+- Red Hat Ansible Automation Platform with an execution environment / project
+  collection install that resolves to pinned
+  `infra.aap_configuration==4.7.0` ([`collections/requirements.yml`](collections/requirements.yml);
+  formal marketed support matrix remains ROADMAP-008).
+- Declarative resource allowlist in [`schemas/resource-types.yml`](schemas/resource-types.yml):
+  keyed scalar identities, raw settings, and atomic scoped/compound types are
+  supported (plus engine-side `hub_roles` / `hub_group_roles`); launch/bulk/sync
+  action keys remain unsupported. CI and Dispatcher share one merge contract.
+- Inert comprehensive naming sample at
+  [`examples/naming-rules.yml.sample`](examples/naming-rules.yml.sample)
+  (catalog-generated; never auto-activates).
 - GitHub or GitLab API access. The GitHub path is live-validated; GitLab remains
   static template parity only (live validation deferred).
 - Multi-AAP topology as documented in the Setup and Operations Guide:
@@ -117,7 +125,7 @@ tenants:
     status: active
 ```
 
-Greenfield Bootstrap scaffolds the tenant repository and writes only two platform
+Greenfield Bootstrap scaffolds the tenant repository and writes two platform
 foundation declarations on every mapped branch:
 
 - `base/organizations/stores.yml`
@@ -223,8 +231,7 @@ applies only to resource types explicitly present in the policy.
 ## Current limitations
 
 - Scoped Dispatcher concurrency is a separate future enhancement.
-- Composite overlay identities for selected RBAC/role/input-source resources are
-  not yet universally supported.
+- Launch, bulk-host create, and repository-sync action keys remain unsupported.
 - Drift comparison currently covers Organizations, credential types, projects,
   and job templates; undeclared live objects can appear as `extra_in_live` in
   reports. See the setup guide before using remediation in Brownfield adoption.

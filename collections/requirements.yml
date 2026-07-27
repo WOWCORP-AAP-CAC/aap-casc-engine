@@ -1,7 +1,10 @@
 ---
 collections:
+  # Exact pin from the validated nonproduction EE/project install
+  # (ansible-galaxy collection list infra.aap_configuration). Do not widen
+  # to a range; marketed support matrix remains ROADMAP-008.
   - name: infra.aap_configuration
-    version: ">=4.0.0,<5.0.0"
+    version: "4.7.0"
 
   # Transitive dependencies (pulled automatically by infra.aap_configuration):
   #   ansible.platform, ansible.controller, ansible.hub, ansible.eda

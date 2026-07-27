@@ -11,7 +11,7 @@ workflow, and GitLab template.
 | Push to an environment-mapped tenant branch | `validate -> trigger` | Resolves repository to `tenant_id` and applies only that tenant scope |
 | Push to an unmapped feature branch | `validate` | None |
 | Pull request / merge request to any target branch | `validate` | None; deploy credentials are not exposed |
-| Control-branch push adding/correcting active Greenfield tenant | `validate -> bootstrap -> fanout` | SCM scaffold, two-file foundation, then automatic bounded onboarding: platform scope first, then changed tenant(s) across all environments |
+| Control-branch push adding/correcting active Greenfield tenant | `validate -> bootstrap -> fanout` | SCM scaffold, Organization + Team foundation, then automatic bounded onboarding: platform scope first, then changed tenant(s) across all environments |
 | Control-branch push adding Brownfield tenant | `validate -> bootstrap` | SCM scaffold only; no foundation and no automatic onboarding fan-out |
 | Control change to mutable `status` / `dispatch_enabled` only | `validate` | No Bootstrap action |
 | Push containing `[skip dispatch]` | `validate` | None |

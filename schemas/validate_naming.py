@@ -12,10 +12,29 @@ from typing import Any
 import yaml
 
 
+class _UnsafeString(str):
+    """Narrow stand-in so naming validation can parse credential-type injectors."""
+
+
+def _unsafe_constructor(loader: yaml.Loader, node: yaml.Node) -> _UnsafeString:
+    return _UnsafeString(loader.construct_scalar(node))
+
+
+class _CascLoader(yaml.SafeLoader):
+    pass
+
+
+_CascLoader.add_constructor("!unsafe", _unsafe_constructor)
+
+
+def _load_yaml(path: str) -> Any:
+    with open(path, encoding="utf-8") as handle:
+        return yaml.load(handle, Loader=_CascLoader)
+
+
 def _load_mapping(path: str, label: str, *, empty_ok: bool = False) -> dict[str, Any]:
     try:
-        with open(path, encoding="utf-8") as handle:
-            data = yaml.safe_load(handle)
+        data = _load_yaml(path)
     except (OSError, yaml.YAMLError) as exc:
         raise ValueError(f"{label} could not be loaded: {exc}") from exc
     if data is None and empty_ok:
@@ -59,6 +78,11 @@ def load_policy(
             raise ValueError(f"Naming rule for {resource_type} has invalid regex: {exc}") from exc
         resource_meta = dict(defaults)
         resource_meta.update(exceptions.get(resource_type) or {})
+        if resource_meta.get("naming_supported", True) is not True:
+            raise ValueError(
+                f"Naming policy is unsupported for resource type {resource_type} "
+                f"(naming_supported is false in resource-types.yml)"
+            )
         if resource_meta.get("value_type", "list") != "list":
             raise ValueError(
                 f"Naming policy is unsupported for raw resource type {resource_type}"
@@ -79,8 +103,7 @@ def load_policy(
 def validate_file(file_path: str, rules: dict[str, dict[str, Any]]) -> list[str]:
     errors: list[str] = []
     try:
-        with open(file_path, encoding="utf-8") as handle:
-            data = yaml.safe_load(handle)
+        data = _load_yaml(file_path)
     except (OSError, yaml.YAMLError) as exc:
         return [f"{file_path}: Failed to parse - {exc}"]
     if not isinstance(data, dict):
@@ -143,8 +166,10 @@ def load_env_names(config_dir: str, control_config: str = "") -> list[str]:
             "Pinned control config with env_branch_map is required to resolve "
             "desired-state directories (.control/config.yml)"
         )
-    with open(path, encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle) or {}
+    try:
+        cfg = _load_yaml(path) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"{path} could not be loaded: {exc}") from exc
     if not isinstance(cfg, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
     ebm = cfg.get("env_branch_map")

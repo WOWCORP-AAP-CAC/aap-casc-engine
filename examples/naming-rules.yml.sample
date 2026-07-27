@@ -6,10 +6,236 @@
 # Omit resource types that should remain unrestricted. Patterns validate
 # resource identities in YAML, not filenames.
 #
+# Generated from schemas/resource-types.yml against pinned
+# infra.aap_configuration 4.7.0.
+# Do not invent engine-mandated type prefixes (org-/prj-/jt-). Use
+# neutral placeholders and replace them with your standards.
+#
+# Exclusions (no naming rules here):
+#   - controller_credential_input_sources: naming_supported: false
+#   - controller_roles: naming_supported: false
+#   - controller_settings: raw/settings-style type
+#   - eda_credential_input_sources: naming_supported: false
+#   - gateway_role_team_assignments: naming_supported: false
+#   - gateway_role_user_assignments: naming_supported: false
+#   - gateway_settings: raw/settings-style type
+#   - hub_group_roles: naming_supported: false
+#   - controller_bulk_hosts: Action-like bulk create (inventory+hosts; no declarative scalar identity).
+#   - controller_launch_jobs: Action/query key; not declarative desired state.
+#   - controller_workflow_launch_jobs: Action/query key; not declarative desired state.
+#   - hub_ee_repository_sync: Action/query key; not declarative desired state.
+#
+# aap_applications:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
 # aap_organizations:
-#   pattern: "^REPLACE_ME .+ Automation$"
-#   example: "REPLACE_ME Platform Automation"
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
 #
 # aap_teams:
-#   pattern: "^.+ Automation$"
-#   example: "Platform Automation"
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# aap_user_accounts:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: username. Replace REPLACE_ME with your standard."
+#
+# controller_credential_types:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_credentials:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_execution_environments:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_groups:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_hosts:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_instance_groups:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_instances:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: hostname. Replace REPLACE_ME with your standard."
+#
+# controller_inventories:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_inventory_sources:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_labels:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_notifications:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_projects:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_schedules:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_templates:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# controller_workflows:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# eda_controller_tokens:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# eda_credential_types:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# eda_credentials:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# eda_decision_environments:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# eda_event_streams:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# eda_projects:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# eda_rulebook_activations:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_authenticator_maps:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_authenticators:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_http_ports:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_role_definitions:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_routes:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_service_clusters:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_service_keys:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_service_nodes:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# gateway_services:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# hub_collection_remotes:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# hub_collection_repositories:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# hub_collections:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# hub_ee_images:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# hub_ee_registries:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# hub_ee_repositories:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# hub_namespaces:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."
+#
+# hub_roles:
+#   pattern: "^REPLACE_ME_[a-z0-9_]+$"
+#   example: "REPLACE_ME_example"
+#   description: "Identity field: name. Replace REPLACE_ME with your standard."

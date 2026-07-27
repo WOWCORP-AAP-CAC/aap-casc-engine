@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "pipeline"))
 sys.path.insert(0, str(ROOT / "schemas"))
 
 import casc_runtime  # noqa: E402
+import generate_naming_sample  # noqa: E402
 import validate_naming  # noqa: E402
 
 
@@ -484,11 +485,13 @@ class FoundationAndTemplateTests(unittest.TestCase):
             "Ansible Galaxy",
         ):
             self.assertNotIn(deleted, bootstrap)
+        self.assertIn("team-template.yml.j2", bootstrap)
         for task in PROVIDER_TASKS:
             content = task.read_text()
             self.assertIn("Build Greenfield foundation targets", content)
             self.assertNotIn("rbac-user", content)
             self.assertNotIn("rbac-team", content)
+            self.assertIn("label: team", content)
             self.assertIn("Verify final Greenfield foundation content", content)
 
     def test_user_sample_is_password_free_and_uses_organizations_list(self):
@@ -633,7 +636,8 @@ class NamingPolicyTests(unittest.TestCase):
             "missing-pattern": "aap_organizations:\n  example: x\n",
             "bad-regex": "aap_organizations:\n  pattern: '[unterminated'\n",
             "raw": "controller_settings:\n  pattern: x\n",
-            "non-scalar": "hub_group_roles:\n  pattern: x\n",
+            "unsupported-action": "controller_launch_jobs:\n  pattern: x\n",
+            "unsupported-rbac-naming": "gateway_role_user_assignments:\n  pattern: x\n",
         }
         with tempfile.TemporaryDirectory() as tmp:
             for label, content in cases.items():
@@ -735,11 +739,11 @@ class DeletionSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_pinned_control(root)
-            base = root / "base" / "projects"
+            base = root / "base" / "organizations"
             base.mkdir(parents=True)
-            target = base / "project.yml"
+            target = base / "org.yml"
             target.write_text(
-                "controller_projects:\n  - name: demo\n    state: absent\n",
+                "aap_organizations:\n  - name: demo\n    state: absent\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "deletion is not audited"):
@@ -748,7 +752,7 @@ class DeletionSafetyTests(unittest.TestCase):
                 )
 
             target.write_text(
-                "controller_projects:\n  - name: demo\n    state: present\n",
+                "aap_organizations:\n  - name: demo\n    state: present\n",
                 encoding="utf-8",
             )
             casc_runtime.validate_explicit_deletions(
@@ -789,24 +793,24 @@ class DeletionSafetyTests(unittest.TestCase):
             root = Path(tmp)
             self._write_pinned_control(root)
 
-            base = root / "base" / "projects"
-            poc = root / "poc" / "projects"
-            prod = root / "prod" / "projects"
+            base = root / "base" / "organizations"
+            poc = root / "poc" / "organizations"
+            prod = root / "prod" / "organizations"
             docs = root / "docs"
             governance = root / "governance"
             for path in (base, poc, prod, docs, governance):
                 path.mkdir(parents=True)
 
             (base / "valid.yml").write_text(
-                "controller_projects:\n  - name: base-demo\n",
+                "aap_organizations:\n  - name: base-demo\n",
                 encoding="utf-8",
             )
             (poc / "valid.yml").write_text(
-                "controller_projects:\n  - name: poc-demo\n",
+                "aap_organizations:\n  - name: poc-demo\n",
                 encoding="utf-8",
             )
             (prod / "valid.yml").write_text(
-                "controller_projects:\n  - name: prod-demo\n",
+                "aap_organizations:\n  - name: prod-demo\n",
                 encoding="utf-8",
             )
             (docs / "notes.yml").write_text(
@@ -876,9 +880,9 @@ class DeletionSafetyTests(unittest.TestCase):
             root = Path(tmp)
             self._write_pinned_control(root)
             # Env folders alone must not satisfy CI — base/ is mandatory.
-            (root / "poc" / "projects").mkdir(parents=True)
-            (root / "poc" / "projects" / "valid.yml").write_text(
-                "controller_projects:\n  - name: poc-demo\n",
+            (root / "poc" / "organizations").mkdir(parents=True)
+            (root / "poc" / "organizations" / "valid.yml").write_text(
+                "aap_organizations:\n  - name: poc-demo\n",
                 encoding="utf-8",
             )
             for role in ("platform", "tenant"):
@@ -943,17 +947,11 @@ class DeletionSafetyTests(unittest.TestCase):
             root = outer / "desired-state"
             cwd.mkdir()
             control = root / ".control"
-            projects = root / "base" / "projects"
             orgs = root / "base" / "organizations"
             control.mkdir(parents=True)
-            projects.mkdir(parents=True)
             orgs.mkdir(parents=True)
             (control / "config.yml").write_text(
                 "env_branch_map:\n  poc: dev\n  prod: main\n",
-                encoding="utf-8",
-            )
-            (projects / "demo.yml").write_text(
-                "controller_projects:\n  - name: demo\n",
                 encoding="utf-8",
             )
             (orgs / "org.yml").write_text(
@@ -1078,6 +1076,554 @@ class DeletionSafetyTests(unittest.TestCase):
             self.assertIn("validate-deletions", pipeline.read_text(), pipeline)
         process_role = (ROOT / "roles/process_casc_config/tasks/main.yml").read_text()
         self.assertIn("validate-deletions", process_role)
+
+
+class DeclarativeCatalogContractTests(unittest.TestCase):
+    """ROADMAP-011 catalog + ROADMAP-001 atomic overlay contracts."""
+
+    ACTION_UNSUPPORTED = {
+        "controller_bulk_hosts",
+        "controller_launch_jobs",
+        "controller_workflow_launch_jobs",
+        "hub_ee_repository_sync",
+    }
+
+    ENGINE_EXTENSIONS = {
+        "hub_group_roles",
+        "hub_roles",
+    }
+
+    SEED_TEMPLATES = (
+        ("templates/seed-aap-organizations.yml.j2", "aap_organizations"),
+        ("templates/seed-aap-teams.yml.j2", "aap_teams"),
+        ("templates/seed-aap-users.yml.j2", "aap_user_accounts"),
+        ("templates/seed-controller-settings.yml.j2", "controller_settings"),
+        ("templates/seed-controller-credential_types.yml.j2", "controller_credential_types"),
+        ("templates/seed-controller-projects.yml.j2", "controller_projects"),
+        ("templates/seed-controller-credentials.yml.j2", "controller_credentials"),
+        ("templates/seed-controller-inventories.yml.j2", "controller_inventories"),
+        ("templates/seed-controller-templates.yml.j2", "controller_templates"),
+        ("templates/seed-controller-workflows.yml.j2", "controller_workflows"),
+        ("templates/seed-controller-schedules.yml.j2", "controller_schedules"),
+        ("templates/seed-controller-notifications.yml.j2", "controller_notifications"),
+        ("templates/seed-controller-execution_environments.yml.j2", "controller_execution_environments"),
+        ("templates/seed-gateway-role_definitions.yml.j2", "gateway_role_definitions"),
+        ("templates/seed-gateway-rbac_user_assignments.yml.j2", "gateway_role_user_assignments"),
+        ("templates/seed-gateway-rbac_team_assignments.yml.j2", "gateway_role_team_assignments"),
+    )
+
+    def setUp(self):
+        self.schema = yaml.safe_load((ROOT / "schemas/resource-types.yml").read_text())
+        self.role_defaults = yaml.safe_load(
+            (ROOT / "roles/process_casc_config/defaults/main.yml").read_text()
+        )
+        self.dispatch = yaml.safe_load(
+            (ROOT / "schemas/collection-dispatch-4.7.0.yml").read_text()
+        )
+        self.identity = yaml.safe_load(
+            (ROOT / "schemas/fixtures/collection-identity-4.7.0.yml").read_text()
+        )
+        self.jinja = Environment(loader=FileSystemLoader(str(ROOT)))
+        self.jinja.filters["to_json"] = json.dumps
+        self.jinja.filters["to_nice_yaml"] = lambda value, indent=2: yaml.safe_dump(
+            value, sort_keys=False, default_flow_style=False, indent=indent
+        )
+
+    def test_collection_pin_is_exact_discovered_version(self):
+        collection = self.schema["collection"]
+        self.assertEqual(collection["name"], "infra.aap_configuration")
+        self.assertEqual(collection["version"], "4.7.0")
+        req = (ROOT / "collections/requirements.yml").read_text()
+        self.assertIn('version: "4.7.0"', req)
+        self.assertNotIn(">=4.0.0", req)
+        self.assertNotIn("job 392", req.lower())
+        self.assertNotIn("job 392", yaml.dump(self.schema).lower())
+
+    def test_allowlist_matches_supported_catalog_exactly(self):
+        allowed = set(self.role_defaults["casc_allowed_resource_keys"])
+        supported = set(self.schema["exceptions"])
+        self.assertEqual(allowed, supported)
+        unsupported = set(self.schema["unsupported"])
+        self.assertFalse(allowed & unsupported)
+
+    def test_catalog_partitions_all_active_dispatch_variables(self):
+        dispatch_vars = {entry["var"] for entry in self.dispatch["dispatch_variables"]}
+        self.assertEqual(len(dispatch_vars), 53)
+        self.assertIn("eda_credential_input_sources", dispatch_vars)
+        supported = set(self.schema["exceptions"])
+        unsupported = set(self.schema["unsupported"])
+        extensions = {
+            key
+            for key, meta in self.schema["exceptions"].items()
+            if (meta or {}).get("engine_extension") is True
+        }
+        self.assertEqual(extensions, self.ENGINE_EXTENSIONS)
+        collection_supported = supported - extensions
+        self.assertEqual(collection_supported | unsupported, dispatch_vars)
+        self.assertFalse(collection_supported & unsupported)
+        self.assertEqual(len(collection_supported), 49)
+        self.assertEqual(len(unsupported), 4)
+        self.assertEqual(len(supported), 51)
+        for key in self.ENGINE_EXTENSIONS:
+            self.assertEqual(
+                self.schema["exceptions"][key].get("merge_mode"), "atomic", key
+            )
+            self.assertNotIn(key, dispatch_vars)
+        for key in self.identity["optional_publish_examples"]:
+            self.assertNotIn(key, dispatch_vars)
+            self.assertIn(
+                key,
+                {
+                    e["var"]
+                    for e in self.dispatch.get("optional_publish_variables", [])
+                },
+            )
+
+    def test_supported_identities_match_collection_fixture(self):
+        defaults = self.schema["defaults"]
+        exceptions = self.schema["exceptions"]
+        for entry in self.identity["scalar_identity_examples"]:
+            key = entry["var"]
+            self.assertIn(key, exceptions, key)
+            meta = dict(defaults)
+            meta.update(exceptions[key] or {})
+            self.assertEqual(meta.get("merge_mode"), "keyed", key)
+            self.assertEqual(meta.get("identity_field"), entry["identity_field"], key)
+        for entry in self.identity["raw_examples"]:
+            key = entry["var"]
+            self.assertIn(key, exceptions, key)
+            meta = dict(defaults)
+            meta.update(exceptions[key] or {})
+            self.assertEqual(meta.get("merge_mode"), "raw", key)
+            self.assertEqual(meta.get("value_type"), "raw", key)
+        for entry in self.identity["atomic_examples"]:
+            key = entry["var"]
+            self.assertIn(key, exceptions, key)
+            meta = dict(defaults)
+            meta.update(exceptions[key] or {})
+            self.assertEqual(meta.get("merge_mode"), "atomic", key)
+        for entry in self.identity["action_examples"]:
+            self.assertIn(entry["var"], self.schema["unsupported"], entry["var"])
+
+    def test_structure_rejects_action_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "base" / "jobs").mkdir(parents=True)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            (root / "base" / "jobs" / "bad.yml").write_text(
+                "controller_launch_jobs:\n  - name: demo\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"Unsupported resource key"):
+                casc_runtime.validate_structure(
+                    str(root),
+                    str(ROOT / "schemas/resource-types.yml"),
+                    allowed_keys_path=str(
+                        ROOT / "roles/process_casc_config/defaults/main.yml"
+                    ),
+                    control_config=str(control / "config.yml"),
+                )
+
+    def test_structure_rejects_non_mapping_list_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "base" / "organizations").mkdir(parents=True)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            (root / "base" / "organizations" / "bad.yml").write_text(
+                "aap_organizations:\n  - just-a-string\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"must be a mapping"):
+                casc_runtime.validate_structure(
+                    str(root),
+                    str(ROOT / "schemas/resource-types.yml"),
+                    allowed_keys_path=str(
+                        ROOT / "roles/process_casc_config/defaults/main.yml"
+                    ),
+                    control_config=str(control / "config.yml"),
+                )
+
+    def test_ci_and_runtime_share_merge_contract(self):
+        """CI validate-structure and runtime merge must each reject the same fixtures."""
+        allowed = str(ROOT / "roles/process_casc_config/defaults/main.yml")
+        catalog = str(ROOT / "schemas/resource-types.yml")
+
+        def _assert_ci_and_runtime_each_raise(root: Path, pattern: str) -> None:
+            with self.assertRaisesRegex(ValueError, pattern):
+                casc_runtime.validate_structure(
+                    str(root),
+                    catalog,
+                    allowed_keys_path=allowed,
+                    control_config=str(root / ".control" / "config.yml"),
+                )
+            with self.assertRaisesRegex(ValueError, pattern):
+                casc_runtime.merge_desired_state(
+                    str(root), "poc", catalog, allowed_keys_path=allowed
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            (root / "base" / "organizations").mkdir(parents=True)
+            (root / "base" / "organizations" / "a.yml").write_text(
+                "aap_organizations:\n  - name: Dup\n",
+                encoding="utf-8",
+            )
+            (root / "base" / "organizations" / "b.yml").write_text(
+                "aap_organizations:\n  - name: Dup\n",
+                encoding="utf-8",
+            )
+            _assert_ci_and_runtime_each_raise(root, r"duplicate keyed identity")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            (root / "base" / "shared").mkdir(parents=True)
+            (root / "poc" / "shared").mkdir(parents=True)
+            (root / "base" / "shared" / "item.yml").write_text(
+                "aap_teams:\n  - name: Team\n    organization: Org\n",
+                encoding="utf-8",
+            )
+            (root / "poc" / "shared" / "item.yml").write_text(
+                "controller_projects:\n  - name: Project\n    organization: Org\n",
+                encoding="utf-8",
+            )
+            _assert_ci_and_runtime_each_raise(root, r"Path replace conflict")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            (root / "base" / "teams").mkdir(parents=True)
+            (root / "base" / "teams" / "bad.yml").write_text(
+                "aap_teams:\n  - just-a-string\n",
+                encoding="utf-8",
+            )
+            _assert_ci_and_runtime_each_raise(root, r"must be a mapping")
+
+    def test_unsafe_tag_survives_merge_and_ansible_include_vars(self):
+        import subprocess
+
+        from ansible.parsing.dataloader import DataLoader
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = Path(tmp) / "out"
+            (root / "base" / "credential_types").mkdir(parents=True)
+            rendered = self.jinja.get_template(
+                "templates/seed-controller-credential_types.yml.j2"
+            ).render()
+            src = root / "base" / "credential_types" / "example.yml"
+            src.write_text(rendered, encoding="utf-8")
+            loaded = casc_runtime.load_yaml_file(str(src))
+            injector = loaded["controller_credential_types"][0]["injectors"][
+                "extra_vars"
+            ]["my_api_key"]
+            self.assertIsInstance(injector, casc_runtime.UnsafeString)
+            self.assertEqual(str(injector), "{{ api_key }}")
+
+            merged = casc_runtime.merge_desired_state(
+                str(root),
+                "poc",
+                str(ROOT / "schemas/resource-types.yml"),
+                allowed_keys_path=str(
+                    ROOT / "roles/process_casc_config/defaults/main.yml"
+                ),
+            )
+            merged_injector = merged["controller_credential_types"][0]["injectors"][
+                "extra_vars"
+            ]["my_api_key"]
+            self.assertIsInstance(merged_injector, casc_runtime.UnsafeString)
+            casc_runtime.write_merged_resources(merged, str(out), "platform")
+            dumped_path = out / "controller_credential_types_platform.yml"
+            dumped = dumped_path.read_text(encoding="utf-8")
+            self.assertIn("!unsafe", dumped)
+            self.assertIn("{{ api_key }}", dumped)
+
+            # Ansible DataLoader (same path as include_vars) must accept !unsafe.
+            ansible_data = DataLoader().load_from_file(str(dumped_path))
+            ansible_injector = ansible_data["controller_credential_types_platform"][0][
+                "injectors"
+            ]["extra_vars"]["my_api_key"]
+            self.assertEqual(str(ansible_injector), "{{ api_key }}")
+
+            # Also exercise include_vars via ansible-playbook with a clean config.
+            cfg = Path(tmp) / "ansible.cfg"
+            cfg.write_text("[defaults]\ninventory = localhost,\n", encoding="utf-8")
+            playbook = Path(tmp) / "check.yml"
+            playbook.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "- hosts: localhost",
+                        "  connection: local",
+                        "  gather_facts: false",
+                        "  tasks:",
+                        "    - include_vars:",
+                        f"        file: {dumped_path}",
+                        "    - assert:",
+                        "        that:",
+                        "          - controller_credential_types_platform[0].injectors.extra_vars.my_api_key == \"{{ '{{ api_key }}' }}\"",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                ["ansible-playbook", str(playbook)],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={**os.environ, "ANSIBLE_CONFIG": str(cfg)},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+    def test_naming_and_opa_yaml_to_json_accept_unsafe_credential_types(self):
+        """CI naming + OPA conversion must not fail on seed !unsafe injectors."""
+        rendered = self.jinja.get_template(
+            "templates/seed-controller-credential_types.yml.j2"
+        ).render()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            (root / "base" / "credential_types").mkdir(parents=True)
+            src = root / "base" / "credential_types" / "example.yml"
+            src.write_text(rendered, encoding="utf-8")
+
+            # Active policy that does NOT target credential types — parse must still succeed.
+            rules_path = root / "naming-rules.yml"
+            rules_path.write_text(
+                "aap_organizations:\n"
+                "  pattern: '^.+$'\n"
+                "  example: Org\n"
+                "  description: any org name\n",
+                encoding="utf-8",
+            )
+            rules, _, _ = validate_naming.load_policy(
+                str(rules_path),
+                str(ROOT / "schemas/resource-types.yml"),
+                str(ROOT / "roles/process_casc_config/defaults/main.yml"),
+            )
+            self.assertEqual(validate_naming.validate_file(str(src), rules), [])
+            self.assertEqual(
+                validate_naming.validate_tree(
+                    str(root), rules, control_config=str(control / "config.yml")
+                ),
+                [],
+            )
+
+            out_json = root / "opa_input.json"
+            rc = casc_runtime.main(
+                ["yaml-to-json", str(src), "--output", str(out_json)]
+            )
+            self.assertEqual(rc, 0)
+            payload = json.loads(out_json.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload["controller_credential_types"][0]["injectors"]["extra_vars"][
+                    "my_api_key"
+                ],
+                "{{ api_key }}",
+            )
+
+        for pipeline in PIPELINES:
+            content = pipeline.read_text(encoding="utf-8")
+            self.assertIn("yaml-to-json", content, pipeline)
+            self.assertNotIn(
+                "json.dump(yaml.safe_load(open(sys.argv[1]))",
+                content,
+                pipeline,
+            )
+
+    def test_atomic_exact_dedup_ignores_yaml_key_order(self):
+        """Semantically identical atomic mappings dedupe regardless of key order."""
+        left = {"name": "Team", "organization": "Org"}
+        right = {"organization": "Org", "name": "Team"}
+        deduped = casc_runtime._exact_unique([left, right])
+        self.assertEqual(len(deduped), 1)
+
+        unsafe_a = {
+            "name": "Type",
+            "injectors": {
+                "extra_vars": {"k": casc_runtime.UnsafeString("{{ api_key }}")}
+            },
+        }
+        unsafe_b = {
+            "injectors": {
+                "extra_vars": {"k": casc_runtime.UnsafeString("{{ api_key }}")}
+            },
+            "name": "Type",
+        }
+        plain = {
+            "name": "Type",
+            "injectors": {"extra_vars": {"k": "{{ api_key }}"}},
+        }
+        self.assertEqual(len(casc_runtime._exact_unique([unsafe_a, unsafe_b])), 1)
+        # Plain string must remain distinct from !unsafe.
+        self.assertEqual(len(casc_runtime._exact_unique([unsafe_a, plain])), 2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "base" / "teams").mkdir(parents=True)
+            (root / "poc" / "teams").mkdir(parents=True)
+            (root / "base" / "teams" / "a.yml").write_text(
+                "aap_teams:\n  - name: Team\n    organization: Org\n",
+                encoding="utf-8",
+            )
+            (root / "poc" / "teams" / "b.yml").write_text(
+                "aap_teams:\n  - organization: Org\n    name: Team\n",
+                encoding="utf-8",
+            )
+            merged = casc_runtime.merge_desired_state(
+                str(root),
+                "poc",
+                str(ROOT / "schemas/resource-types.yml"),
+                allowed_keys_path=str(
+                    ROOT / "roles/process_casc_config/defaults/main.yml"
+                ),
+            )
+            self.assertEqual(len(merged["aap_teams"]), 1)
+
+    def test_naming_sample_covers_forty_three_types(self):
+        defaults = self.schema["defaults"]
+        naming_keys = []
+        for key, meta in self.schema["exceptions"].items():
+            merged = dict(defaults)
+            merged.update(meta or {})
+            if (
+                merged.get("naming_supported", True) is True
+                and merged.get("value_type", "list") == "list"
+                and merged.get("identity_scalar", True) is True
+            ):
+                naming_keys.append(key)
+        self.assertEqual(len(naming_keys), 43)
+
+    def test_atomic_path_replace_and_keyed_overlay_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "base" / "teams").mkdir(parents=True)
+            (root / "poc" / "teams").mkdir(parents=True)
+            (root / "base" / "organizations").mkdir(parents=True)
+            (root / "poc" / "organizations").mkdir(parents=True)
+            (root / "base" / "teams" / "stores.yml").write_text(
+                "aap_teams:\n  - name: Base Team\n    organization: Org\n",
+                encoding="utf-8",
+            )
+            (root / "poc" / "teams" / "stores.yml").write_text(
+                "aap_teams:\n  - name: Env Team\n    organization: Org\n",
+                encoding="utf-8",
+            )
+            (root / "base" / "organizations" / "org.yml").write_text(
+                "aap_organizations:\n  - name: Org\n    description: base\n",
+                encoding="utf-8",
+            )
+            (root / "poc" / "organizations" / "org.yml").write_text(
+                "aap_organizations:\n  - name: Org\n    description: env\n",
+                encoding="utf-8",
+            )
+            merged = casc_runtime.merge_desired_state(
+                str(root),
+                "poc",
+                str(ROOT / "schemas/resource-types.yml"),
+                allowed_keys_path=str(
+                    ROOT / "roles/process_casc_config/defaults/main.yml"
+                ),
+            )
+            self.assertEqual(merged["aap_teams"][0]["name"], "Env Team")
+            self.assertEqual(len(merged["aap_teams"]), 1)
+            self.assertEqual(merged["aap_organizations"][0]["description"], "env")
+
+    def test_supported_shipped_seeds_validate_and_merge(self):
+        context = {
+            "tenant_id": "stores",
+            "_effective_tenant_id": "stores",
+            "_effective_aap_organization": "WW Stores Automation",
+            "_effective_team_name": "Stores Automation",
+            "scm_base_url": "https://github.example/ww",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            for index, (template, key) in enumerate(self.SEED_TEMPLATES):
+                folder = root / "base" / f"seed-{index}"
+                folder.mkdir(parents=True)
+                rendered = self.jinja.get_template(template).render(**context)
+                dest = folder / f"{key}.yml"
+                dest.write_text(rendered, encoding="utf-8")
+                data = casc_runtime.load_yaml_file(str(dest))
+                self.assertIn(key, data, template)
+
+            casc_runtime.validate_structure(
+                str(root),
+                str(ROOT / "schemas/resource-types.yml"),
+                allowed_keys_path=str(
+                    ROOT / "roles/process_casc_config/defaults/main.yml"
+                ),
+                control_config=str(control / "config.yml"),
+            )
+            merged = casc_runtime.merge_desired_state(
+                str(root),
+                "poc",
+                str(ROOT / "schemas/resource-types.yml"),
+                allowed_keys_path=str(
+                    ROOT / "roles/process_casc_config/defaults/main.yml"
+                ),
+            )
+            for _, key in self.SEED_TEMPLATES:
+                self.assertIn(key, merged, key)
+            self.assertIsInstance(merged["controller_settings"], dict)
+            self.assertIn("settings", merged["controller_settings"])
+
+    def test_naming_sample_matches_catalog(self):
+        sample = (ROOT / "examples/naming-rules.yml.sample").read_text(encoding="utf-8")
+        self.assertNotIn("(;)", sample)
+        for line in sample.splitlines():
+            if line.startswith("#   - ") and "(" in line:
+                self.assertEqual(line.count("("), line.count(")"), line)
+        self.assertEqual(
+            generate_naming_sample.main(
+                [
+                    "--resource-types",
+                    str(ROOT / "schemas/resource-types.yml"),
+                    "--output",
+                    str(ROOT / "examples/naming-rules.yml.sample"),
+                    "--check",
+                ]
+            ),
+            0,
+        )
 
 
 class ProviderAndPipelineParityTests(unittest.TestCase):
@@ -1272,6 +1818,7 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("--caller-role", content, pipeline)
             self.assertIn("--control-config .control/config.yml", content, pipeline)
             self.assertIn("list-desired-state-dirs", content, pipeline)
+            self.assertIn("yaml-to-json", content, pipeline)
             self.assertIn("paste -sd ' ' -", content, pipeline)
             self.assertNotIn("| tr '", content, pipeline)
             self.assertIn("Control repo: skipping desired-state", content, pipeline)
