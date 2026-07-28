@@ -1,0 +1,490 @@
+---
+# Canonical non-secret examples used to generate docs/RESOURCE_CATALOG.md.
+# Keep exactly one example document for every supported key in
+# schemas/resource-types.yml. These examples are documentation inputs; Genesis
+# and Bootstrap seed only their context-appropriate templates.
+
+collection:
+  name: infra.aap_configuration
+  version: "4.7.0"
+
+resources:
+  aap_organizations:
+    example:
+      aap_organizations:
+        - name: Example Organization
+          description: Organization managed through AAP CasC
+
+  aap_user_accounts:
+    example:
+      aap_user_accounts:
+        - username: example_user
+          email: example.user@example.com
+          first_name: Example
+          last_name: User
+          is_superuser: false
+          organizations:
+            - Example Organization
+
+  gateway_authenticators:
+    example:
+      gateway_authenticators:
+        - name: Example OIDC Authenticator
+          type: ansible_base.authentication.authenticator_plugins.oidc
+          enabled: false
+          configuration: {}
+
+  gateway_service_keys:
+    example:
+      gateway_service_keys:
+        - name: Example Controller Service Key
+          service_cluster: Automation Controller
+          secret: "{{ lookup('env', 'GATEWAY_SERVICE_KEY_SECRET') }}"
+          is_active: true
+
+  gateway_role_definitions:
+    example:
+      gateway_role_definitions:
+        - name: Example Inventory Viewer
+          description: View inventories in the assigned scope
+          content_type: awx.inventory
+          permissions:
+            - awx.view_inventory
+
+  controller_credential_types:
+    example:
+      controller_credential_types:
+        - name: Example API Credential
+          description: Inject an API token as an environment variable
+          kind: cloud
+          inputs:
+            fields:
+              - id: api_token
+                type: string
+                label: API Token
+                secret: true
+            required:
+              - api_token
+          injectors:
+            env:
+              EXAMPLE_API_TOKEN: !unsafe "{{ api_token }}"
+
+  controller_instances:
+    example:
+      controller_instances:
+        - hostname: controller-worker-01.example.com
+          capacity_adjustment: 1.0
+          enabled: true
+
+  controller_instance_groups:
+    example:
+      controller_instance_groups:
+        - name: Example Instance Group
+          policy_instance_percentage: 100
+          instances:
+            - controller-worker-01.example.com
+
+  hub_namespaces:
+    example:
+      hub_namespaces:
+        - name: example_namespace
+          company: Example Company
+          email: automation@example.com
+          description: Namespace managed through AAP CasC
+          groups:
+            - example-hub-owners
+
+  eda_credential_types:
+    example:
+      eda_credential_types:
+        - name: Example EDA API Credential
+          description: Inject an API token into rulebook activations
+          inputs:
+            fields:
+              - id: api_token
+                type: string
+                label: API Token
+                secret: true
+            required:
+              - api_token
+          injectors:
+            env:
+              EXAMPLE_EDA_API_TOKEN: !unsafe "{{ api_token }}"
+
+  gateway_settings:
+    example:
+      gateway_settings:
+        gateway_access_token_expiration: 3600
+        gateway_basic_auth_enabled: false
+
+  controller_settings:
+    example:
+      controller_settings:
+        settings:
+          TOWER_URL_BASE: https://aap.example.com
+
+  aap_teams:
+    example:
+      aap_teams:
+        - name: Example Automation Team
+          description: Team managed through AAP CasC
+          organization: Example Organization
+
+  aap_applications:
+    example:
+      aap_applications:
+        - name: Example OAuth Application
+          description: OAuth application managed through AAP CasC
+          organization: Example Organization
+          client_type: confidential
+          authorization_grant_type: authorization-code
+
+  gateway_authenticator_maps:
+    example:
+      gateway_authenticator_maps:
+        - name: Example Organization Mapping
+          authenticator: Example OIDC Authenticator
+          map_type: organization
+          organization: Example Organization
+          role: Organization Member
+          triggers:
+            groups:
+              has_or:
+                - example-aap-users
+
+  gateway_http_ports:
+    example:
+      gateway_http_ports:
+        - name: Example HTTPS Port
+          number: 8443
+          use_https: true
+
+  gateway_service_clusters:
+    example:
+      gateway_service_clusters:
+        - name: Automation Controller
+          service_type: controller
+
+  gateway_service_nodes:
+    example:
+      gateway_service_nodes:
+        - name: Controller Node 1
+          address: controller-01.example.com
+          service_cluster: Automation Controller
+
+  gateway_services:
+    example:
+      gateway_services:
+        - name: Controller API
+          description: Route Automation Controller through the gateway
+          api_slug: controller
+          http_port: Example HTTPS Port
+          service_cluster: Automation Controller
+          is_service_https: true
+          service_port: 443
+
+  gateway_routes:
+    example:
+      gateway_routes:
+        - name: Controller UI Route
+          gateway_path: /controller/
+          http_port: Example HTTPS Port
+          service_cluster: Automation Controller
+          is_service_https: true
+          service_path: /
+          service_port: 443
+
+  gateway_role_user_assignments:
+    example:
+      gateway_role_user_assignments:
+        - user: example_user
+          role_definition: Organization Admin
+          object_ids:
+            - Example Organization
+
+  gateway_role_team_assignments:
+    example:
+      gateway_role_team_assignments:
+        - team: Example Automation Team
+          role_definition: Organization Inventory Admin
+          assignment_objects:
+            - name: Example Organization
+              type: organizations
+
+  hub_collections:
+    example:
+      hub_collections:
+        - namespace: example_namespace
+          name: example_collection
+          path: /var/tmp/collections/example_namespace-example_collection-1.0.0.tar.gz
+          repository: staging
+          auto_approve: false
+
+  hub_roles:
+    example:
+      hub_roles:
+        - name: galaxy.example_viewer
+          description: Read-only example Hub role
+          perms:
+            - view_user
+            - view_group
+
+  hub_group_roles:
+    example:
+      hub_group_roles:
+        - groups:
+            - example-hub-owners
+          role_list:
+            - roles:
+                - galaxy.collection_namespace_owner
+              targets:
+                collection_namespaces:
+                  - example_namespace
+
+  hub_ee_registries:
+    example:
+      hub_ee_registries:
+        - name: example-registry
+          url: https://registry.example.com
+          tls_validation: true
+
+  hub_ee_repositories:
+    example:
+      hub_ee_repositories:
+        - name: example-ee
+          description: Execution environment repository managed through CasC
+          readme: "# Example execution environment"
+
+  hub_ee_images:
+    example:
+      hub_ee_images:
+        - name: example-ee:1.0
+          append: false
+          tags:
+            - stable
+
+  hub_collection_remotes:
+    example:
+      hub_collection_remotes:
+        - name: community
+          url: https://galaxy.ansible.com/
+          requirements:
+            - name: community.general
+
+  hub_collection_repositories:
+    example:
+      hub_collection_repositories:
+        - name: validated
+          description: Validated collections
+          distribution:
+            name: validated
+          remote: community
+
+  controller_labels:
+    example:
+      controller_labels:
+        - name: Production
+          organization: Example Organization
+
+  controller_credentials:
+    example:
+      controller_credentials:
+        - name: Example Machine Credential
+          description: Non-secret fields only; inject secrets through AAP
+          organization: Example Organization
+          credential_type: Machine
+          inputs:
+            username: automation
+
+  controller_credential_input_sources:
+    example:
+      controller_credential_input_sources:
+        - source_credential: Example Vault Lookup
+          target_credential: Example Machine Credential
+          input_field_name: password
+          metadata:
+            secret_path: automation/example
+            secret_key: password
+          description: Populate the target password from a lookup credential
+
+  controller_execution_environments:
+    example:
+      controller_execution_environments:
+        - name: Example Execution Environment
+          description: Execution environment managed through AAP CasC
+          image: registry.example.com/automation/example-ee:1.0
+          pull: missing
+
+  controller_notifications:
+    example:
+      controller_notifications:
+        - name: Example Email Notification
+          description: Notify the automation team
+          organization: Example Organization
+          notification_type: email
+          notification_configuration:
+            host: smtp.example.com
+            port: 587
+            sender: aap@example.com
+            recipients:
+              - automation@example.com
+            use_tls: true
+            use_ssl: false
+
+  controller_projects:
+    example:
+      controller_projects:
+        - name: Example Automation Project
+          description: Project managed through AAP CasC
+          organization: Example Organization
+          scm_type: git
+          scm_url: https://github.example.com/automation/example-playbooks.git
+          scm_branch: main
+          scm_update_on_launch: false
+
+  controller_inventories:
+    example:
+      controller_inventories:
+        - name: Example Inventory
+          description: Inventory managed through AAP CasC
+          organization: Example Organization
+
+  controller_inventory_sources:
+    example:
+      controller_inventory_sources:
+        - name: Example SCM Inventory Source
+          description: Inventory source managed through AAP CasC
+          inventory: Example Inventory
+          source: scm
+          source_project: Example Automation Project
+          source_path: inventories/example
+          overwrite: true
+          update_on_launch: false
+
+  controller_hosts:
+    example:
+      controller_hosts:
+        - name: host01.example.com
+          inventory: Example Inventory
+          variables:
+            ansible_host: 192.0.2.10
+
+  controller_groups:
+    example:
+      controller_groups:
+        - name: application_servers
+          description: Example application servers
+          inventory: Example Inventory
+          hosts:
+            - host01.example.com
+
+  controller_templates:
+    example:
+      controller_templates:
+        - name: Example Deployment
+          description: Job template managed through AAP CasC
+          organization: Example Organization
+          project: Example Automation Project
+          playbook: deploy.yml
+          inventory: Example Inventory
+          execution_environment: Example Execution Environment
+          ask_variables_on_launch: false
+          allow_simultaneous: false
+
+  controller_workflows:
+    example:
+      controller_workflows:
+        - name: Example Deployment Workflow
+          description: Workflow managed through AAP CasC
+          organization: Example Organization
+          allow_simultaneous: false
+          simplified_workflow_nodes:
+            - identifier: deploy
+              unified_job_template: Example Deployment
+              success_nodes: []
+              failure_nodes: []
+              always_nodes: []
+
+  controller_schedules:
+    example:
+      controller_schedules:
+        - name: Example Weekly Deployment
+          description: Disabled example schedule
+          unified_job_template: Example Deployment
+          organization: Example Organization
+          rrule: DTSTART;TZID=UTC:20260101T060000 RRULE:FREQ=WEEKLY;BYDAY=MO
+          enabled: false
+
+  controller_roles:
+    example:
+      controller_roles:
+        - team: Example Automation Team
+          organization: Example Organization
+          role: execute
+          job_templates:
+            - Example Deployment
+
+  eda_credentials:
+    example:
+      eda_credentials:
+        - name: Example AAP Credential
+          description: Non-secret EDA credential fields
+          credential_type: Red Hat Ansible Automation Platform
+          organization: Example Organization
+          inputs:
+            host: https://aap.example.com
+            verify_ssl: true
+
+  eda_credential_input_sources:
+    example:
+      eda_credential_input_sources:
+        - source_credential: Example Vault Lookup
+          target_credential: Example AAP Credential
+          input_field_name: token
+          organization: Example Organization
+          metadata:
+            secret_path: automation/eda
+            secret_key: token
+
+  eda_controller_tokens:
+    example:
+      eda_controller_tokens:
+        - name: Example Controller Token
+          description: Token injected from the execution environment
+          token: "{{ lookup('env', 'EDA_CONTROLLER_TOKEN') }}"
+
+  eda_projects:
+    example:
+      eda_projects:
+        - name: Example Rulebook Project
+          description: Event-driven project managed through AAP CasC
+          url: https://github.example.com/automation/example-rulebooks.git
+          organization: Example Organization
+
+  eda_event_streams:
+    example:
+      eda_event_streams:
+        - name: Example Event Stream
+          credential_name: Example Event Stream Credential
+          organization: Example Organization
+
+  eda_decision_environments:
+    example:
+      eda_decision_environments:
+        - name: Example Decision Environment
+          description: Decision environment managed through AAP CasC
+          image_url: registry.example.com/automation/example-de:1.0
+          credential: Example Registry Credential
+
+  eda_rulebook_activations:
+    example:
+      eda_rulebook_activations:
+        - name: Example Rulebook Activation
+          description: Rulebook activation managed through AAP CasC
+          project: Example Rulebook Project
+          rulebook: example.yml
+          decision_environment: Example Decision Environment
+          organization: Example Organization
+          enabled: false
+          extra_vars:
+            environment: example

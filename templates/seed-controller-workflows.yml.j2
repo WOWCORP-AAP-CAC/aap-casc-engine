@@ -2,6 +2,7 @@
 # Example workflows configuration — rename to .yml to activate.
 # This file belongs in base/workflows/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/workflows/.
+# Full field reference: {{ scm_base_url }}/{{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine', true) }}{{ '/-/blob/' if (scm_provider | default('github')) == 'gitlab' else '/blob/' }}main/docs/RESOURCE_CATALOG.md#controller_workflows
 controller_workflows:
   - name: wfjt-{{ tenant_id }}-example
     description: "Example workflow — replace with your orchestration use-case"

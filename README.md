@@ -74,6 +74,9 @@ identities inside YAML, not filenames.
   keyed scalar identities, raw settings, and atomic scoped/compound types are
   supported (plus engine-side `hub_roles` / `hub_group_roles`); launch/bulk/sync
   action keys remain unsupported. CI and Dispatcher share one merge contract.
+- Human-facing [`Resource Catalog`](docs/RESOURCE_CATALOG.md) with one valid
+  non-secret YAML example and the pinned field reference for every supported
+  resource key.
 - Inert comprehensive naming sample at
   [`examples/naming-rules.yml.sample`](examples/naming-rules.yml.sample)
   (catalog-generated; never auto-activates).
@@ -238,6 +241,9 @@ applies only to resource types explicitly present in the policy.
 
 ## Documentation
 
+- [Resource Catalog](docs/RESOURCE_CATALOG.md) — supported resource keys,
+  complete examples, parameters, merge behavior, ownership, and current safety
+  capabilities
 - [Setup and Operations Guide](docs/ENGINE_SETUP_AND_OPERATIONS_GUIDE.md) —
   canonical install, multi-AAP topology, secrets lifecycle, and day-2 recovery
 - [Tenant Retirement Runbook](docs/TENANT_RETIREMENT_RUNBOOK.md) — manual

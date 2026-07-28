@@ -2,6 +2,7 @@
 # Example teams configuration — rename to .yml to activate.
 # This file belongs in base/teams/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/teams/.
+# Full field reference: {{ scm_base_url }}/{{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine', true) }}{{ '/-/blob/' if (scm_provider | default('github')) == 'gitlab' else '/blob/' }}main/docs/RESOURCE_CATALOG.md#aap_teams
 aap_teams:
   - name: "Example Team"
     description: "Example team — replace with your team"

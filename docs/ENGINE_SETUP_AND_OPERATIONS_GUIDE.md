@@ -58,7 +58,8 @@ support matrix. The formal compatibility and upgrade contract remains
 | Prerequisite | Baseline |
 |---|---|
 | Collection | **Pinned** `infra.aap_configuration==4.7.0` ([`collections/requirements.yml`](../collections/requirements.yml)), discovered via `ansible-galaxy collection list` on the validated nonproduction project/EE. Do not widen to a range. |
-| Resource catalog | [`schemas/resource-types.yml`](../schemas/resource-types.yml) — keyed / raw / atomic merge modes (see Merge contract below); launch/bulk/sync actions under `unsupported`; `hub_roles` / `hub_group_roles` are engine-side Hub RBAC extensions |
+| Engine resource contract | [`schemas/resource-types.yml`](../schemas/resource-types.yml) — keyed / raw / atomic merge modes (see Merge contract below); launch/bulk/sync actions under `unsupported`; `hub_roles` / `hub_group_roles` are engine-side Hub RBAC extensions |
+| Consumer resource catalog | [`docs/RESOURCE_CATALOG.md`](RESOURCE_CATALOG.md) — one valid non-secret example and the pinned field reference for every supported resource key |
 | Naming sample | Genesis seeds inert [`examples/naming-rules.yml.sample`](../examples/naming-rules.yml.sample) covering every `naming_supported: true` catalog type (neutral `REPLACE_ME` placeholders; never auto-activates) |
 | Execution environment | EE/project install that resolves the pinned collection and its certified transitive dependencies |
 | AAP API | Management AAP for Genesis/Bootstrap; each target AAP listed in `AAP_ENV_TARGETS_JSON` for Dispatcher |
@@ -89,6 +90,11 @@ Path ownership: a relative path under `base/` and `<env>/` must declare the same
 resource key, or validation fails. Launch / bulk-host / sync keys stay
 unsupported. Credential-type injectors that need literal Jinja must use Ansible
 `!unsafe` scalars; the engine preserves that tag through merge output.
+
+Use the [Resource Catalog](RESOURCE_CATALOG.md) when authoring desired state; it
+records the supported owner, path, merge mode, example, and complete parameter
+tables derived from the pinned collection. Genesis/Bootstrap seed only common
+starter samples, not all catalog resources.
 
 ---
 

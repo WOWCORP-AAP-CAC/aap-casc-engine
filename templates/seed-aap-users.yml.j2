@@ -2,6 +2,7 @@
 # Example users configuration — rename to .yml to activate.
 # This file belongs in base/users/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/users/.
+# Full field reference: {{ scm_base_url }}/{{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine', true) }}{{ '/-/blob/' if (scm_provider | default('github')) == 'gitlab' else '/blob/' }}main/docs/RESOURCE_CATALOG.md#aap_user_accounts
 aap_user_accounts:
   - username: example_user
     email: user@example.com

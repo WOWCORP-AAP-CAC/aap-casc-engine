@@ -2,6 +2,7 @@
 # Example controller settings — rename to .yml to activate.
 # This file belongs in base/settings/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/settings/.
+# Full field reference: {{ scm_base_url }}/{{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine', true) }}{{ '/-/blob/' if (scm_provider | default('github')) == 'gitlab' else '/blob/' }}main/docs/RESOURCE_CATALOG.md#controller_settings
 # Engine accepts the collection mapping form only (not the list form).
 controller_settings:
   settings:

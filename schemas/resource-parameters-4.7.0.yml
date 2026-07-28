@@ -1,0 +1,4308 @@
+collection:
+  name: infra.aap_configuration
+  version: 4.7.0
+  discovered_from: Validated nonproduction project/EE install via ansible-galaxy collection
+    list infra.aap_configuration
+generated_from: Pinned collection role README Data Structure sections plus version-specific
+  role task inputs omitted from those tables
+resources:
+  aap_organizations:
+    role: gateway_organizations
+    source: roles/gateway_organizations/README.md
+    description: An Ansible Role to add Organizations on Ansible Automation gateway.
+    parameter_groups:
+    - name: Organization Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the resource
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: description
+        type: str
+        required: 'no'
+        default: N/A
+        description: Description of the organization
+      - name: custom_virtualenv
+        type: str
+        required: 'no'
+        default: N/A
+        description: Local absolute file path containing a custom Python virtualenv
+          to use.
+      - name: max_hosts
+        type: int
+        required: 'no'
+        default: N/A
+        description: The max hosts allowed in this organization.
+      - name: instance_groups
+        type: list
+        required: 'no'
+        default: N/A
+        description: list of Instance Groups for this Organization to run on.
+      - name: galaxy_credentials
+        type: list
+        required: 'no'
+        default: N/A
+        description: The credentials to use with private automation hub.
+      - name: default_environment
+        type: str
+        required: 'no'
+        default: N/A
+        description: Default Execution Environment to use for jobs owned by the Organization.
+      - name: notification_templates_started
+        type: list
+        required: 'no'
+        default: N/A
+        description: The notifications on started to use for this organization in
+          a list.
+      - name: notification_templates_success
+        type: list
+        required: 'no'
+        default: N/A
+        description: The notifications on success to use for this organization in
+          a list.
+      - name: notification_templates_error
+        type: list
+        required: 'no'
+        default: N/A
+        description: The notifications on error to use for this organization in a
+          list.
+      - name: notification_templates_approvals
+        type: list
+        required: 'no'
+        default: N/A
+        description: The notifications for approval to use for this organization in
+          a list.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: execution_environment
+        type: str
+        required: 'no'
+        default: ''
+        description: Default execution environment for the Organization.
+  aap_user_accounts:
+    role: gateway_users
+    source: roles/gateway_users/README.md
+    description: An Ansible Role to configure users on Ansible Automation gateway.
+    parameter_groups:
+    - name: User Arguments
+      parameters:
+      - name: username
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The username of the user
+      - name: password
+        type: str
+        required: 'no'
+        default: '"{{ users_default_password }}"'
+        description: The password of the user (see note below for more details)
+      - name: email
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The email of the user
+      - name: first_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: The first name of the user
+      - name: last_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: The last name of the user
+      - name: is_superuser
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Whether the user is a superuser
+      - name: authenticators
+        type: list
+        required: 'no'
+        default: N/A
+        description: List of authenticators this user is associated with
+      - name: authenticator_uid
+        type: bool
+        required: 'no'
+        default: N/A
+        description: UID coming from the authenticators the user is associated with
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: update_secrets
+        type: bool
+        required: 'no'
+        default: '''true'''
+        description: true will always change password if user specifies password,
+          even if API gives $encrypted$ for password. false will only set the password
+          if other values change too.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: is_platform_auditor
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Grant platform-auditor privileges.
+      - name: organizations
+        type: list
+        required: 'no'
+        default: ''
+        description: Organizations to associate with the user.
+  gateway_authenticators:
+    role: gateway_authenticators
+    source: roles/gateway_authenticators/README.md
+    description: An Ansible Role to add Authenticators on Ansible Automation gateway.
+    parameter_groups:
+    - name: Authenticator Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the resource
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: slug
+        type: str
+        required: 'no'
+        default: N/A
+        description: An immutable identifier for the authenticator
+      - name: enabled
+        type: bool
+        required: 'no'
+        default: N/A(`false` by API)
+        description: Enable/Disable the authenticator
+      - name: create_objects
+        type: bool
+        required: 'no'
+        default: N/A(`true` by API)
+        description: Allow authenticator to create objects (users, teams, organizations)
+      - name: remove_users
+        type: bool
+        required: 'no'
+        default: N/A(`true` by API)
+        description: When a user authenticates from this source should they be removed
+          from any other groups they were previously added to
+      - name: configuration
+        type: dict
+        required: 'no'
+        default: N/A
+        description: The required configuration for this source (dict keys specified
+          by the module in 'type')
+      - name: type
+        type: str
+        required: 'no'
+        default: N/A
+        description: 'The type of authentication service this is. Can be one of the
+          modules: `ansible_base.authentication.authenticator_plugins.*`'
+      - name: auto_migrate_users_to
+        type: bool
+        required: 'no'
+        default: '''false'''
+        description: Automatically move users from this authenticator to the target
+          authenticator when a matching user logs in via the target authenticator.
+      - name: order
+        type: int
+        required: 'no'
+        default: N/A (`1` by API)
+        description: The order in which an authenticator will be tried. This only
+          pertains to username/password authenticators
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  gateway_service_keys:
+    role: gateway_service_keys
+    source: roles/gateway_service_keys/README.md
+    description: An Ansible Role to configure Service Keys on Ansible Automation gateway.
+    parameter_groups:
+    - name: Service Key Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the resource
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: is_active
+        type: bool
+        required: 'no'
+        default: N/A (true by API)
+        description: Flag for setting the active state of the Service Key
+      - name: service_cluster
+        type: str
+        required: 'no'
+        default: N/A
+        description: ID or name referencing the Service Cluster
+      - name: algorithm
+        type: str
+        required: 'no'
+        default: N/A (HS256 by API)
+        description: 'Algorithm to use for this Service Key. Choices: ["HS256", "HS384",
+          "HS512"]'
+      - name: secret
+        type: str
+        required: 'no'
+        default: N/A
+        description: A secret to use for this Service Key. Non-editable
+      - name: secret_length
+        type: int
+        required: 'no'
+        default: N/A
+        description: The number of random bytes in the secret
+      - name: mark_previous_inactive
+        type: bool
+        required: 'no'
+        default: N/A
+        description: If true any other secret keys for this service will become inactive
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: README.md#state-variable)
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  gateway_role_definitions:
+    role: gateway_role_definitions
+    source: roles/gateway_role_definitions/README.md
+    description: An Ansible Role to create/update/remove Role Definitions on Ansible
+      gateway.
+    parameter_groups:
+    - name: Role Definition Variables
+      parameters:
+      - name: content_type
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The content type for which the role applies (e.g., awx.inventory)
+      - name: description
+        type: str
+        required: 'no'
+        default: N/A
+        description: Description of the role definition
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the role definition (must be unique)
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: permissions
+        type: list
+        required: 'yes'
+        default: N/A
+        description: List of permission strings to associate with the role (e.g.,
+          awx.view_inventory)
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_credential_types:
+    role: controller_credential_types
+    source: roles/controller_credential_types/README.md
+    description: An Ansible Role to create/update/remove Credential Types on Ansible
+      Controller.
+    parameter_groups:
+    - name: Credential Type Variables
+      parameters:
+      - name: name
+        type: not specified in role README
+        required: 'yes'
+        default: '""'
+        description: Name of Credential Type
+      - name: new_name
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: description
+        type: not specified in role README
+        required: 'no'
+        default: 'false'
+        description: The description of the credential type to give more detail about
+          it.
+      - name: injectors
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Enter injectors using either JSON or YAML syntax. Refer to the
+          Ansible controller documentation for example syntax. See below on proper
+          formatting.
+      - name: inputs
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Enter inputs using either JSON or YAML syntax. Refer to the Ansible
+          controller documentation for example syntax.
+      - name: kind
+        type: not specified in role README
+        required: 'no'
+        default: '"cloud"'
+        description: The type of credential type being added. Note that only cloud
+          and net can be used for creating credential types.
+      - name: state
+        type: not specified in role README
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_instances:
+    role: controller_instances
+    source: roles/controller_instances/README.md
+    description: An Ansible Role to create instances on Ansible Controller.
+    parameter_groups:
+    - name: Instance Variables
+      parameters:
+      - name: hostname
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Hostname of this instance.
+      - name: capacity_adjustment
+        type: float
+        required: 'no'
+        default: '""'
+        description: Capacity adjustment between 0 and 1.
+      - name: enabled
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: If true, the instance will be enabled and used.
+      - name: managed_by_policy
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: If true, will be managed by instance group policy.
+      - name: node_type
+        type: str
+        required: 'no'
+        default: '""'
+        description: Role that this node plays in the mesh. Most likely Execution.
+          Current options are 'execution'.
+      - name: node_state
+        type: str
+        required: 'no'
+        default: '""'
+        description: Indicates the current life cycle stage of this instance. Current
+          options are 'installed' and 'deprovisioning'.
+      - name: listener_port
+        type: int
+        required: 'no'
+        default: '""'
+        description: Port that Receptor will listen for incoming connections on.
+      - name: peers
+        type: list
+        required: 'no'
+        default: '[]'
+        description: List of peers to connect outbound to. Only configurable for hop
+          and execution nodes.
+      - name: peers_from_control_nodes
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: If enabled, control plane nodes will automatically peer to this
+          node.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_instance_groups:
+    role: controller_instance_groups
+    source: roles/controller_instance_groups/README.md
+    description: An Ansible Role to create/update/remove instance groups on Ansible
+      Controller.
+    parameter_groups:
+    - name: Instance Group Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of this instance group.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: Credential to authenticate with Kubernetes or OpenShift. Must
+          be of type "Kubernetes/OpenShift API Bearer Token". Will make instance part
+          of a Container Group.
+      - name: is_container_group
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Signifies that this InstanceGroup should act as a ContainerGroup.
+          If no credential is specified, the underlying Pod's ServiceAccount will
+          be used.
+      - name: policy_instance_percentage
+        type: int
+        required: 'no'
+        default: '""'
+        description: Minimum percentage of all instances that will be automatically
+          assigned to this group when new instances come online.
+      - name: policy_instance_minimum
+        type: int
+        required: 'no'
+        default: '""'
+        description: Static minimum number of Instances that will be automatically
+          assign to this group when new instances come online.
+      - name: policy_instance_list
+        type: list
+        required: 'no'
+        default: '""'
+        description: List of exact-match Instances that will be assigned to this group.
+      - name: max_concurrent_jobs
+        type: int
+        required: 'no'
+        default: '0'
+        description: Maximum number of concurrent jobs to run on this group. Zero
+          means no limit.
+      - name: max_forks
+        type: int
+        required: 'no'
+        default: '0'
+        description: Max forks to execute on this group. Zero means no limit.
+      - name: pod_spec_override
+        type: str
+        required: 'no'
+        default: '""'
+        description: A custom Kubernetes or OpenShift Pod specification.
+      - name: instances
+        type: list
+        required: 'no'
+        default: '""'
+        description: The instances associated with this instance_group.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: roles
+        type: obj
+        required: 'no'
+        default: '""'
+        description: Controller roles to apply to the instance group. See roles section
+          below for how to apply.
+  hub_namespaces:
+    role: hub_namespace
+    source: roles/hub_namespace/README.md
+    description: An Ansible Role to create Namespaces in Automation Hub.
+    parameter_groups:
+    - name: Namespace Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Namespace name. Must be lower case containing only alphanumeric
+          characters and underscores.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field.)
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the Namespace.
+      - name: company
+        type: str
+        required: 'no'
+        default: '""'
+        description: Namespace owner company name.
+      - name: email
+        type: str
+        required: 'yes'
+        default: '"password"'
+        description: Namespace contact email.
+      - name: avatar_url
+        type: str
+        required: 'no'
+        default: '"public"'
+        description: Namespace logo URL.
+      - name: resources
+        type: str
+        required: 'no'
+        default: '""'
+        description: Namespace resource page in Markdown format.
+      - name: links
+        type: list
+        required: 'no'
+        default: '[]'
+        description: A list of dictionaries of Name and url values for links related
+          the Namespace. See below for details.
+      - name: groups
+        type: list
+        required: 'no'
+        default: '[]'
+        description: A list of dictionaries of the Names of groups that own the Namespace.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the namespace.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Links
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Link Text.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Link URL.
+  eda_credential_types:
+    role: eda_credential_types
+    source: roles/eda_credential_types/README.md
+    description: An Ansible Role to create Credential Types in EDA Controller.
+    parameter_groups:
+    - name: Credential Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Credential name. Must be lower case containing only alphanumeric
+          characters and underscores.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field.)
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the credential.
+      - name: inputs
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Credential inputs where the keys are var names used in templating.
+          Refer to the EDA controller documentation for example syntax.
+      - name: injectors
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Enter injectors using either JSON or YAML syntax. Refer to the
+          Ansible controller documentation for example syntax. See below on proper
+          formatting.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the credential.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  gateway_settings:
+    role: gateway_settings
+    source: roles/gateway_settings/README.md
+    description: Manage Ansible Automation Platform Gateway settings as one declarative
+      settings mapping.
+    parameter_groups:
+    - name: Settings mapping
+      parameters:
+      - name: <gateway setting name>
+        type: any
+        required: 'no'
+        default: AAP API default
+        description: A Gateway setting key accepted by ansible.platform.settings.
+          The role accepts a single mapping rather than a fixed object schema.
+  controller_settings:
+    role: controller_settings
+    source: roles/controller_settings/README.md
+    description: Manage Automation Controller settings through the collection settings
+      role.
+    parameter_groups:
+    - name: Setting Variables
+      parameters:
+      - name: settings
+        type: not specified in role README
+        required: 'no'
+        default: '{}'
+        description: Dict of key-value pairs of settings
+      - name: name
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Name of the setting to set.
+      - name: value
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Value of the setting.
+      - name: register
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  aap_teams:
+    role: gateway_teams
+    source: roles/gateway_teams/README.md
+    description: An Ansible Role to add Teams on Ansible Automation gateway.
+    parameter_groups:
+    - name: Team Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the resource
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: description
+        type: str
+        required: 'no'
+        default: N/A
+        description: Description of the organization
+      - name: organization
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name or ID referencing the Organization
+      - name: new_organization
+        type: str
+        required: 'no'
+        default: N/A
+        description: The name or ID referencing newly associated organization
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  aap_applications:
+    role: gateway_applications
+    source: roles/gateway_applications/README.md
+    description: An Ansible Role to create/update/remove Applications on Ansible gateway.
+    parameter_groups:
+    - name: Application Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: Name of application
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: organization
+        type: str
+        required: 'yes'
+        default: N/A
+        description: Name of the organization for the application
+      - name: new_organization
+        type: str
+        required: 'no'
+        default: N/A
+        description: The name or ID referencing newly associated organization
+      - name: algorithm
+        type: str
+        required: 'no'
+        default: N/A
+        description: 'The OIDC token signing algorithm for this application. Choices:
+          ["", "RS256", "HS256"]'
+      - name: description
+        type: str
+        required: 'no'
+        default: N/A
+        description: Description to use for the application.
+      - name: authorization_grant_type
+        type: str
+        required: 'no'
+        default: N/A
+        description: 'Grant type for tokens in this application, Choices: ["password",
+          "authorization-code"]'
+      - name: client_type
+        type: str
+        required: 'no'
+        default: N/A
+        description: 'Application client type. Choices: ["confidential", "public"]'
+      - name: redirect_uris
+        type: str
+        required: 'no'
+        default: '""'
+        description: Allowed urls list, space separated. Required with "authorization-code"
+          grant type
+      - name: skip_authorization
+        type: bool
+        required: 'no'
+        default: N/A(`false` by API)
+        description: Set true to skip authorization step for completely trusted applications.
+      - name: post_logout_redirect_uris
+        type: str
+        required: 'no'
+        default: '""'
+        description: Allowed Post Logout URIs list, space separated.
+      - name: user
+        type: str
+        required: 'no'
+        default: '""'
+        description: The user who owns this application.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the application.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  gateway_authenticator_maps:
+    role: gateway_authenticator_maps
+    source: roles/gateway_authenticator_maps/README.md
+    description: An Ansible Role to add Authenticator Maps on Ansible Automation gateway.
+    parameter_groups:
+    - name: Authenticator Map Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the resource
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: authenticator
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name or ID referencing the Authenticator
+      - name: new_authenticator
+        type: str
+        required: 'no'
+        default: N/A
+        description: The name or ID referencing newly associated authenticator
+      - name: revoke
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: If a user does not meet this rule should we revoke the permission
+      - name: map_type
+        type: str
+        required: 'no'
+        default: team
+        description: 'What does the map work on, a team, a user flag or is this an
+          allow rule. choices: ["allow", "is_superuser", "team", "organization", "role"]'
+      - name: role
+        type: str
+        required: 'no'
+        default: N/A
+        description: The name of RBAC Role Definition to be used for this map
+      - name: team
+        type: str
+        required: 'no'
+        default: N/A
+        description: A team name this rule works on
+      - name: organization
+        type: str
+        required: 'no'
+        default: N/A
+        description: An organization name this rule works on
+      - name: triggers
+        type: dict
+        required: 'no'
+        default: '{}'
+        description: Trigger information for this rule
+      - name: order
+        type: int
+        required: 'no'
+        default: N/A(`0` by API)
+        description: The order in which this rule should be processed, smaller numbers
+          are of higher precedence
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  gateway_http_ports:
+    role: gateway_http_ports
+    source: roles/gateway_http_ports/README.md
+    description: An Ansible Role to add proxy Http Ports on Ansible Automation gateway.
+    parameter_groups:
+    - name: Http Port Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the resource
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: number
+        type: int
+        required: 'no'
+        default: N/A
+        description: Port number, must be unique
+      - name: use_https
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Secure this port with HTTPS
+      - name: is_api_port
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: If true, port is used for serving remote AAP APIs. Only one can
+          be set to true
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  gateway_service_clusters:
+    role: gateway_service_clusters
+    source: roles/gateway_service_clusters/README.md
+    description: An Ansible Role to configure Service Clusters on Ansible Automation
+      gateway.
+    parameter_groups:
+    - name: Service Cluster Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the resource
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: service_type
+        type: str
+        required: state is 'present'
+        default: N/A
+        description: 'The type of service for this cluster. Choices : ["hub", "controller",
+          "eda", "gateway"]'
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: README.md#state-variable)
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: health_checks_enabled
+        type: bool
+        required: 'no'
+        default: ''
+        description: Enable service-cluster health checks.
+      - name: health_check_interval_seconds
+        type: int
+        required: 'no'
+        default: ''
+        description: Seconds between health checks.
+      - name: health_check_timeout_seconds
+        type: int
+        required: 'no'
+        default: ''
+        description: Health-check timeout in seconds.
+      - name: health_check_healthy_threshold
+        type: int
+        required: 'no'
+        default: ''
+        description: Successful checks required before healthy.
+      - name: health_check_unhealthy_threshold
+        type: int
+        required: 'no'
+        default: ''
+        description: Failed checks required before unhealthy.
+      - name: outlier_detection_enabled
+        type: bool
+        required: 'no'
+        default: ''
+        description: Enable outlier detection.
+      - name: outlier_detection_interval_seconds
+        type: int
+        required: 'no'
+        default: ''
+        description: Outlier-detection interval in seconds.
+      - name: outlier_detection_base_ejection_time_seconds
+        type: int
+        required: 'no'
+        default: ''
+        description: Base ejection time in seconds.
+      - name: outlier_detection_max_ejection_percent
+        type: int
+        required: 'no'
+        default: ''
+        description: Maximum percentage of nodes that may be ejected.
+      - name: outlier_detection_consecutive_5xx
+        type: int
+        required: 'no'
+        default: ''
+        description: Consecutive 5xx responses before ejection.
+  gateway_service_nodes:
+    role: gateway_service_nodes
+    source: roles/gateway_service_nodes/README.md
+    description: An Ansible Role to configure Service Nodes on Ansible Automation
+      gateway.
+    parameter_groups:
+    - name: Service Node Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the resource
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: address
+        type: str
+        required: 'no'
+        default: N/A
+        description: Network address for this service
+      - name: service_cluster
+        type: str
+        required: 'no'
+        default: N/A
+        description: ID or name referencing the Service Cluster
+      - name: tags
+        type: str
+        required: 'no'
+        default: N/A
+        description: Comma separated list of tags to assign to the node, for filtering
+          route traffic
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: README.md#state-variable)
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  gateway_services:
+    role: gateway_services
+    source: roles/gateway_services/README.md
+    description: An Ansible Role to configure gateway API routes (called Service)
+      on Ansible Automation gateway. They define http port and path (starting with
+      prefix /api/) used in gateway and http port and path in the destination service
+      (gateway, controller, hub, eda).
+    parameter_groups:
+    - name: Service Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the api
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description of the service
+      - name: api_slug
+        type: str
+        required: 'no'
+        default: '""'
+        description: URL slug for the gateway API path for the Controller, Hub and
+          EDA services (gateway API route requires value "gateway", but the slug is
+          not used)
+      - name: http_port
+        type: str
+        required: 'no'
+        default: N/A
+        description: ID or name referencing the Http Port
+      - name: service_cluster
+        type: str
+        required: 'no'
+        default: N/A
+        description: ID or name referencing the Service Cluster
+      - name: is_service_https
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Flag whether or not the service cluster uses https
+      - name: enable_gateway_auth
+        type: bool
+        required: 'no'
+        default: N/A (`true` by API)
+        description: If false, the AAP gateway will not insert a gateway token into
+          the proxied request
+      - name: service_path
+        type: str
+        required: 'no'
+        default: '""'
+        description: URL path on the AAP Service cluster to route traffic to
+      - name: service_port
+        type: int
+        required: 'no'
+        default: N/A
+        description: Port on the service cluster to route traffic to
+      - name: order
+        type: int
+        required: 'no'
+        default: '"" (`50` by API)'
+        description: The order to apply the routes in lower numbers are first. Items
+          with the same value have no guaranteed order
+      - name: tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma-separated string, selects which (tagged) nodes receive
+          traffic from this route
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: README.md#state-variable)
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: node_tags
+        type: list
+        required: 'no'
+        default: ''
+        description: Service-node tags used to select nodes.
+  gateway_routes:
+    role: gateway_routes
+    source: roles/gateway_routes/README.md
+    description: An Ansible Role to configure gateway non-API Routes to services (controller,
+      hub,...) on Ansible Automation gateway. They define http port and path (**not**
+      starting with prefix /api/) used in gateway and http port and path in the destination
+      service (gateway, controller, hub, eda).
+    parameter_groups:
+    - name: Route Arguments
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name of the route
+      - name: new_name
+        type: str
+        required: 'no'
+        default: N/A
+        description: Setting this option will change the existing name (looked up
+          via the name field)
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description of the route
+      - name: gateway_path
+        type: str
+        required: 'no'
+        default: N/A
+        description: Path on the AAP gateway to listen to traffic on
+      - name: http_port
+        type: str
+        required: 'no'
+        default: N/A
+        description: ID or name referencing the Http Port
+      - name: service_cluster
+        type: str
+        required: 'no'
+        default: N/A
+        description: ID or name referencing the Service Cluster
+      - name: is_service_https
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Flag whether or not the service cluster uses https
+      - name: enable_gateway_auth
+        type: bool
+        required: 'no'
+        default: N/A (`true` by API)
+        description: If false, the AAP gateway will not insert a gateway token into
+          the proxied request
+      - name: service_path
+        type: str
+        required: 'no'
+        default: N/A
+        description: URL path on the AAP Service cluster to route traffic to
+      - name: service_port
+        type: int
+        required: 'no'
+        default: N/A
+        description: Port on the service cluster to route traffic to
+      - name: tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma-separated string, selects which (tagged) nodes receive
+          traffic from this route
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: README.md#state-variable
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: node_tags
+        type: list
+        required: 'no'
+        default: ''
+        description: Service-node tags used by the route.
+  gateway_role_user_assignments:
+    role: gateway_role_user_assignments
+    source: roles/gateway_role_user_assignments/README.md
+    description: An Ansible Role to create/update/remove Role User Assignments on
+      Ansible gateway.
+    parameter_groups:
+    - name: Role User Assignment Variables
+      parameters:
+      - name: object_ansible_id
+        type: str
+        required: 'no'
+        default: N/A
+        description: UUID of the object(team/organization) this role applies to. Alternative
+          to the object_id/object_ids field. This option is mutually exclusive with
+          object_id and object_ids.
+      - name: object_id
+        type: int
+        required: 'no'
+        default: N/A
+        description: Primary key/Name of the object this assignment applies to. This
+          option is deprecated and will be removed in a release after 2026-01-31.
+          This option is mutually exclusive with object_ids and object_ansible_id.
+      - name: object_ids
+        type: list
+        required: 'no'
+        default: N/A
+        description: List of object IDs(Primary Key) or names this assignment applies
+          to. This option is mutually exclusive with object_id and object_ansible_id.
+      - name: role_definition
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The name or id of the role definition to assign to the user.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: user
+        type: str
+        required: 'no'
+        default: N/A
+        description: The name or id of the user to assign to the object. This option
+          is mutually exclusive with user_ansible_id.
+      - name: user_ansible_id
+        type: str
+        required: 'no'
+        default: N/A
+        description: Resource id of the user who will receive permissions from this
+          assignment. Alternative to user field. This option is mutually exclusive
+          with user.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  gateway_role_team_assignments:
+    role: gateway_role_team_assignments
+    source: roles/gateway_role_team_assignments/README.md
+    description: An Ansible Role to create/update/remove Role Team Assignments on
+      Ansible gateway.
+    parameter_groups:
+    - name: Role Team Assignment Variables
+      parameters:
+      - name: assignment_objects
+        type: list
+        required: 'no'
+        default: N/A
+        description: List of dicts mapping resource names to their types. When using
+          name, each dict must include name and type.
+      - name: role_definition
+        type: str
+        required: 'yes'
+        default: N/A
+        description: The role definition which defines permissions conveyed by this
+          assignment.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: team
+        type: str
+        required: 'no'
+        default: N/A
+        description: The name or id of the team to assign to the object.
+      - name: team_ansible_id
+        type: str
+        required: 'no'
+        default: N/A
+        description: Resource id of the team who will receive permissions from this
+          assignment. Alternative to team field.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  hub_collections:
+    role: hub_collection
+    source: roles/hub_collection/README.md
+    description: An Ansible Role to update, or destroy Automation Hub Collections.
+    parameter_groups:
+    - name: Collection parameters
+      parameters:
+      - name: namespace
+        type: str
+        required: 'yes'
+        default: ''
+        description: Hub namespace containing the collection.
+      - name: name
+        type: str
+        required: 'yes'
+        default: ''
+        description: Collection name.
+      - name: version
+        type: str
+        required: conditional
+        default: ''
+        description: Collection version; alternative to path when identifying existing
+          content.
+      - name: path
+        type: str
+        required: conditional
+        default: ''
+        description: Path to the collection artifact to upload.
+      - name: repository
+        type: str
+        required: 'no'
+        default: ''
+        description: Target Hub repository.
+      - name: wait
+        type: bool
+        required: 'no'
+        default: ''
+        description: Wait for the import task.
+      - name: auto_approve
+        type: bool
+        required: 'no'
+        default: ''
+        description: Automatically approve the import.
+      - name: timeout
+        type: int
+        required: 'no'
+        default: ''
+        description: Maximum import wait in seconds.
+      - name: interval
+        type: int
+        required: 'no'
+        default: ''
+        description: Polling interval in seconds.
+      - name: overwrite_existing
+        type: bool
+        required: 'no'
+        default: ''
+        description: Allow replacement of an existing version.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state.
+  hub_roles:
+    role: hub_role
+    source: roles/hub_role/README.md
+    description: An Ansible Role to create role permissions in Automation Hub.
+    parameter_groups:
+    - name: Role Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Group Name. Must be lower case containing only alphanumeric characters
+          and underscores. Must start with 'galaxy.'.
+      - name: description
+        type: str
+        required: 'yes'
+        default: '""'
+        description: The description of the permission role.
+      - name: perms
+        type: list
+        required: 'yes'
+        default: '""'
+        description: The list of permissions for the given role. See below for options.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the group.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  hub_group_roles:
+    role: hub_group_roles
+    source: roles/hub_group_roles/README.md
+    description: An Ansible Role to add roles to groups in Automation Hub.
+    parameter_groups:
+    - name: Group Variables
+      parameters:
+      - name: groups
+        type: list
+        required: 'yes'
+        default: '""'
+        description: List of Group Names to apply the roles to. If the group does
+          not exist, it will be created. Must be lower case containing only alphanumeric
+          characters and underscores.
+      - name: role_list
+        type: list
+        required: 'yes'
+        default: '""'
+        description: The list of roles to add to or remove from the given group. See
+          below for options.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the group. Can be `present`, `enforced`, or
+          `absent`. If absent, then the module deletes the given combination of roles
+          for given groups. If present, then the module creates the group roles if
+          it does not already exist. If enforced, then the module will remove any
+          group role combinations not provided.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  hub_ee_registries:
+    role: hub_ee_registry
+    source: roles/hub_ee_registry/README.md
+    description: An Ansible Role to create EE Registries in Automation Hub.
+    parameter_groups:
+    - name: EE Registry Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Registry name. Must be lower case containing only alphanumeric
+          characters and underscores.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field.
+      - name: url
+        type: str
+        required: 'yes'
+        default: '""'
+        description: The URL for the registry
+      - name: username
+        type: str
+        required: 'no'
+        default: '""'
+        description: The username for authentication to the registry
+      - name: password
+        type: str
+        required: 'no'
+        default: '""'
+        description: The password for authentication to the registry
+      - name: tls_validation
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Whether to use TLS when connecting to the registry
+      - name: download_concurrency
+        type: str
+        required: 'no'
+        default: '""'
+        description: Number of concurrent collections to download
+      - name: rate_limit
+        type: str
+        required: 'no'
+        default: '""'
+        description: Limits total download rate in requests per second.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the ee_registry.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: proxy_url
+        type: str
+        required: 'no'
+        default: ''
+        description: Proxy URL for registry access.
+      - name: proxy_username
+        type: str
+        required: 'no'
+        default: ''
+        description: Proxy username; inject securely.
+      - name: proxy_password
+        type: str
+        required: 'no'
+        default: ''
+        description: Proxy password; inject securely.
+  hub_ee_repositories:
+    role: hub_ee_repository
+    source: roles/hub_ee_repository/README.md
+    description: An Ansible Role to create Repositories in Automation Hub.
+    parameter_groups:
+    - name: Repository Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Repository name. Must be lower case containing only alphanumeric
+          characters and underscores.
+      - name: description
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Description to use for the Repository.
+      - name: readme
+        type: str
+        required: 'no'
+        default: '""'
+        description: The readme for the ee repository. (mutex with readme_file)
+      - name: readme_file
+        type: str
+        required: 'no'
+        default: '""'
+        description: The file location for the readme for the ee repository. (mutex
+          with readme)
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the ee_repository.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: registry
+        type: str
+        required: 'no'
+        default: '""'
+        description: The remote registry that the repository belongs in.
+      - name: upstream_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: The name of the image upstream.
+      - name: include_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: The tags to pull in.
+      - name: exclude_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: The tags to avoid pulling in.
+  hub_ee_images:
+    role: hub_ee_image
+    source: roles/hub_ee_image/README.md
+    description: An Ansible Role to create execution environment images in Automation
+      Hub.
+    parameter_groups:
+    - name: EE Image Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Execution environment image name. Must be lower case containing
+          only alphanumeric characters and underscores.
+      - name: append
+        type: bool
+        required: 'no'
+        default: 'true'
+        description: Whether to append or replace the tags specified to the image.
+      - name: tags
+        type: list
+        required: 'no'
+        default: '""'
+        description: List of the image tags to update.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the ee_image. (Possible values of `present`
+          or `absent`)
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  hub_collection_remotes:
+    role: hub_collection_remote
+    source: roles/hub_collection_remote/README.md
+    description: An Ansible Role to create a Collection Remote Repository.
+    parameter_groups:
+    - name: Collection Remote Variables
+      parameters:
+      - name: name
+        type: not specified in role README
+        required: 'yes'
+        default: ''
+        description: Repository name. Probably one of community, validated, or rh-certified
+      - name: url
+        type: not specified in role README
+        required: 'no'
+        default: https://cloud.redhat.com/api/automation-hub/
+        description: (`ah_repository_certified`)Remote URL for the repository.
+      - name: url
+        type: not specified in role README
+        required: 'no'
+        default: https://galaxy.ansible.com/api/
+        description: (`ah_repository_community`)Remote URL for the repository.
+      - name: auth_url
+        type: not specified in role README
+        required: 'no'
+        default: https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token
+        description: (`ah_repository_certified`)Remote URL for the repository authentication
+          if separate.
+      - name: token
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: Token to authenticate to the remote repository.
+      - name: policy
+        type: not specified in role README
+        required: 'no'
+        default: immediate
+        description: The policy to use when downloading content. Can be one of `immediate`,
+          `When syncing, download all metadata and content now.`.
+      - name: requirements
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: Requirements, a list of collections in requirements file format
+          to limit the download from remote. This will only download provided collections.
+          This is only the list under collections. See examples for usage.
+      - name: requirements_file
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: A yaml requirements file to download from remote. In requirements
+          file format. Exclusive with `requirements`
+      - name: username
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: Username to authenticate to the remote repository.
+      - name: password
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: Password to authenticate to the remote repository.
+      - name: tls_validation
+        type: not specified in role README
+        required: 'no'
+        default: 'true'
+        description: Whether to use TLS validation against the remote repository
+      - name: client_key
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: A PEM encoded private key file used for authentication
+      - name: client_cert
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: A PEM encoded client certificate used for authentication
+      - name: ca_cert
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: A PEM encoded CA certificate used for authentication
+      - name: client_key_path
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: Path to a PEM encoded private key file used for authentication
+      - name: client_cert_path
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: Path to a PEM encoded client certificate used for authentication
+      - name: ca_cert_path
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: Path to a PEM encoded CA certificate used for authentication
+      - name: download_concurrency
+        type: not specified in role README
+        required: 'no'
+        default: '10'
+        description: Number of concurrent collections to download.
+      - name: max_retries
+        type: not specified in role README
+        required: 'no'
+        default: '0'
+        description: Retries to use when running sync. Default is 0 which does not
+          limit.
+      - name: rate_limit
+        type: not specified in role README
+        required: 'no'
+        default: '8'
+        description: Limits total download rate in requests per second.
+      - name: signed_only
+        type: not specified in role README
+        required: 'no'
+        default: 'false'
+        description: Only download signed collections
+      - name: sync_dependencies
+        type: not specified in role README
+        required: 'no'
+        default: 'true'
+        description: Whether to download dependencies when syncing collections.
+      - name: proxy_url
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: The URL for the proxy. Defaults to global `proxy_url` variable.
+      - name: proxy_username
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: The username for the proxy authentication. Defaults to global
+          `proxy_username` variable.
+      - name: proxy_password
+        type: not specified in role README
+        required: 'no'
+        default: ''
+        description: The password for the proxy authentication. Defaults to global
+          `proxy_password` variable.
+      - name: state
+        type: not specified in role README
+        required: 'no'
+        default: present
+        description: Desired state of the collection_remote. Either `present` or `absent`.
+      - name: register
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: str
+  hub_collection_repositories:
+    role: hub_collection_repository
+    source: roles/hub_collection_repository/README.md
+    description: An Ansible Role to create a Collection Repository.
+    parameter_groups:
+    - name: Collection Repository Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Collection Repository name. Probably one of community, validated,
+          rh-certified, or one you have created.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the Collection Repository.
+      - name: retain_repo_versions
+        type: int
+        required: 'no'
+        default: '0'
+        description: Retain X versions of the Collection repository. Default is 0
+          which retains all versions.
+      - name: pulp_labels
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Pipeline and search options for the collection repository. See
+          additional options below for details.
+      - name: distribution
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Distribution options for the collection repository. See additional
+          options below for details. Most users will leave this blank
+      - name: private
+        type: boolean
+        required: 'no'
+        default: '""'
+        description: Make the Collection repository private.
+      - name: remote
+        type: str
+        required: 'no'
+        default: '""'
+        description: Remote repository name. This is used if the collections use a
+          remote source.
+      - name: update
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Wait for the Collection repository to finish syncing before returning.
+      - name: wait
+        type: bool
+        required: 'no'
+        default: 'true'
+        description: Wait for the Collection repository to finish syncing before returning.
+      - name: interval
+        type: float
+        required: 'no'
+        default: '1.0'
+        description: The interval to request an update from Automation Hub.
+      - name: timeout
+        type: int
+        required: 'no'
+        default: '""'
+        description: If waiting for the project to update this will abort after this
+          amount of seconds.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the collection repository. Either `present`
+          or `absent`.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Additional Option Variables
+      parameters:
+      - name: pipeline
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the Collection Repository.
+      - name: hide_from_search
+        type: str
+        required: 'no'
+        default: '""'
+        description: Pipeline and search options for the collection repository.
+      - name: name
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Distribution name to use for this collection repository. Will
+          default to repository name if not provided.
+      - name: state
+        type: str
+        required: 'no'
+        default: absent
+        description: Desired state of the distribution. Either `present` or `absent`.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: update_repo
+        type: bool
+        required: 'no'
+        default: ''
+        description: Update repository content after configuration.
+  controller_labels:
+    role: controller_labels
+    source: roles/controller_labels/README.md
+    description: An Ansible role to create/update/remove labels for templates on Ansible
+      Controller.
+    parameter_groups:
+    - name: Labels Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of this label.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: organization
+        type: str
+        required: 'yes'
+        default: 'false'
+        description: Organization this label belongs to.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_credentials:
+    role: controller_credentials
+    source: roles/controller_credentials/README.md
+    description: An Ansible Role to create/update/remove Credentials on Ansible Controller.
+    parameter_groups:
+    - name: Credential Variables
+      parameters:
+      - name: name
+        type: not specified in role README
+        required: 'yes'
+        default: '""'
+        description: Name of Credential
+      - name: new_name
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: copy_from
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Name or id to copy the credential from. This will copy an existing
+          credential and change any parameters supplied.
+      - name: description
+        type: not specified in role README
+        required: 'no'
+        default: 'false'
+        description: Description of of Credential.
+      - name: organization
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Organization this Credential belongs to. If provided on creation,
+          do not give either user or team.
+      - name: credential_type
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Name of credential type. See below for list of options. More
+          information in Ansible controller documentation.
+      - name: inputs
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Credential inputs where the keys are var names used in templating.
+          Refer to the Ansible controller documentation for example syntax. Individual
+          examples can be found at /api/controller/v2/credential_types/ on an controller.
+      - name: user
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: User that should own this credential. If provided, do not give
+          either team or organization.
+      - name: team
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Team that should own this credential. If provided, do not give
+          either user or organization.
+      - name: state
+        type: not specified in role README
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: update_secrets
+        type: not specified in role README
+        required: 'no'
+        default: 'true'
+        description: true will always change password if user specifies password,
+          even if API gives $encrypted$ for password. false will only set the password
+          if other values change too.
+      - name: roles
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Controller roles to apply to the credential. See roles section
+          below for how to apply.
+  controller_credential_input_sources:
+    role: controller_credential_input_sources
+    source: roles/controller_credential_input_sources/README.md
+    description: An Ansible Role to create/update/remove credential input sources
+      on Ansible Controller, the below example is for CyberArk as an input source,
+      change accordingly to match your input source type.
+    parameter_groups:
+    - name: Credential Input Source Variables
+      parameters:
+      - name: target_credential
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of credential to have the input source applied
+      - name: input_field_name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of field which will be written by the input source
+      - name: source_credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name of the source credential which points to an external secret
+          lookup credential
+      - name: metadata
+        type: dict
+        required: 'no'
+        default: '""'
+        description: The metadata applied to the source.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the credential input source.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_execution_environments:
+    role: controller_execution_environments
+    source: roles/controller_execution_environments/README.md
+    description: An Ansible Role to create/update/remove execution_environments on
+      Ansible Controller.
+    parameter_groups:
+    - name: Execution Environment Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of execution environment
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the execution environment.
+      - name: image
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Container image to use for the execution environment
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: The organization the execution environment belongs to.
+      - name: credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name of the credential to use for the execution environment.
+      - name: pull
+        type: choice("always", "missing", "never")
+        required: 'no'
+        default: '"missing"'
+        description: Determine image pull behavior
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_notifications:
+    role: controller_notification_templates
+    source: roles/controller_notification_templates/README.md
+    description: An Ansible Role to add/update/remove notification templates on Ansible
+      Controller.
+    parameter_groups:
+    - name: Notification Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: The name of the notification.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: copy_from
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name or id to copy the Notification template from. This will
+          copy an existing notification and change any parameters supplied.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: The description of the notification.
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: The organization applicable to the notification.
+      - name: notification_type
+        type: str
+        required: 'no'
+        default: '""'
+        description: The type of notification to be sent.
+      - name: notification_configuration
+        type: dict
+        required: 'no'
+        default: '""'
+        description: The notification configuration file. Note providing this field
+          would disable all depreciated notification-configuration-related fields.
+      - name: messages
+        type: list
+        required: 'no'
+        default: '""'
+        description: Optional custom messages for notification template. Assumes any
+          instance of two space __ are used for adding variables and removes them.
+          Does not effect single space.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_projects:
+    role: controller_projects
+    source: roles/controller_projects/README.md
+    description: An Ansible Role to create/update/remove Projects on Ansible Controller.
+    parameter_groups:
+    - name: Project Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of Project
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: copy_from
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name or id to copy the project from. This will copy an existing
+          project and change any parameters supplied.
+      - name: description
+        type: str
+        required: 'no'
+        default: 'false'
+        description: Description of the Project.
+      - name: organization
+        type: str
+        required: 'yes'
+        default: 'false'
+        description: Name of organization for project.
+      - name: scm_type
+        type: str
+        required: 'no'
+        default: '""'
+        description: Type of SCM resource.
+      - name: scm_url
+        type: str
+        required: 'no'
+        default: '""'
+        description: URL of SCM resource.
+      - name: default_environment
+        type: str
+        required: 'no'
+        default: '""'
+        description: Default Execution Environment to use for jobs relating to the
+          project.
+      - name: local_path
+        type: str
+        required: 'no'
+        default: '""'
+        description: The server playbook directory for manual projects.
+      - name: scm_branch
+        type: str
+        required: 'no'
+        default: '""'
+        description: The branch to use for the SCM resource.
+      - name: scm_refspec
+        type: str
+        required: 'no'
+        default: '""'
+        description: The refspec to use for the SCM resource.
+      - name: credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name of the credential to use with this SCM resource.
+      - name: signature_validation_credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name of the credential to use for signature validation. If signature
+          validation credential is provided, signature validation will be enabled.
+      - name: scm_clean
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Remove local modifications before updating.
+      - name: scm_delete_on_update
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Remove the repository completely before updating.
+      - name: scm_track_submodules
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Track submodules latest commit on specified branch.
+      - name: scm_update_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Before an update to the local repository before launching a job
+          with this project.
+      - name: scm_update_cache_timeout
+        type: str
+        required: 'no'
+        default: '""'
+        description: Cache Timeout to cache prior project syncs for a certain number
+          of seconds. Only valid if scm_update_on_launch is to true, otherwise ignored.
+      - name: allow_override
+        type: str
+        required: 'no'
+        default: '""'
+        description: Allow changing the SCM branch or revision in a job template that
+          uses this project.
+      - name: timeout
+        type: int
+        required: 'no'
+        default: '""'
+        description: The amount of time (in seconds) to run before the SCM Update
+          is canceled. A value of 0 means no timeout.
+      - name: custom_virtualenv
+        type: str
+        required: 'no'
+        default: '""'
+        description: Local absolute file path containing a custom Python virtualenv
+          to use.
+      - name: notification_templates_started
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on started to use for this organization in
+          a list.
+      - name: notification_templates_success
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on success to use for this organization in
+          a list.
+      - name: notification_templates_error
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on error to use for this organization in a
+          list.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: wait
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Provides option to wait for completed project sync before returning.
+      - name: update_project
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Force project to update after changes.Used in conjunction with
+          wait, interval, and timeout.
+      - name: interval
+        type: float
+        required: 'no'
+        default: controller_configuration_projects_async_delay
+        description: The interval to request an update from controller. Requires wait.
+      - name: roles
+        type: obj
+        required: 'no'
+        default: '""'
+        description: Controller roles to apply to the project. See roles section below
+          for how to apply.
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: job_timeout
+        type: int
+        required: 'no'
+        default: ''
+        description: Alias accepted by the role for timeout.
+      - name: scm_credential
+        type: str
+        required: 'no'
+        default: ''
+        description: Alias accepted by the role for credential.
+  controller_inventories:
+    role: controller_inventories
+    source: roles/controller_inventories/README.md
+    description: An Ansible Role to create/update/remove inventories on Ansible Controller.
+    parameter_groups:
+    - name: Inventory Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of this inventory.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: copy_from
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name or id to copy the inventory from. This will copy an existing
+          inventory and change any parameters supplied.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description of this inventory.
+      - name: organization
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Organization this inventory belongs to.
+      - name: instance_groups
+        type: list
+        required: 'no'
+        default: '""'
+        description: List of Instance Groups for this Inventory to run on.
+      - name: input_inventories
+        type: list
+        required: 'no'
+        default: '""'
+        description: List of Inventories to use as input for Constructed Inventory.
+      - name: variables
+        type: dict
+        required: 'no'
+        default: '{}'
+        description: Variables for the inventory.
+      - name: kind
+        type: str
+        required: 'no'
+        default: '""'
+        description: The kind of inventory. Currently choices are '', 'smart' and
+          'constructed'
+      - name: host_filter
+        type: str
+        required: 'no'
+        default: '""'
+        description: The host filter field, useful only when 'kind=smart'
+      - name: prevent_instance_group_fallback
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Prevent falling back to instance groups set on the organization
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: roles
+        type: obj
+        required: 'no'
+        default: '""'
+        description: Controller roles to apply to the inventory. See roles section
+          below for how to apply.
+  controller_inventory_sources:
+    role: controller_inventory_sources
+    source: roles/controller_inventory_sources/README.md
+    description: An Ansible Role to create/update/remove inventory sources on Ansible
+      Controller.
+    parameter_groups:
+    - name: Inventory Sources Variables
+      parameters:
+      - name: name
+        type: not specified in role README
+        required: 'yes'
+        default: '""'
+        description: The name to use for the inventory source.
+      - name: new_name
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: A new name for this assets (will rename the asset).
+      - name: description
+        type: not specified in role README
+        required: 'no'
+        default: 'false'
+        description: The description to use for the inventory source.
+      - name: inventory
+        type: not specified in role README
+        required: 'yes'
+        default: '""'
+        description: Inventory the group should be made a member of.
+      - name: organization
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Organization the inventory belongs to.
+      - name: source
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: The source to use for this group. If set to `constructed` this
+          role will be skipped as they are not meant to be edited. See the list below
+          for choices.
+      - name: source_path
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: For an SCM based inventory source, the source path points to
+          the file within the repo to use as an inventory.
+      - name: source_vars
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: The variables or environment fields to apply to this source type.
+      - name: enabled_var
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: The variable to use to determine enabled state e.g., "status.power_state".
+      - name: enabled_value
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Value when the host is considered enabled, e.g., "powered_on".
+      - name: host_filter
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: If specified, controller will only import hosts that match this
+          regular expression.
+      - name: limit
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Enter host, group or pattern match.
+      - name: credential
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Credential to use for the source.
+      - name: execution_environment
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Execution Environment to use for the source.
+      - name: overwrite
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Delete child groups and hosts not found in source.
+      - name: overwrite_vars
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Override vars in child groups and hosts with those from external
+          source.
+      - name: custom_virtualenv
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Local absolute file path containing a custom Python virtualenv
+          to use.
+      - name: timeout
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: The amount of time (in seconds) to run before the task is canceled.
+      - name: verbosity
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: The verbosity level to run this inventory source under.
+      - name: update_on_launch
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Refresh inventory data from its source each time a job is run.
+      - name: update_cache_timeout
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Time in seconds to consider an inventory sync to be current.
+      - name: source_project
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Project to use as source with scm option.
+      - name: scm_branch
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Project scm branch to use as source with scm option. Project
+          must have branch override enabled.
+      - name: state
+        type: not specified in role README
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: notification_templates_started
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: The notifications on started to use for this inventory source
+          in a list.
+      - name: notification_templates_success
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: The notifications on success to use for this inventory source
+          in a list.
+      - name: notification_templates_error
+        type: not specified in role README
+        required: 'no'
+        default: '""'
+        description: The notifications on error to use for this inventory source in
+          a list.
+  controller_hosts:
+    role: controller_hosts
+    source: roles/controller_hosts/README.md
+    description: An Ansible Role to add/update/remove hosts on Ansible Controller.
+    parameter_groups:
+    - name: Host Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: The name of the host.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: To use when changing a hosts's name.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: The description of the host.
+      - name: inventory
+        type: str
+        required: 'yes'
+        default: '""'
+        description: The inventory the host applies against.
+      - name: enabled
+        type: bool
+        required: 'no'
+        default: ''
+        description: If the host should be enabled.
+      - name: variables
+        type: dict
+        required: 'no'
+        default: '{}'
+        description: The variables applicable to the host.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_groups:
+    role: controller_host_groups
+    source: roles/controller_host_groups/README.md
+    description: An Ansible Role to create/update/remove Groups on Ansible Controller.
+    parameter_groups:
+    - name: Group Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of Group
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name of Group, used in updating a Group.
+      - name: description
+        type: str
+        required: 'no'
+        default: 'false'
+        description: Description of the Group.
+      - name: inventory
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of inventory the group should be made a member of.
+      - name: variables
+        type: dict
+        required: 'no'
+        default: '{}'
+        description: variables applicable to group.
+      - name: hosts
+        type: list
+        required: 'no'
+        default: '""'
+        description: hosts (list) in group
+      - name: children
+        type: list
+        required: 'no'
+        default: '""'
+        description: List of groups that should be nested inside in this group
+      - name: preserve_existing_hosts
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Whether to preserve existing hosts in an existing group
+      - name: preserve_existing_children
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Whether to preserve existing children in an existing group
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_templates:
+    role: controller_job_templates
+    source: roles/controller_job_templates/README.md
+    description: An Ansible Role to create/update/remove Job Templates on Ansible
+      Controller.
+    parameter_groups:
+    - name: Job Template Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of Job Template
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: copy_from
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name or id to copy the job template from. This will copy an existing
+          credential and change any parameters supplied.
+      - name: description
+        type: str
+        required: 'no'
+        default: 'false'
+        description: Description to use for the job template.
+      - name: execution_environment
+        type: str
+        required: 'no'
+        default: '""'
+        description: Execution Environment to use for the job template.
+      - name: job_type
+        type: str
+        required: 'no'
+        default: run
+        description: The job type to use for the job template(run, check).
+      - name: inventory
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name of the inventory to use for the job template.
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: Organization the job template exists in. Used to help lookup
+          the object, cannot be modified using this module. The Organization is inferred
+          from the associated project
+      - name: project
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name of the project to use for the job template.
+      - name: playbook
+        type: str
+        required: 'no'
+        default: '""'
+        description: Path to the playbook to use for the job template within the project
+          provided.
+      - name: credentials
+        type: list
+        required: 'no'
+        default: '""'
+        description: List of credentials to use for the job template.
+      - name: forks
+        type: int
+        required: 'no'
+        default: '""'
+        description: The number of parallel or simultaneous processes to use while
+          executing the playbook.
+      - name: limit
+        type: str
+        required: 'no'
+        default: '""'
+        description: A host pattern to further constrain the list of hosts managed
+          or affected by the playbook
+      - name: verbosity
+        type: int
+        required: 'no'
+        default: '""'
+        description: Control the output level Ansible produces as the playbook runs.
+          0 - Normal, 1 - Verbose, 2 - More Verbose, 3 - Debug, 4 - Connection Debug
+          .
+      - name: extra_vars
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Specify extra_vars for the template.
+      - name: job_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma separated list of the tags to use for the job template.
+      - name: force_handlers
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Enable forcing playbook handlers to run even if a task fails.
+      - name: skip_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma separated list of the tags to skip for the job template.
+      - name: start_at_task
+        type: str
+        required: 'no'
+        default: '""'
+        description: Start the playbook at the task matching this name.
+      - name: diff_mode
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Enable diff mode for the job template
+      - name: use_fact_cache
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Enable use of fact caching for the job template.
+      - name: host_config_key
+        type: str
+        required: 'no'
+        default: '""'
+        description: Allow provisioning callbacks using this host config key.
+      - name: ask_scm_branch_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for scm branch on launch.
+      - name: ask_diff_mode_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user to enable diff mode show changes to files when supported
+          by modules.
+      - name: ask_variables_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for extra_vars on launch.
+      - name: ask_limit_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for a limit on launch.
+      - name: ask_tags_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for job tags on launch.
+      - name: ask_skip_tags_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for job tags to skip on launch.
+      - name: ask_job_type_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for job type on launch.
+      - name: ask_verbosity_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user to choose a verbosity level on launch.
+      - name: ask_inventory_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for inventory on launch.
+      - name: ask_credential_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for credential on launch.
+      - name: ask_execution_environment_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for execution environment on launch.
+      - name: ask_forks_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for forks on launch.
+      - name: ask_instance_groups_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for instance groups on launch.
+      - name: ask_job_slice_count_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for job slice count on launch.
+      - name: ask_labels_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for labels on launch.
+      - name: ask_timeout_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for timeout on launch.
+      - name: prevent_instance_group_fallback
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prevent falling back to instance groups set on the associated
+          inventory or organization.
+      - name: survey_enabled
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Enable a survey on the job template.
+      - name: survey_spec
+        type: dict
+        required: 'no'
+        default: '""'
+        description: JSON/YAML dict formatted survey definition.
+      - name: survey
+        type: dict
+        required: 'no'
+        default: '""'
+        description: JSON/YAML dict formatted survey definition. Alias of survey_spec
+      - name: become_enabled
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Activate privilege escalation.
+      - name: allow_simultaneous
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Allow simultaneous runs of the job template.
+      - name: timeout
+        type: int
+        required: 'no'
+        default: '""'
+        description: Maximum time in seconds to wait for a job to finish (server-side).
+      - name: instance_groups
+        type: list
+        required: 'no'
+        default: '""'
+        description: list of Instance Groups for this Job Template to run on.
+      - name: job_slice_count
+        type: int
+        required: 'no'
+        default: '""'
+        description: The number of jobs to slice into at runtime. Will cause the Job
+          Template to launch a workflow if value is greater than 1.
+      - name: webhook_service
+        type: str
+        required: 'no'
+        default: '""'
+        description: Service that webhook requests will be accepted from (github,
+          gitlab)
+      - name: webhook_credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: Personal Access Token for posting back the status to the service
+          API
+      - name: scm_branch
+        type: str
+        required: 'no'
+        default: '""'
+        description: Branch to use in job run. Project default used if blank. Only
+          allowed if project allow_override field is set to true.
+      - name: labels
+        type: list
+        required: 'no'
+        default: '""'
+        description: 'The labels applied to this job template. NOTE: Labels must be
+          created with the labels role first, an error will occur if the label supplied
+          to this role does not exist.'
+      - name: custom_virtualenv
+        type: str
+        required: 'no'
+        default: '""'
+        description: Local absolute file path containing a custom Python virtualenv
+          to use.
+      - name: notification_templates_started
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on started to use for this organization in
+          a list.
+      - name: notification_templates_success
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on success to use for this organization in
+          a list.
+      - name: notification_templates_error
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on error to use for this organization in a
+          list.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: roles
+        type: obj
+        required: 'no'
+        default: '""'
+        description: Controller roles to apply to the job template. See roles section
+          below for how to apply.
+    - name: Surveys
+      parameters:
+      - name: name
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Name of the survey
+      - name: description
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Description of the survey
+      - name: spec
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: List of survey items, each a dictionary containing the following
+          fields
+      - name: question_name
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Name of the field/item
+      - name: question_description
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Longer description
+      - name: required
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Boolean expressing if an answer is required
+      - name: type
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: One of `text`, `password`, `integer`, `float`, `multiplechoice`or
+          `multiselect`
+      - name: variable
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Name of Ansible Variable where to put the answer
+      - name: default
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Default value for the variable
+      - name: min
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Minimum value for a number type
+      - name: max
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Maximum value for a number type
+      - name: choices
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: List of choices for a "multi" type
+      - name: new_question
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Boolean
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: ask_tags
+        type: bool
+        required: 'no'
+        default: ''
+        description: Alias accepted by the role for ask_tags_on_launch.
+      - name: ask_skip_tags
+        type: bool
+        required: 'no'
+        default: ''
+        description: Alias accepted by the role for ask_skip_tags_on_launch.
+  controller_workflows:
+    role: controller_workflow_job_templates
+    source: roles/controller_workflow_job_templates/README.md
+    description: An Ansible Role to create/update/remove Workflow Job Templates on
+      Ansible Controller.
+    parameter_groups:
+    - name: Variables For Workflow Job Template
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of Workflow Job Template
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: copy_from
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name or id to copy the Workflow template from. This will copy
+          an existing workflow and change any parameters supplied.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the job template.
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: Organization the workflow job template exists in. Used to lookup
+          the object, cannot be changed with this module
+      - name: ask_inventory_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for inventory on launch.
+      - name: ask_limit_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for a limit on launch.
+      - name: ask_scm_branch_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for scm branch on launch.
+      - name: ask_variables_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for extra_vars on launch.
+      - name: extra_vars
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Specify extra_vars for the template.
+      - name: allow_simultaneous
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Allow simultaneous runs of the workflow job template.
+      - name: inventory
+        type: str
+        required: 'no'
+        default: '""'
+        description: Inventory applied as a prompt, assuming job template prompts
+          for inventory
+      - name: limit
+        type: str
+        required: 'no'
+        default: '""'
+        description: Limit applied as a prompt, assuming job template prompts for
+          limit
+      - name: labels
+        type: str
+        required: 'no'
+        default: '""'
+        description: 'The labels applied to this job template. NOTE: Labels must be
+          created with the labels role first, an error will occur if the label supplied
+          to this role does not exist.'
+      - name: ask_labels_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for labels on launch.
+      - name: job_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma separated list of the tags to use for the workflow job
+          template.
+      - name: skip_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma separated list of the tags to skip for the workflow job
+          template.
+      - name: ask_tags_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for job tags on launch.
+      - name: ask_skip_tags_on_launch
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Prompt user for job tags to skip on launch.
+      - name: notification_templates_approvals
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on approval to use for this organization in
+          a list.
+      - name: notification_templates_error
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on error to use for this organization in a
+          list.
+      - name: notification_templates_started
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on started to use for this organization in
+          a list.
+      - name: notification_templates_success
+        type: list
+        required: 'no'
+        default: '""'
+        description: The notifications on success to use for this organization in
+          a list.
+      - name: scm_branch
+        type: str
+        required: 'no'
+        default: '""'
+        description: SCM branch applied as a prompt, assuming job template prompts
+          for SCM branch
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: workflow_nodes
+        type: dict
+        required: 'no'
+        default: '""'
+        description: A json list of nodes and their corresponding options. The sub-options
+          are in the module doc.
+      - name: destroy_current_nodes
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Set in order to destroy current schema on the workflow, used
+          in cases where drastic changes to schema are happening.
+      - name: survey_enabled
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Enable a survey on the job template.
+      - name: survey_spec
+        type: dict
+        required: 'no'
+        default: '""'
+        description: JSON/YAML dict formatted survey definition.
+      - name: survey
+        type: dict
+        required: 'no'
+        default: '""'
+        description: JSON/YAML dict formatted survey definition. Alias of survey_spec
+      - name: webhook_service
+        type: str
+        required: 'no'
+        default: '""'
+        description: Service that webhook requests will be accepted from (github,
+          gitlab)
+      - name: webhook_credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: Personal Access Token for posting back the status to the service
+          API
+      - name: roles
+        type: obj
+        required: 'no'
+        default: '""'
+        description: Controller roles to apply to the workflow job template. See roles
+          section below for how to apply.
+    - name: Variables For Workflow Job Template Node
+      parameters:
+      - name: workflow_job_template
+        type: str
+        required: 'yes'
+        default: '""'
+        description: The workflow job template the node exists in. Used for looking
+          up the node, cannot be modified after creation.
+      - name: identifier
+        type: str
+        required: 'yes'
+        default: '""'
+        description: An identifier for this node that is unique within its workflow.
+          It is copied to workflow job nodes corresponding to this node. This functions
+          the same as the name field for other resources, however if it is not set,
+          it will be set to a random UUID4 value. Recommended to use Column and row
+          numbers for identifiers such as Node401. Refer to this documentation for
+          more
+      - name: unified_job_template
+        type: str
+        required: 'no'
+        default: '""'
+        description: Name of unified job template to run in the workflow. Can be a
+          job template, project, inventory source, etc. This parameter is mutually
+          exclusive with approval_node.
+      - name: lookup_organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: Organization the inventories, job templates, projects, or workflows
+          the items exists in. Used to help lookup the object, for organization roles
+          see organization. If not provided, will lookup by name only, which does
+          not work with duplicates.
+      - name: execution_environment
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: Execution Environment applied as a prompt. Job Template default
+          used if not set. Only allowed if `ask_execution_environment_on_launch` set
+          to true on Job Template
+      - name: forks
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: Forks applied as a prompt. Job Template default used if not set.
+          Only allowed if `ask_forks_on_launch` set to true on Job Template
+      - name: instance_groups
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: List of Instance Groups applied as a prompt. Job Template default
+          used if not set. Only allowed if `ask_instance_groups_on_launch` set to
+          true on Job Template
+      - name: job_slice_count
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: Job Slice Count to use in the job run. Job Template default used
+          if not set. Only allowed if `ask_job_slice_count_on_launch` set to true
+          on Job Template
+      - name: labels
+        type: list
+        required: 'no'
+        default: Job Template default
+        description: 'List of labels to use in the job run. Job Template default used
+          if not set. Only allowed if `ask_labels_on_launch` set to true on Job Template.
+          NOTE: Labels must be created with the labels role first, an error will occur
+          if the label supplied to this role does not exist.'
+      - name: timeout
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: Timeout to use in the job run. Job Template default used if not
+          set. Only allowed if `ask_timeout_on_launch` set to true on Job Template
+      - name: approval_node
+        type: str
+        required: 'no'
+        default: '""'
+        description: A dictionary of Name, description, and timeout values for the
+          approval node. This parameter is mutually exclusive with unified_job_template.
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: The organization of the workflow job template the node exists
+          in. Used for looking up the workflow, not a direct model field.
+      - name: all_parents_must_converge
+        type: bool
+        required: 'no'
+        default: '""'
+        description: If enabled then the node will only run if all of the parent nodes
+          have met the criteria to reach this node
+      - name: always_nodes
+        type: list
+        required: 'no'
+        default: '""'
+        description: Nodes that will run after this node completes.
+      - name: failure_nodes
+        type: list
+        required: 'no'
+        default: '""'
+        description: Nodes that will run after this node completes.
+      - name: success_nodes
+        type: list
+        required: 'no'
+        default: '""'
+        description: Nodes that will run after this node completes.
+      - name: verbosity
+        type: str
+        required: 'no'
+        default: '""'
+        description: Verbosity applied as a prompt, if job template prompts for verbosity
+      - name: state
+        type: str
+        required: 'no'
+        default: '""'
+        description: Desired state of the resource
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: credentials
+        type: list
+        required: 'no'
+        default: '""'
+        description: Credentials to be applied to job as launch-time prompts.
+      - name: diff_mode
+        type: bool
+        required: 'no'
+        default: '""'
+        description: Run diff mode, applied as a prompt, if job template prompts for
+          diff mode
+      - name: extra_data
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Variables to apply at launch time. Will only be accepted if job
+          template prompts for vars or has a survey asking for those vars. extra_data
+          are extra_vars at the node level and named so to match the module and the
+          API. These are only for "ask extra vars on prompt" on a given job template.
+      - name: inventory
+        type: str
+        required: 'no'
+        default: '""'
+        description: Inventory applied as a prompt, if job template prompts for inventory
+      - name: job_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: NJob tags applied as a prompt, if job template prompts for job
+          tags
+      - name: job_type
+        type: str
+        required: 'no'
+        default: '""'
+        description: Job type applied as a prompt, if job template prompts for job
+          type
+      - name: limit
+        type: str
+        required: 'no'
+        default: '""'
+        description: Limit to act on, applied as a prompt, if job template prompts
+          for limit
+      - name: scm_branch
+        type: str
+        required: 'no'
+        default: '""'
+        description: SCM branch applied as a prompt, if job template prompts for SCM
+          branch
+      - name: skip_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Tags to skip, applied as a prompt, if job template prompts for
+          job tags
+    - name: Approval node dictionary
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of this workflow approval template.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Optional description of this workflow approval template.
+      - name: timeout
+        type: int
+        required: 'no'
+        default: '0'
+        description: The amount of time (in seconds) before the approval node expires
+          and fails.
+    - name: Surveys
+      parameters:
+      - name: name
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Name of the survey
+      - name: description
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Description of the survey
+      - name: spec
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: List of survey items, each a dictionary containing the following
+          fields
+      - name: question_name
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Name of the field/item
+      - name: question_description
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Longer description
+      - name: required
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Boolean expressing if an answer is required
+      - name: type
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: One of `text`, `password`, `integer`, `float`, `multiplechoice`or
+          `multiselect`
+      - name: variable
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Name of Ansible Variable where to put the answer
+      - name: default
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Default value for the variable
+      - name: min
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Minimum value for a number type
+      - name: max
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Maximum value for a number type
+      - name: choices
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: List of choices for a "multi" type
+      - name: new_question
+        type: not specified in role README
+        required: conditional / nested
+        default: ''
+        description: Boolean
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: ask_tags
+        type: bool
+        required: 'no'
+        default: ''
+        description: Alias accepted by the role for ask_tags_on_launch.
+      - name: ask_skip_tags
+        type: bool
+        required: 'no'
+        default: ''
+        description: Alias accepted by the role for ask_skip_tags_on_launch.
+      - name: destroy_current_schema
+        type: bool
+        required: 'no'
+        default: ''
+        description: Alias accepted by the role for destroy_current_nodes.
+      - name: simplified_workflow_nodes
+        type: list
+        required: 'no'
+        default: ''
+        description: Complete simplified workflow-node declarations processed by the
+          role.
+  controller_schedules:
+    role: controller_schedules
+    source: roles/controller_schedules/README.md
+    description: An Ansible Role to create/update/remove Schedules on Ansible Controller.
+    parameter_groups:
+    - name: Schedule Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Name of Job Template
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field).
+      - name: description
+        type: str
+        required: 'no'
+        default: 'false'
+        description: Description to use for the job template.
+      - name: rrule
+        type: str
+        required: 'yes'
+        default: '""'
+        description: A value representing the schedules iCal recurrence rule. See
+          the awx.awx.schedule plugin for help constructing this value
+      - name: extra_data
+        type: dict
+        required: 'no'
+        default: '{}'
+        description: Extra vars for the job template. Only allowed if prompt on launch
+      - name: inventory
+        type: str
+        required: 'no'
+        default: '""'
+        description: Inventory applied to job template, assuming the job template
+          prompts for an inventory.
+      - name: credentials
+        type: list
+        required: 'no'
+        default: '""'
+        description: List of credentials applied as a prompt, assuming job template
+          prompts for credentials
+      - name: scm_branch
+        type: str
+        required: 'no'
+        default: Project default
+        description: Branch to use in the job run. Project default used if not set.
+          Only allowed if `allow_override` set to true on project
+      - name: execution_environment
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: Execution Environment applied as a prompt. Job Template default
+          used if not set. Only allowed if `ask_execution_environment_on_launch` set
+          to true on Job Template
+      - name: forks
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: Forks applied as a prompt. Job Template default used if not set.
+          Only allowed if `ask_forks_on_launch` set to true on Job Template
+      - name: instance_groups
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: List of Instance Groups applied as a prompt. Job Template default
+          used if not set. Only allowed if `ask_instance_groups_on_launch` set to
+          true on Job Template
+      - name: job_slice_count
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: Job Slice Count to use in the job run. Job Template default used
+          if not set. Only allowed if `ask_job_slice_count_on_launch` set to true
+          on Job Template
+      - name: labels
+        type: list
+        required: 'no'
+        default: Job Template default
+        description: List of labels to use in the job run. Job Template default used
+          if not set. Only allowed if `ask_labels_on_launch` set to true on Job Template
+      - name: timeout
+        type: str
+        required: 'no'
+        default: Job Template default
+        description: Timeout to use in the job run. Job Template default used if not
+          set. Only allowed if `ask_timeout_on_launch` set to true on Job Template
+      - name: job_type
+        type: str
+        required: 'no'
+        default: Job template default
+        description: The job type used for the job template.
+      - name: job_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma separated list of tags to apply to the job
+      - name: skip_tags
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma separated list of tags to skip for the job
+      - name: limit
+        type: str
+        required: 'no'
+        default: '""'
+        description: A host pattern to constrain the list of hosts managed or affected
+          by the playbook
+      - name: diff_mode
+        type: bool
+        required: 'no'
+        default: Job template default
+        description: Enable diff mode for the job template
+      - name: verbosity
+        type: int
+        required: 'no'
+        default: Job template default
+        description: Level of verbosity for the job. Only allowed if configured to
+          prompt on launch
+      - name: unified_job_template
+        type: string
+        required: 'no'
+        default: '""'
+        description: The name of object that is being targeted by the schedule. Example
+          objects include projects, inventory sources, and templates. Required if
+          state='present.
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: The organization the unified job template exists in. Used for
+          looking up the unified job template, not a direct model field.
+      - name: enabled
+        type: bool
+        required: 'no'
+        default: 'true'
+        description: Enabled processing of this job template
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  controller_roles:
+    role: controller_roles
+    source: roles/controller_roles/README.md
+    description: An Ansible Role to create/update/remove RBAC Entries on Ansible Controller.
+    parameter_groups:
+    - name: Role Variables
+      parameters:
+      - name: user
+        type: str
+        required: 'no'
+        default: '""'
+        description: The user for which the role applies
+      - name: users
+        type: list
+        required: 'no'
+        default: '""'
+        description: The users for which the role applies
+      - name: team
+        type: str
+        required: 'no'
+        default: '""'
+        description: The team for which the role applies
+      - name: teams
+        type: list
+        required: 'no'
+        default: '""'
+        description: The teams for which the role applies
+      - name: roles
+        type: str (see note below)
+        required: 'no'
+        default: '""'
+        description: The roles which are applied to one of {`target_team`, `inventory`,
+          `job_template`, `target_team`, `inventory`, `job_template`} for either `user`
+          or `team`
+      - name: role
+        type: str (see note below)
+        required: 'no'
+        default: '""'
+        description: The role which is applied to one of {`target_team`, `inventory`,
+          `job_template`, `target_team`, `inventory`, `job_template`} for either `user`
+          or `team`
+      - name: target_team
+        type: str
+        required: 'no'
+        default: '""'
+        description: The team the role applies against
+      - name: target_teams
+        type: list
+        required: 'no'
+        default: '""'
+        description: The teams the role applies against
+      - name: inventory
+        type: str
+        required: 'no'
+        default: '""'
+        description: The inventory the role applies against
+      - name: inventories
+        type: list
+        required: 'no'
+        default: '""'
+        description: The inventories the role applies against
+      - name: job_template
+        type: str
+        required: 'no'
+        default: '""'
+        description: The job template the role applies against
+      - name: job_templates
+        type: list
+        required: 'no'
+        default: '""'
+        description: The job templates the role applies against
+      - name: workflow
+        type: str
+        required: 'no'
+        default: '""'
+        description: The workflow the role applies against
+      - name: workflows
+        type: list
+        required: 'no'
+        default: '""'
+        description: The workflows the role applies against
+      - name: credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: The credential the role applies against
+      - name: credentials
+        type: list
+        required: 'no'
+        default: '""'
+        description: The credentials the role applies against
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: The organization the role applies against
+      - name: organizations
+        type: list
+        required: 'no'
+        default: '""'
+        description: The organizations the role applies against
+      - name: lookup_organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: Organization the inventories, job templates, projects, or workflows
+          the items exists in. Used to help lookup the object, for organization roles
+          see organization. If not provided, will lookup by name only, which does
+          not work with duplicates.
+      - name: project
+        type: str
+        required: 'no'
+        default: '""'
+        description: The project the role applies against
+      - name: projects
+        type: list
+        required: 'no'
+        default: '""'
+        description: The project the role applies against
+      - name: instance_groups
+        type: list
+        required: 'no'
+        default: '""'
+        description: The instance groups the role applies against
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the resource.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  eda_credentials:
+    role: eda_credentials
+    source: roles/eda_credentials/README.md
+    description: An Ansible Role to create Credentials in EDA Controller.
+    parameter_groups:
+    - name: Credential Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Credential name. Must be lower case containing only alphanumeric
+          characters and underscores.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field.)
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the credential.
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: Organization this Credential belongs to.
+      - name: inputs
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Credential inputs where the keys are var names used in templating.
+          Refer to the EDA controller documentation for example syntax.
+      - name: credential_type
+        type: str
+        required: 'yes'
+        default: '"GitHub Personal Access Token"'
+        description: The type of the credential.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the credential.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  eda_credential_input_sources:
+    role: eda_credential_input_sources
+    source: roles/eda_credential_input_sources/README.md
+    description: An Ansible Role to create Credential Input Sources in EDA Controller.
+    parameter_groups:
+    - name: Credential Input Source Variables
+      parameters:
+      - name: target_credential
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Target Credential name (the credential receiving the lookup value.)
+      - name: source_credential
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Source Credential name (the credential the lookup value will
+          be retrieved from.)
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the credential input source.
+      - name: organization
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Organization this Credential Input Source belongs to.
+      - name: input_field_name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: The name of the Credential input field which will be set from
+          the lookup value.
+      - name: metadata
+        type: dict
+        required: 'no'
+        default: '{}'
+        description: Metadata provided to the target credential for the lookup.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the credential.
+  eda_controller_tokens:
+    role: eda_controller_tokens
+    source: roles/eda_controller_tokens/README.md
+    description: An Ansible Role to create User Tokens in EDA Controller. Note that
+      tokens may only be applied to the user account accessing the API (ie. aap_username)
+      Note that tokens cannot be updated, only created.
+    parameter_groups:
+    - name: User Token Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: User Token name. Must be lower case containing only alphanumeric
+          characters and underscores.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the Project.
+      - name: token
+        type: str
+        required: 'yes'
+        default: '""'
+        description: The value of the token to associate with the user.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  eda_projects:
+    role: eda_projects
+    source: roles/eda_projects/README.md
+    description: An Ansible Role to create Projects in EDA Controller.
+    parameter_groups:
+    - name: Project Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Project name. Must be lower case containing only alphanumeric
+          characters and underscores.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field.)
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the Project.
+      - name: scm_branch
+        type: str
+        required: 'no'
+        default: '""'
+        description: The scm branch of the git project.
+      - name: url
+        type: str
+        required: 'yes'
+        default: '""'
+        description: 'A URL to a remote archive, such as a Github Release or a build
+          artifact stored in Artifactory and unpacks it into the project path for
+          use. (Alias: scm_url)'
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: Organization this project belongs to.
+      - name: credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: The token needed to utilize the SCM URL.
+      - name: proxy
+        type: str
+        required: 'no'
+        default: '""'
+        description: Proxy used to access HTTP or HTTPS servers.
+      - name: sync
+        type: str
+        required: 'no'
+        default: 'false'
+        description: Project sync once created/updated or not.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the project.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+    - name: Pinned role task inputs omitted from the role README table
+      parameters:
+      - name: scm_url
+        type: str
+        required: 'no'
+        default: ''
+        description: Alias accepted by the role for url.
+  eda_event_streams:
+    role: eda_event_streams
+    source: roles/eda_event_streams/README.md
+    description: An Ansible Role to create Event Streams in EDA Controller.
+    parameter_groups:
+    - name: Event Stream Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Event stream name.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field.)
+      - name: credential_name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Event Stream credential to use for this stream.
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: Organization this event stream belongs to.
+      - name: headers
+        type: str
+        required: 'no'
+        default: '""'
+        description: Comma separated HTTP header keys that you want to include in
+          the event payload. To include all headers in the event payload, leave the
+          field empty.
+      - name: forward_events
+        type: bool
+        required: 'no'
+        default: 'false'
+        description: Enable the event stream to forward events to the rulebook activation
+          where it is configured.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the project.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  eda_decision_environments:
+    role: eda_decision_environments
+    source: roles/eda_decision_environments/README.md
+    description: An Ansible Role to create Decision Environments in EDA Controller.
+    parameter_groups:
+    - name: Decision Environment Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Decision Environment name. Must be lower case containing only
+          alphanumeric characters and underscores.
+      - name: new_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: Setting this option will change the existing name (looked up
+          via the name field.)
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the Project.
+      - name: image_url
+        type: str
+        required: 'yes'
+        default: '""'
+        description: A URL to a a container image to use for the decision environment.
+      - name: credential
+        type: str
+        required: 'no'
+        default: '""'
+        description: The credential used to access the container registry holding
+          the image.
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: Organization this decision environment belongs to.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the decision environment.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+  eda_rulebook_activations:
+    role: eda_rulebook_activations
+    source: roles/eda_rulebook_activations/README.md
+    description: An Ansible Role to create rulebook activations in EDA Controller.
+    parameter_groups:
+    - name: Rulebook activation Variables
+      parameters:
+      - name: name
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Rulebook activation name. Must be lower case containing only
+          alphanumeric characters and underscores.
+      - name: description
+        type: str
+        required: 'no'
+        default: '""'
+        description: Description to use for the Activation.
+      - name: project
+        type: str
+        required: 'no'
+        default: '""'
+        description: Project to use for the Activation.
+      - name: rulebook
+        type: str
+        required: 'yes'
+        default: '""'
+        description: rulebook to use for the Activation.
+      - name: decision_environment
+        type: str
+        required: 'yes'
+        default: '""'
+        description: Decision_environment to use for the Activation.
+      - name: restart_policy
+        type: str
+        required: 'no'
+        default: '"always"'
+        description: Restart_policy to use for the Activation, choice of ["always",
+          "never", "on-failure"]
+      - name: extra_vars
+        type: dict
+        required: 'no'
+        default: '""'
+        description: Extra_vars to use for the Activation.
+      - name: awx_token
+        type: str
+        required: 'no'
+        default: '""'
+        description: The token used to authenticate to controller.
+      - name: enabled
+        type: bool
+        required: 'no'
+        default: '"true"'
+        description: Whether the rulebook activation is automatically enabled to run.
+      - name: state
+        type: str
+        required: 'no'
+        default: present
+        description: Desired state of the rulebook activation.
+      - name: register
+        type: str
+        required: 'no'
+        default: '""'
+        description: Variable to set based on the result of the object creation/modification
+      - name: organization
+        type: str
+        required: 'no'
+        default: '""'
+        description: The name of the organization.
+      - name: eda_credentials
+        type: list
+        required: 'no'
+        default: '""'
+        description: A list of IDs for EDA credentials used by the rulebook activation.
+      - name: k8s_service_name
+        type: str
+        required: 'no'
+        default: '""'
+        description: The name of the Kubernetes service associated with this rulebook
+          activation.
+      - name: swap_single_source
+        type: bool
+        required: 'no'
+        default: '"true"'
+        description: Allow swapping of single sources in a rulebook without name match.
+      - name: event_streams
+        type: list
+        required: 'no'
+        default: '""'
+        description: A list of dicts defining event streams for this rulebook activation.
+          Each dict requires `event_stream` (str, the event stream name) and one of
+          `source_name` (str) or `source_index` (int) to identify the source. `source_name`
+          and `source_index` are mutually exclusive. See the YAML example below.
+      - name: log_level
+        type: str
+        required: 'no'
+        default: '""'
+        description: Allow setting the desired log level.

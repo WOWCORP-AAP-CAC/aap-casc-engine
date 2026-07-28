@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -23,6 +24,7 @@ sys.path.insert(0, str(ROOT / "schemas"))
 
 import casc_runtime  # noqa: E402
 import generate_naming_sample  # noqa: E402
+import generate_resource_catalog  # noqa: E402
 import validate_naming  # noqa: E402
 
 
@@ -1105,6 +1107,10 @@ class DeclarativeCatalogContractTests(unittest.TestCase):
         ("templates/seed-controller-templates.yml.j2", "controller_templates"),
         ("templates/seed-controller-workflows.yml.j2", "controller_workflows"),
         ("templates/seed-controller-schedules.yml.j2", "controller_schedules"),
+        (
+            "templates/seed-controller-schedules-platform.yml.j2",
+            "controller_schedules",
+        ),
         ("templates/seed-controller-notifications.yml.j2", "controller_notifications"),
         ("templates/seed-controller-execution_environments.yml.j2", "controller_execution_environments"),
         ("templates/seed-gateway-role_definitions.yml.j2", "gateway_role_definitions"),
@@ -1567,6 +1573,9 @@ class DeclarativeCatalogContractTests(unittest.TestCase):
             "_effective_aap_organization": "WW Stores Automation",
             "_effective_team_name": "Stores Automation",
             "scm_base_url": "https://github.example/ww",
+            "platform_scm_org": "example-platform",
+            "engine_repo": "aap-casc-engine",
+            "scm_provider": "github",
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1584,6 +1593,18 @@ class DeclarativeCatalogContractTests(unittest.TestCase):
                 dest.write_text(rendered, encoding="utf-8")
                 data = casc_runtime.load_yaml_file(str(dest))
                 self.assertIn(key, data, template)
+                self.assertIn(
+                    f"docs/RESOURCE_CATALOG.md#{key}",
+                    rendered,
+                    template,
+                )
+                self.assertIn("/blob/main/docs/RESOURCE_CATALOG.md", rendered)
+                gitlab_rendered = self.jinja.get_template(template).render(
+                    **{**context, "scm_provider": "gitlab"}
+                )
+                self.assertIn(
+                    "/-/blob/main/docs/RESOURCE_CATALOG.md", gitlab_rendered
+                )
 
             casc_runtime.validate_structure(
                 str(root),
@@ -1605,6 +1626,215 @@ class DeclarativeCatalogContractTests(unittest.TestCase):
                 self.assertIn(key, merged, key)
             self.assertIsInstance(merged["controller_settings"], dict)
             self.assertIn("settings", merged["controller_settings"])
+
+    def test_resource_catalog_inputs_match_supported_catalog(self):
+        examples = generate_resource_catalog.load_yaml(
+            ROOT / "examples/resource-examples.yml"
+        )
+        parameters = yaml.safe_load(
+            (ROOT / "schemas/resource-parameters-4.7.0.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        supported = set(self.schema["exceptions"])
+        self.assertEqual(set(examples["resources"]), supported)
+        self.assertEqual(set(parameters["resources"]), supported)
+        for source in (examples, parameters):
+            self.assertEqual(
+                source["collection"]["name"], self.schema["collection"]["name"]
+            )
+            self.assertEqual(
+                source["collection"]["version"], self.schema["collection"]["version"]
+            )
+
+        compatible_types = {
+            "bool": {"bool", "boolean"},
+            "dict": {"dict", "mapping", "obj", "object"},
+            "float": {"float"},
+            "int": {"int", "integer"},
+            "list": {"list"},
+            "str": {
+                "str",
+                "string",
+                'choice("always", "missing", "never")',
+                "str (see note below)",
+            },
+        }
+
+        def _value_type(value):
+            if isinstance(value, bool):
+                return "bool"
+            if isinstance(value, dict):
+                return "dict"
+            if isinstance(value, list):
+                return "list"
+            if isinstance(value, float):
+                return "float"
+            if isinstance(value, int):
+                return "int"
+            return "str"
+
+        for key in supported:
+            example = examples["resources"][key]["example"]
+            self.assertEqual(set(example), {key}, key)
+            groups = parameters["resources"][key]["parameter_groups"]
+            self.assertTrue(groups, key)
+            documented_fields = set()
+            documented_parameters = {}
+            for group in groups:
+                self.assertTrue(group["name"], key)
+                self.assertTrue(group["parameters"], key)
+                for parameter in group["parameters"]:
+                    for field in ("name", "type", "required", "description"):
+                        self.assertTrue(parameter.get(field), f"{key}: {field}")
+                    documented_fields.add(parameter["name"])
+                    documented_parameters.setdefault(parameter["name"], parameter)
+            value = example[key]
+            if isinstance(value, list) and value:
+                self.assertIsInstance(value[0], dict, key)
+                self.assertFalse(
+                    set(value[0]) - documented_fields,
+                    f"{key}: example fields missing from parameter reference",
+                )
+                # The first group is the resource object. Later groups describe
+                # nested structures that are required only when that structure
+                # is selected by the resource.
+                required_fields = {
+                    parameter["name"]
+                    for parameter in groups[0]["parameters"]
+                    if str(parameter["required"]).strip().lower() == "yes"
+                }
+                self.assertFalse(
+                    required_fields - set(value[0]),
+                    f"{key}: example omits required root fields",
+                )
+                for field, field_value in value[0].items():
+                    actual_type = _value_type(field_value)
+                    documented_type = str(
+                        documented_parameters[field]["type"]
+                    ).lower()
+                    if documented_type not in {
+                        "any",
+                        "not specified in role readme",
+                    }:
+                        self.assertIn(
+                            documented_type,
+                            compatible_types[actual_type],
+                            f"{key}.{field}: example and catalog type differ",
+                        )
+
+    def test_resource_catalog_examples_validate_and_merge(self):
+        examples = generate_resource_catalog.load_yaml(
+            ROOT / "examples/resource-examples.yml"
+        )["resources"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            control = root / ".control"
+            control.mkdir()
+            (control / "config.yml").write_text(
+                "env_branch_map:\n  poc: dev\n  prod: main\n",
+                encoding="utf-8",
+            )
+            for index, (key, entry) in enumerate(examples.items()):
+                folder = root / "base" / f"catalog-{index:02d}"
+                folder.mkdir(parents=True)
+                (folder / f"{key}.yml").write_text(
+                    "---\n"
+                    + generate_resource_catalog.dump_yaml(entry["example"])
+                    + "\n",
+                    encoding="utf-8",
+                )
+
+            casc_runtime.validate_structure(
+                str(root),
+                str(ROOT / "schemas/resource-types.yml"),
+                allowed_keys_path=str(
+                    ROOT / "roles/process_casc_config/defaults/main.yml"
+                ),
+                control_config=str(control / "config.yml"),
+            )
+            merged = casc_runtime.merge_desired_state(
+                str(root),
+                "poc",
+                str(ROOT / "schemas/resource-types.yml"),
+                allowed_keys_path=str(
+                    ROOT / "roles/process_casc_config/defaults/main.yml"
+                ),
+            )
+            self.assertEqual(set(merged), set(examples))
+
+    def test_generated_resource_catalog_is_current_and_complete(self):
+        self.assertIsNone(generate_resource_catalog.main(["--check"]))
+        self.assertEqual(
+            generate_resource_catalog.current_drift_keys(),
+            {
+                "aap_organizations",
+                "controller_credential_types",
+                "controller_projects",
+                "controller_templates",
+            },
+        )
+        catalog = (ROOT / "docs/RESOURCE_CATALOG.md").read_text(encoding="utf-8")
+        expected_keys = set(self.schema["exceptions"])
+        heading_keys = set(
+            re.findall(r"(?m)^### `([a-z0-9_]+)`$", catalog)
+        )
+        toc_fragments = set(
+            re.findall(r"\[`[a-z0-9_]+`\]\(#([a-z0-9_]+)\)", catalog)
+        )
+        self.assertEqual(heading_keys, expected_keys)
+        self.assertEqual(toc_fragments, heading_keys)
+        for key in self.schema["exceptions"]:
+            self.assertIn(f"### `{key}`", catalog, key)
+            self.assertIn(f"<!-- catalog-example:{key} -->", catalog, key)
+        self.assertEqual(catalog.count("<!-- catalog-example:"), 51)
+        self.assertIn("## Engine extensions", catalog)
+
+    def test_resource_examples_do_not_embed_plaintext_credentials(self):
+        examples = generate_resource_catalog.load_yaml(
+            ROOT / "examples/resource-examples.yml"
+        )
+
+        def _check(value, path="resources"):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    item_path = f"{path}.{key}"
+                    if key in {"password", "token", "secret"}:
+                        self.assertTrue(
+                            isinstance(item, bool)
+                            or (
+                                isinstance(item, str)
+                                and "lookup('env'" in item
+                            ),
+                            f"Plaintext credential-like value at {item_path}",
+                        )
+                    _check(item, item_path)
+            elif isinstance(value, list):
+                for index, item in enumerate(value):
+                    _check(item, f"{path}[{index}]")
+
+        _check(examples["resources"])
+
+    def test_generated_readme_uses_provider_correct_catalog_link(self):
+        template = self.jinja.get_template("templates/genesis-readme.md.j2")
+        context = {
+            "repo": {
+                "name": "casc-platform-global",
+                "description": "Platform desired state",
+                "repository_class": "platform",
+            },
+            "scm_base_url": "https://scm.example",
+            "platform_scm_org": "example-platform",
+            "engine_repo": "aap-casc-engine",
+        }
+        github = template.render(**{**context, "scm_provider": "github"})
+        gitlab = template.render(**{**context, "scm_provider": "gitlab"})
+        self.assertIn(
+            "/aap-casc-engine/blob/main/docs/RESOURCE_CATALOG.md", github
+        )
+        self.assertIn(
+            "/aap-casc-engine/-/blob/main/docs/RESOURCE_CATALOG.md", gitlab
+        )
 
     def test_naming_sample_matches_catalog(self):
         sample = (ROOT / "examples/naming-rules.yml.sample").read_text(encoding="utf-8")

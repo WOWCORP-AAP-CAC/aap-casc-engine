@@ -2,7 +2,9 @@
 # Example RBAC user assignments — rename to .yml to activate.
 # This file belongs in base/rbac_user_assignments/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/rbac_user_assignments/.
+# Full field reference: {{ scm_base_url }}/{{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine', true) }}{{ '/-/blob/' if (scm_provider | default('github')) == 'gitlab' else '/blob/' }}main/docs/RESOURCE_CATALOG.md#gateway_role_user_assignments
 gateway_role_user_assignments:
   - user: example_user
     role_definition: "Organization Admin"
-    object_ids: "Example Organization"
+    object_ids:
+      - "Example Organization"

@@ -1,3 +1,6 @@
+{%- set _engine_repo_name = engine_repo | default('aap-casc-engine', true) -%}
+{%- set _engine_repo_url = scm_base_url ~ '/' ~ platform_scm_org ~ '/' ~ _engine_repo_name -%}
+{%- set _engine_blob_path = '/-/blob/' if (scm_provider | default('github')) == 'gitlab' else '/blob/' %}
 # {{ repo.name }}
 
 {{ repo.description }}
@@ -23,6 +26,11 @@ overrides go in `<env>/` directories (e.g., `dev/`, `prd/`).
 The CasC dispatcher will automatically pick up and apply these configurations
 to AAP when the CI/CD pipeline triggers.
 
+Use the
+[AAP CasC Resource Catalog]({{ _engine_repo_url }}{{ _engine_blob_path }}main/docs/RESOURCE_CATALOG.md)
+for supported resource keys, complete YAML examples, parameter references, and
+merge behavior.
+
 ### Example
 
 ```yaml
@@ -43,5 +51,5 @@ YAML files and triggers the dispatcher Job Template in AAP.
 
 This repository is managed by the **{{ platform_scm_org }}** platform team as part
 of the AAP Multi-Tenant CasC Framework. See the
-[aap-casc-engine](../{{ engine_repo | default('aap-casc-engine', true) }}) repository
+[aap-casc-engine]({{ _engine_repo_url }}) repository
 for full documentation.

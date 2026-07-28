@@ -2,6 +2,7 @@
 # Example job templates configuration — rename to .yml to activate.
 # This file belongs in base/templates/ and applies to ALL environments.
 # For environment-specific overrides, place a .yml file in <env>/templates/.
+# Full field reference: {{ scm_base_url }}/{{ platform_scm_org }}/{{ engine_repo | default('aap-casc-engine', true) }}{{ '/-/blob/' if (scm_provider | default('github')) == 'gitlab' else '/blob/' }}main/docs/RESOURCE_CATALOG.md#controller_templates
 controller_templates:
   - name: jt-{{ tenant_id }}-example
     description: "Example job template — replace with your automation use-case"
