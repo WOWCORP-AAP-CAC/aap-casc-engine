@@ -522,7 +522,7 @@ class FoundationAndTemplateTests(unittest.TestCase):
 
     def test_password_default_is_disabled_at_apply_boundaries(self):
         self.assertIn('users_default_password: ""', (ROOT / "site.yml").read_text())
-        self.assertIn('users_default_password: ""', (ROOT / "remediate.yml").read_text())
+        self.assertFalse((ROOT / "remediate.yml").exists())
 
 
 class NamingPolicyTests(unittest.TestCase):
@@ -1769,9 +1769,10 @@ class DeclarativeCatalogContractTests(unittest.TestCase):
             generate_resource_catalog.current_drift_keys(),
             {
                 "aap_organizations",
+                "aap_teams",
                 "controller_credential_types",
                 "controller_projects",
-                "controller_templates",
+                "controller_inventories",
             },
         )
         catalog = (ROOT / "docs/RESOURCE_CATALOG.md").read_text(encoding="utf-8")
@@ -1890,6 +1891,11 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         self.assertIn("item.repository", content)
         self.assertIn("clone_name: \"platform__{{ _platform_repo }}\"", content)
         self.assertIn("clone_depth: 0", content)
+        self.assertIn("drift_compare.py", content)
+        self.assertNotIn("drift_mode", content)
+        self.assertNotIn("DRIFT_MODE", content)
+        self.assertNotIn("remediate.yml", content)
+        self.assertNotIn("extra_in_live", content)
 
     def test_brownfield_excluded_from_onboarding_fanout_outputs(self):
         workflows = (

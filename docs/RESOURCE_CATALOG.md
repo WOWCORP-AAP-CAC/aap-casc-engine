@@ -24,21 +24,21 @@ This catalog documents every declarative key supported by the engine for `infra.
 
 ## Supported resources
 
-| Key | Domain | Merge | Ownership | Drift name presence |
+| Key | Domain | Merge | Ownership | Drift identity presence |
 |---|---|---|---|---|
-| [`aap_organizations`](#aap_organizations) | Gateway | `keyed` | Platform | Compared by name |
+| [`aap_organizations`](#aap_organizations) | Gateway | `keyed` | Platform | Compared by identity |
 | [`aap_user_accounts`](#aap_user_accounts) | Gateway | `keyed` | Platform | Not currently compared |
 | [`gateway_authenticators`](#gateway_authenticators) | Gateway | `keyed` | Platform | Not currently compared |
 | [`gateway_service_keys`](#gateway_service_keys) | Gateway | `keyed` | Platform | Not currently compared |
 | [`gateway_role_definitions`](#gateway_role_definitions) | Gateway | `keyed` | Platform | Not currently compared |
-| [`controller_credential_types`](#controller_credential_types) | Controller | `keyed` | Platform | Compared by name |
+| [`controller_credential_types`](#controller_credential_types) | Controller | `keyed` | Platform | Compared by identity |
 | [`controller_instances`](#controller_instances) | Controller | `keyed` | Platform | Not currently compared |
 | [`controller_instance_groups`](#controller_instance_groups) | Controller | `keyed` | Platform | Not currently compared |
 | [`hub_namespaces`](#hub_namespaces) | Automation Hub | `keyed` | Platform | Not currently compared |
 | [`eda_credential_types`](#eda_credential_types) | Event-Driven Ansible | `keyed` | Platform | Not currently compared |
 | [`gateway_settings`](#gateway_settings) | Gateway | `raw` | Platform | Not currently compared |
 | [`controller_settings`](#controller_settings) | Controller | `raw` | Platform | Not currently compared |
-| [`aap_teams`](#aap_teams) | Gateway | `atomic` | Platform | Not currently compared |
+| [`aap_teams`](#aap_teams) | Gateway | `atomic` | Platform | Compared by identity |
 | [`aap_applications`](#aap_applications) | Gateway | `atomic` | Platform | Not currently compared |
 | [`gateway_authenticator_maps`](#gateway_authenticator_maps) | Gateway | `atomic` | Platform | Not currently compared |
 | [`gateway_http_ports`](#gateway_http_ports) | Gateway | `atomic` | Platform | Not currently compared |
@@ -61,12 +61,12 @@ This catalog documents every declarative key supported by the engine for `infra.
 | [`controller_credential_input_sources`](#controller_credential_input_sources) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
 | [`controller_execution_environments`](#controller_execution_environments) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
 | [`controller_notifications`](#controller_notifications) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
-| [`controller_projects`](#controller_projects) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Compared by name |
-| [`controller_inventories`](#controller_inventories) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
+| [`controller_projects`](#controller_projects) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Compared by identity |
+| [`controller_inventories`](#controller_inventories) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Compared by identity |
 | [`controller_inventory_sources`](#controller_inventory_sources) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
 | [`controller_hosts`](#controller_hosts) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
 | [`controller_groups`](#controller_groups) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
-| [`controller_templates`](#controller_templates) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Compared by name |
+| [`controller_templates`](#controller_templates) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
 | [`controller_workflows`](#controller_workflows) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
 | [`controller_schedules`](#controller_schedules) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
 | [`controller_roles`](#controller_roles) | Controller | `atomic` | Platform or tenant, subject to AAP RBAC | Not currently compared |
@@ -93,7 +93,7 @@ An Ansible Role to add Organizations on Ansible Automation gateway.
 | Merge mode | `keyed` |
 | Identity field | `name` |
 | Naming policy | Supported |
-| Drift comparison | Current (name presence only) |
+| Drift comparison | identity_presence (declared identities only) |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -148,7 +148,7 @@ An Ansible Role to configure users on Ansible Automation gateway.
 | Merge mode | `keyed` |
 | Identity field | `username` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -206,7 +206,7 @@ An Ansible Role to add Authenticators on Ansible Automation gateway.
 | Merge mode | `keyed` |
 | Identity field | `name` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -255,7 +255,7 @@ An Ansible Role to configure Service Keys on Ansible Automation gateway.
 | Merge mode | `keyed` |
 | Identity field | `name` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -302,7 +302,7 @@ An Ansible Role to create/update/remove Role Definitions on Ansible gateway.
 | Merge mode | `keyed` |
 | Identity field | `name` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -347,7 +347,7 @@ Manage Ansible Automation Platform Gateway settings as one declarative settings 
 | Merge mode | `raw` |
 | Identity field | `not applicable` |
 | Naming policy | Not supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -383,7 +383,7 @@ An Ansible Role to add Teams on Ansible Automation gateway.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | identity_presence (declared identities only) |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -426,7 +426,7 @@ An Ansible Role to create/update/remove Applications on Ansible gateway.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -478,7 +478,7 @@ An Ansible Role to add Authenticator Maps on Ansible Automation gateway.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -533,7 +533,7 @@ An Ansible Role to add proxy Http Ports on Ansible Automation gateway.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -576,7 +576,7 @@ An Ansible Role to configure Service Clusters on Ansible Automation gateway.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -631,7 +631,7 @@ An Ansible Role to configure Service Nodes on Ansible Automation gateway.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -674,7 +674,7 @@ An Ansible Role to configure gateway API routes (called Service) on Ansible Auto
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -734,7 +734,7 @@ An Ansible Role to configure gateway non-API Routes to services (controller, hub
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -793,7 +793,7 @@ An Ansible Role to create/update/remove Role User Assignments on Ansible gateway
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Not supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -838,7 +838,7 @@ An Ansible Role to create/update/remove Role Team Assignments on Ansible gateway
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Not supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -885,7 +885,7 @@ An Ansible Role to create/update/remove Credential Types on Ansible Controller.
 | Merge mode | `keyed` |
 | Identity field | `name` |
 | Naming policy | Supported |
-| Drift comparison | Current (name presence only) |
+| Drift comparison | identity_presence (declared identities only) |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -940,7 +940,7 @@ An Ansible Role to create instances on Ansible Controller.
 | Merge mode | `keyed` |
 | Identity field | `hostname` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -986,7 +986,7 @@ An Ansible Role to create/update/remove instance groups on Ansible Controller.
 | Merge mode | `keyed` |
 | Identity field | `name` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1037,7 +1037,7 @@ Manage Automation Controller settings through the collection settings role.
 | Merge mode | `raw` |
 | Identity field | `not applicable` |
 | Naming policy | Not supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1076,7 +1076,7 @@ An Ansible role to create/update/remove labels for templates on Ansible Controll
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1116,7 +1116,7 @@ An Ansible Role to create/update/remove Credentials on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1168,7 +1168,7 @@ An Ansible Role to create/update/remove credential input sources on Ansible Cont
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Not supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1215,7 +1215,7 @@ An Ansible Role to create/update/remove execution_environments on Ansible Contro
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1261,7 +1261,7 @@ An Ansible Role to add/update/remove notification templates on Ansible Controlle
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1316,7 +1316,7 @@ An Ansible Role to create/update/remove Projects on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Current (name presence only) |
+| Drift comparison | identity_presence (declared identities only) |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1393,7 +1393,7 @@ An Ansible Role to create/update/remove inventories on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | identity_presence (declared identities only) |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1443,7 +1443,7 @@ An Ansible Role to create/update/remove inventory sources on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1512,7 +1512,7 @@ An Ansible Role to add/update/remove hosts on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1557,7 +1557,7 @@ An Ansible Role to create/update/remove Groups on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1606,7 +1606,7 @@ An Ansible Role to create/update/remove Job Templates on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Current (name presence only) |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1731,7 +1731,7 @@ An Ansible Role to create/update/remove Workflow Job Templates on Ansible Contro
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1876,7 +1876,7 @@ An Ansible Role to create/update/remove Schedules on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -1940,7 +1940,7 @@ An Ansible Role to create/update/remove RBAC Entries on Ansible Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Not supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2005,7 +2005,7 @@ An Ansible Role to create Namespaces in Automation Hub.
 | Merge mode | `keyed` |
 | Identity field | `name` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2062,7 +2062,7 @@ An Ansible Role to update, or destroy Automation Hub Collections.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2111,7 +2111,7 @@ An Ansible Role to create EE Registries in Automation Hub.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2165,7 +2165,7 @@ An Ansible Role to create Repositories in Automation Hub.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2211,7 +2211,7 @@ An Ansible Role to create execution environment images in Automation Hub.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2253,7 +2253,7 @@ An Ansible Role to create a Collection Remote Repository.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2317,7 +2317,7 @@ An Ansible Role to create a Collection Repository.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2387,7 +2387,7 @@ An Ansible Role to create Credential Types in EDA Controller.
 | Merge mode | `keyed` |
 | Identity field | `name` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2440,7 +2440,7 @@ An Ansible Role to create Credentials in EDA Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2488,7 +2488,7 @@ An Ansible Role to create Credential Input Sources in EDA Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Not supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2535,7 +2535,7 @@ An Ansible Role to create User Tokens in EDA Controller. Note that tokens may on
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2575,7 +2575,7 @@ An Ansible Role to create Projects in EDA Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2629,7 +2629,7 @@ An Ansible Role to create Event Streams in EDA Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2673,7 +2673,7 @@ An Ansible Role to create Decision Environments in EDA Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2718,7 +2718,7 @@ An Ansible Role to create rulebook activations in EDA Controller.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2780,7 +2780,7 @@ An Ansible Role to create role permissions in Automation Hub.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example
@@ -2823,7 +2823,7 @@ An Ansible Role to add roles to groups in Automation Hub.
 | Merge mode | `atomic` |
 | Identity field | `not applicable` |
 | Naming policy | Not supported |
-| Drift comparison | Not currently implemented |
+| Drift comparison | unsupported |
 | Explicit deletion | Rejected by engine |
 
 #### Valid YAML example

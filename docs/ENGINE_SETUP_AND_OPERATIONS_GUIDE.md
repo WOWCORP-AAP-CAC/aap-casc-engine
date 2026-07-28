@@ -238,8 +238,7 @@ the CasC `SCM_TOKEN` env contract.
 | Role | Type | Must inject | Attach to |
 |---|---|---|---|
 | Dispatcher apply | Built-in **Red Hat Ansible Automation Platform**, or custom injectors matching the contract | `CONTROLLER_HOST`, `CONTROLLER_USERNAME`, `CONTROLLER_PASSWORD`, `CONTROLLER_VERIFY_SSL` | Dispatcher JT on **that** target host |
-| Drift **report** | Same family | Same as Dispatcher, plus optional `CONTROLLER_OAUTH_TOKEN` (preferred when set). Token/user needs **read** of compared resources | Drift JT (`drift_mode=report`) |
-| Drift **remediate** | Same family | Same injectors, but identity must have **apply/write** rights — remediation invokes `infra.aap_configuration.dispatch` | Drift JT when `drift_mode=remediate` is used |
+| Drift (report-only) | Same family | Same as Dispatcher, plus optional `CONTROLLER_OAUTH_TOKEN` (preferred when set). Token/user must **read** every declared compared object (Gateway orgs/teams; Controller credential types, projects, inventories across orgs in desired state). 401/403 fail closed — never reported as missing | Drift JT |
 | Project sync | Built-in Source Control | Used only for Project update | Engine Project |
 
 #### Job Templates — construction matrix
@@ -253,7 +252,7 @@ Project (engine), Playbook, EE, Credentials, Variables (YAML), Survey,
 | `jt-platform-genesis` | `genesis.yml` | localhost inventory | collection-bearing EE | SCM **write** credential | n/a | `false` when day-0 values are fixed Variables; optional survey if operators prompt selected day-0 fields | Optional |
 | `jt-platform-bootstrap_tenant` | `bootstrap.yml` | localhost inventory | collection-bearing EE | SCM **write** credential | n/a | **`false`** | **Enabled** — API `extra_vars` allowlist (see below) |
 | `jt-platform-casc_dispatcher` | `site.yml` | localhost inventory | collection-bearing EE | SCM **read** + Controller username/password | **`false` (required)** | **`false`** | **Enabled** — API `extra_vars` allowlist (see below) |
-| `jt-platform-drift_detection` | `drift-detect.yml` | localhost inventory | collection-bearing EE | SCM **read** + Controller (OAuth preferred; write-capable if remediating) | operator choice | `false` | Optional survey allowlist for `target_env`, `drift_mode`, `control_revision` |
+| `jt-platform-drift_detection` | `drift-detect.yml` | localhost inventory | collection-bearing EE | SCM **read** + Controller (OAuth preferred; **read** of compared objects) | operator choice | `false` | Optional survey allowlist for `target_env`, `control_revision` |
 
 **AAP launch-variable rule (deployment-blocking):** With
 `ask_variables_on_launch=false`, Automation Controller accepts API `extra_vars`
@@ -381,8 +380,9 @@ CI supplies these as lowercase API `extra_vars`. Without this survey allowlist
 ##### Drift — fixed Variables (lowercase) + optional survey allowlist
 
 Same control-coordinate Variables pattern as Dispatcher. Survey (or prompts)
-should allowlist `target_env`, `drift_mode` (`report` \| `remediate`), and
-optional `control_revision` if launched via API with those keys.
+should allowlist `target_env` and optional `control_revision` if launched via
+API with those keys. Drift is report-only; do not set `drift_mode`. To apply
+declared state after a report, launch `jt-platform-casc_dispatcher`.
 
 #### Trust boundary — not surveyable as control redirects
 
@@ -776,16 +776,16 @@ the Dispatcher survey. Normal platform/tenant pipelines never request `full`.
 
 | JT / API var | Env (cred) | Source | Default / rule |
 |---|---|---|---|
-| — | `CONTROLLER_*` + optional `CONTROLLER_OAUTH_TOKEN` | `cred` | OAuth preferred when set |
+| — | `CONTROLLER_*` + optional `CONTROLLER_OAUTH_TOKEN` | `cred` | OAuth preferred when set; must **read** all declared compared objects |
 | — | `SCM_TOKEN` (+ SCM URL) | `cred`/`fixed` | Desired-state snapshot |
 | control coordinates | matching UPPER | `fixed` | Same pattern as Dispatcher |
 | `target_env` | `TARGET_ENV` | launch | Required |
-| `drift_mode` | `DRIFT_MODE` | launch | `report` \| `remediate` |
 | — | `DRIFT_REPORT_PATH` | launch/env | `/tmp/drift-report.json` |
 | `control_revision` | `CONTROL_REVISION` | launch | Optional pin |
 
-Current comparison coverage: Organizations, credential types, projects, and
-job templates. Undeclared live objects may appear as `extra_in_live`.
+Report-only `identity_presence` compare (schema v2): Organizations, teams,
+credential types, projects, and inventories. Undeclared live objects are
+ignored. Apply via Dispatcher — Drift does not remediate.
 
 ---
 
@@ -799,8 +799,8 @@ job templates. Undeclared live objects may appear as `extra_in_live`.
 4. Merge to the lowest mapped branch; promote upward.
 5. Repeat object by object.
 
-Absence from YAML is never deletion. Use Drift **report** mode before any
-remediation during adoption.
+Absence from YAML is never deletion. Use Drift report-only detection during
+adoption; apply declared state with an explicit Dispatcher launch.
 
 ### C2. Optional naming policy
 
@@ -1015,7 +1015,7 @@ evidence **outside** this engine repository.
 - GitLab live validation parity
 - ROADMAP-008 formal support / upgrade matrix
 - Scoped Dispatcher concurrency beyond serialized baseline
-- Drift coverage redesign and unmanaged-object semantics
+- Expanding Drift beyond the five locked `identity_presence` adapters
 - Establishing any new unvalidated Drift multi-AAP baseline beyond the playbook
   env contract
 

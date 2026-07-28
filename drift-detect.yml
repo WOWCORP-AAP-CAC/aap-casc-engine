@@ -1,15 +1,17 @@
 ---
-# AAP Multi-Tenant CasC Engine — Drift Detection (Compare Git desired state vs AAP live state)
+# AAP Multi-Tenant CasC Engine — Drift Detection (report-only)
 #
-# Clones the control repo, reads config.yml + tenants.yml, clones desired-state repos,
-# processes YAML, exports live state from AAP, compares, and generates a drift
-# report. Optionally auto-remediates.
+# Clones the control repo, reads config.yml + tenants.yml, clones desired-state
+# repos, merges YAML, and compares declared identities against live AAP via
+# exact API queries (ROADMAP-002 identity_presence).
+#
+# Undeclared live objects are ignored. Apply convergence by launching the
+# Dispatcher Job Template — Drift does not remediate.
 #
 # Usage:
-#   ansible-playbook drift-detect.yml -e target_env=dev -e drift_mode=report
-#   ansible-playbook drift-detect.yml -e target_env=prd -e drift_mode=remediate
+#   ansible-playbook drift-detect.yml -e target_env=poc
 
-- name: "AAP Multi-Tenant CasC Engine — Drift Detection & Reconciliation"
+- name: "AAP Multi-Tenant CasC Engine — Drift Detection (report-only)"
   hosts: localhost
   connection: local
   gather_facts: true
@@ -21,7 +23,6 @@
     aap_oauth_token: "{{ lookup('env', 'CONTROLLER_OAUTH_TOKEN') }}"
     aap_validate_certs: "{{ lookup('env', 'CONTROLLER_VERIFY_SSL') | default(true, true) | bool }}"
     target_env: "{{ lookup('env', 'TARGET_ENV') }}"
-    drift_mode: "{{ lookup('env', 'DRIFT_MODE') | default('report', true) }}"
     drift_report_path: "{{ lookup('env', 'DRIFT_REPORT_PATH') | default('/tmp/drift-report.json', true) }}"
     scm_base_url: "{{ lookup('env', 'SCM_BASE_URL') }}"
     scm_token: "{{ lookup('env', 'SCM_TOKEN') }}"
@@ -32,9 +33,9 @@
     control_revision: "{{ lookup('env', 'CONTROL_REVISION') | default('', true) }}"
     platform_scm_org: "{{ lookup('env', 'PLATFORM_SCM_ORG') | default('', true) }}"
     control_dir: "/tmp/casc-control"
+    drift_desired_path: "/tmp/drift-desired.json"
 
   tasks:
-    # ── Phase 0: Clone control repo and load authoritative metadata ─────
     - name: "Clone control repo"
       ansible.builtin.include_role:
         name: git_clone_repos
@@ -84,12 +85,10 @@
         file: "{{ control_dir }}/{{ control_repo }}/tenants.yml"
         name: tenants_registry
 
-    # ── Phase 1: Resolve the desired-state branch from control metadata ───
     - name: "Compute effective configuration from control metadata"
       ansible.builtin.set_fact:
         platform_scm_org: "{{ control_config.platform_scm_org }}"
         _platform_repo: "{{ control_config.platform_repo | default('casc-platform-global') }}"
-        drift_detection_jt_name: "{{ control_config.job_templates.drift_detection | default('jt-platform-drift_detection', true) }}"
 
     - name: "Validate and normalize the tenant registry"
       ansible.builtin.command:
@@ -202,172 +201,68 @@
       loop: [hub_roles, hub_group_roles]
       when: query('ansible.builtin.varnames', '^' + item + '_.*') | length > 0
 
-    - name: "Capture desired state snapshot"
-      ansible.builtin.set_fact:
-        desired_state:
-          organizations: "{{ aap_organizations | default([]) }}"
-          credential_types: "{{ controller_credential_types | default([]) }}"
-          credentials: "{{ controller_credentials | default([]) }}"
-          execution_environments: "{{ controller_execution_environments | default([]) }}"
-          projects: "{{ controller_projects | default([]) }}"
-          inventories: "{{ controller_inventories | default([]) }}"
-          job_templates: "{{ controller_templates | default([]) }}"
-          schedules: "{{ controller_schedules | default([]) }}"
-
-    # ── Phase 2: Export live state from AAP platform ────────────────────
-    - name: "Build common auth headers for AAP API"
-      ansible.builtin.set_fact:
-        _aap_auth_headers: >-
-          {{ {'Authorization': 'Bearer ' + aap_oauth_token}
-             if aap_oauth_token | default('') | length > 0
-             else {} }}
-        _aap_use_basic: "{{ (aap_oauth_token | default('') | length == 0) and (aap_username | default('') | length > 0) }}"
-
-    - name: "Export live organizations"
-      ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/gateway/v1/organizations/?page_size=200"
-        method: GET
-        headers: "{{ _aap_auth_headers }}"
-        user: "{{ aap_username if _aap_use_basic | bool else omit }}"
-        password: "{{ aap_password if _aap_use_basic | bool else omit }}"
-        force_basic_auth: "{{ _aap_use_basic | bool }}"
-        validate_certs: "{{ aap_validate_certs }}"
-      register: live_organizations
-
-    - name: "Export live credential types"
-      ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/controller/v2/credential_types/?managed=false&page_size=200"
-        method: GET
-        headers: "{{ _aap_auth_headers }}"
-        user: "{{ aap_username if _aap_use_basic | bool else omit }}"
-        password: "{{ aap_password if _aap_use_basic | bool else omit }}"
-        force_basic_auth: "{{ _aap_use_basic | bool }}"
-        validate_certs: "{{ aap_validate_certs }}"
-      register: live_credential_types
-
-    - name: "Export live projects"
-      ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/controller/v2/projects/?page_size=200"
-        method: GET
-        headers: "{{ _aap_auth_headers }}"
-        user: "{{ aap_username if _aap_use_basic | bool else omit }}"
-        password: "{{ aap_password if _aap_use_basic | bool else omit }}"
-        force_basic_auth: "{{ _aap_use_basic | bool }}"
-        validate_certs: "{{ aap_validate_certs }}"
-      register: live_projects
-
-    - name: "Export live job templates"
-      ansible.builtin.uri:
-        url: "{{ aap_hostname }}/api/controller/v2/job_templates/?page_size=200"
-        method: GET
-        headers: "{{ _aap_auth_headers }}"
-        user: "{{ aap_username if _aap_use_basic | bool else omit }}"
-        password: "{{ aap_password if _aap_use_basic | bool else omit }}"
-        force_basic_auth: "{{ _aap_use_basic | bool }}"
-        validate_certs: "{{ aap_validate_certs }}"
-      register: live_job_templates
-
-    # ── Phase 3: Compare and generate drift report ──────────────────────
-    - name: "Detect drift — organizations"
-      ansible.builtin.set_fact:
-        drift_organizations:
-          missing_in_live: "{{ desired_state.organizations | map(attribute='name') |
-                               difference(live_organizations.json.results | map(attribute='name')) | list }}"
-          extra_in_live: "{{ live_organizations.json.results | map(attribute='name') |
-                             difference(desired_state.organizations | map(attribute='name')) |
-                             reject('equalto', 'Default') | list }}"
-
-    - name: "Detect drift — credential types"
-      ansible.builtin.set_fact:
-        drift_credential_types:
-          missing_in_live: "{{ desired_state.credential_types | map(attribute='name') |
-                               difference(live_credential_types.json.results | map(attribute='name')) | list }}"
-          extra_in_live: "{{ live_credential_types.json.results | map(attribute='name') |
-                             difference(desired_state.credential_types | map(attribute='name')) | list }}"
-
-    - name: "Detect drift — projects"
-      ansible.builtin.set_fact:
-        drift_projects:
-          missing_in_live: "{{ desired_state.projects | map(attribute='name') |
-                               difference(live_projects.json.results | map(attribute='name')) | list }}"
-          extra_in_live: "{{ live_projects.json.results | map(attribute='name') |
-                             difference(desired_state.projects | map(attribute='name')) | list }}"
-
-    - name: "Detect drift — job templates"
-      ansible.builtin.set_fact:
-        drift_job_templates:
-          missing_in_live: "{{ desired_state.job_templates | map(attribute='name') |
-                               difference(live_job_templates.json.results | map(attribute='name')) | list }}"
-          extra_in_live: "{{ live_job_templates.json.results | map(attribute='name') |
-                             difference(desired_state.job_templates | map(attribute='name')) | list }}"
-
-    - name: "Compile drift report"
-      ansible.builtin.set_fact:
-        drift_report:
-          timestamp: "{{ ansible_date_time.iso8601 | default(lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')) }}"
-          environment: "{{ target_env }}"
-          aap_host: "{{ aap_hostname }}"
-          drift_detected: "{{ (drift_organizations.missing_in_live | length > 0) or
-                              (drift_organizations.extra_in_live | length > 0) or
-                              (drift_credential_types.missing_in_live | length > 0) or
-                              (drift_credential_types.extra_in_live | length > 0) or
-                              (drift_projects.missing_in_live | length > 0) or
-                              (drift_projects.extra_in_live | length > 0) or
-                              (drift_job_templates.missing_in_live | length > 0) or
-                              (drift_job_templates.extra_in_live | length > 0) }}"
-          details:
-            organizations: "{{ drift_organizations }}"
-            credential_types: "{{ drift_credential_types }}"
-            projects: "{{ drift_projects }}"
-            job_templates: "{{ drift_job_templates }}"
-          summary:
-            total_drift_items: "{{ (drift_organizations.missing_in_live | length) +
-                                   (drift_organizations.extra_in_live | length) +
-                                   (drift_credential_types.missing_in_live | length) +
-                                   (drift_credential_types.extra_in_live | length) +
-                                   (drift_projects.missing_in_live | length) +
-                                   (drift_projects.extra_in_live | length) +
-                                   (drift_job_templates.missing_in_live | length) +
-                                   (drift_job_templates.extra_in_live | length) }}"
-            missing_in_live: "{{ (drift_organizations.missing_in_live | length) +
-                                 (drift_credential_types.missing_in_live | length) +
-                                 (drift_projects.missing_in_live | length) +
-                                 (drift_job_templates.missing_in_live | length) }}"
-            extra_in_live: "{{ (drift_organizations.extra_in_live | length) +
-                               (drift_credential_types.extra_in_live | length) +
-                               (drift_projects.extra_in_live | length) +
-                               (drift_job_templates.extra_in_live | length) }}"
-
-    # ── Phase 4: Report / Remediate ─────────────────────────────────────
-    - name: "Write drift report to file"
+    - name: "Stage declared desired state for identity_presence compare"
       ansible.builtin.copy:
-        content: "{{ drift_report | to_nice_json }}"
-        dest: "{{ drift_report_path }}"
+        dest: "{{ drift_desired_path }}"
+        content: "{{ {
+          'aap_organizations': aap_organizations | default([]),
+          'aap_teams': aap_teams | default([]),
+          'controller_credential_types': controller_credential_types | default([]),
+          'controller_projects': controller_projects | default([]),
+          'controller_inventories': controller_inventories | default([])
+        } | to_nice_json }}"
       delegate_to: localhost
+
+    - name: "Compare declared identities against live AAP (report-only)"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/scripts/pipeline/drift_compare.py"
+          - --desired
+          - "{{ drift_desired_path }}"
+          - --report
+          - "{{ drift_report_path }}"
+      environment:
+        CONTROLLER_HOST: "{{ aap_hostname }}"
+        CONTROLLER_OAUTH_TOKEN: "{{ aap_oauth_token | default('', true) }}"
+        CONTROLLER_USERNAME: "{{ aap_username | default('', true) }}"
+        CONTROLLER_PASSWORD: "{{ aap_password | default('', true) }}"
+        CONTROLLER_VERIFY_SSL: "{{ aap_validate_certs | string }}"
+        TARGET_ENV: "{{ target_env }}"
+        CONTROL_REVISION: "{{ effective_control_revision }}"
+      register: _drift_compare
+      changed_when: false
+      no_log: true
+
+    - name: "Load drift report"
+      ansible.builtin.slurp:
+        src: "{{ drift_report_path }}"
+      register: _drift_report_slurp
+
+    - name: "Parse drift report"
+      ansible.builtin.set_fact:
+        drift_report: "{{ _drift_report_slurp.content | b64decode | from_json }}"
 
     - name: "Display drift summary"
       ansible.builtin.debug:
         msg: |
           ══════════════════════════════════════════════════════
-          DRIFT DETECTION REPORT — {{ target_env | upper }}
+          DRIFT DETECTION REPORT — {{ target_env | upper }} (schema v2)
           ══════════════════════════════════════════════════════
           Timestamp: {{ drift_report.timestamp }}
-          AAP Host:  {{ aap_hostname }}
+          AAP Host:  {{ drift_report.aap_host }}
+          Control:   {{ drift_report.control_revision }}
           Drift Detected: {{ drift_report.drift_detected }}
+          Missing declared identities: {{ drift_report.summary.missing_in_live }}
           ──────────────────────────────────────────────────────
-          Organizations:
-            Missing in live: {{ drift_organizations.missing_in_live | join(', ') | default('none') }}
-            Extra in live:   {{ drift_organizations.extra_in_live | join(', ') | default('none') }}
-          Credential Types:
-            Missing in live: {{ drift_credential_types.missing_in_live | join(', ') | default('none') }}
-            Extra in live:   {{ drift_credential_types.extra_in_live | join(', ') | default('none') }}
-          Projects:
-            Missing in live: {{ drift_projects.missing_in_live | join(', ') | default('none') }}
-            Extra in live:   {{ drift_projects.extra_in_live | join(', ') | default('none') }}
-          Job Templates:
-            Missing in live: {{ drift_job_templates.missing_in_live | join(', ') | default('none') }}
-            Extra in live:   {{ drift_job_templates.extra_in_live | join(', ') | default('none') }}
+          Organizations missing: {{ drift_report.details.aap_organizations.missing_in_live | map(attribute='identity') | list }}
+          Teams missing: {{ drift_report.details.aap_teams.missing_in_live | map(attribute='identity') | list }}
+          Credential types missing: {{ drift_report.details.controller_credential_types.missing_in_live | map(attribute='identity') | list }}
+          Projects missing: {{ drift_report.details.controller_projects.missing_in_live | map(attribute='identity') | list }}
+          Inventories missing: {{ drift_report.details.controller_inventories.missing_in_live | map(attribute='identity') | list }}
           ══════════════════════════════════════════════════════
+          Undeclared live objects are ignored. To apply declared state,
+          launch jt-platform-casc_dispatcher (serialized Dispatcher).
 
     - name: "Publish drift report as job artifact"
       ansible.builtin.set_stats:
@@ -384,10 +279,4 @@
           drift_report: "{{ drift_report }}"
       when:
         - notification_webhook_url is defined
-        - drift_report.drift_detected | bool
-
-    - name: "Auto-remediate drift (reconciliation mode)"
-      ansible.builtin.include_tasks: remediate.yml
-      when:
-        - drift_mode == 'remediate'
         - drift_report.drift_detected | bool

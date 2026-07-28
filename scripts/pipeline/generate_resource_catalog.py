@@ -29,7 +29,6 @@ DISPATCH_INVENTORY = ROOT / "schemas" / "collection-dispatch-4.7.0.yml"
 PARAMETERS = ROOT / "schemas" / "resource-parameters-4.7.0.yml"
 EXAMPLES = ROOT / "examples" / "resource-examples.yml"
 OUTPUT = ROOT / "docs" / "RESOURCE_CATALOG.md"
-DRIFT_PLAYBOOK = ROOT / "drift-detect.yml"
 
 ENGINE_EXTENSION_ROLES = {
     "hub_roles": "hub_role",
@@ -199,30 +198,17 @@ def dump_yaml(data: Any) -> str:
 
 
 def current_drift_keys() -> set[str]:
-    text = DRIFT_PLAYBOOK.read_text()
-    desired_aliases = dict(
-        re.findall(
-            r'(?m)^\s+([a-z_]+): "\{\{ ([a-z0-9_]+) \| default\(\[\]\) \}\}"',
-            text,
-        )
-    )
-    details_match = re.search(
-        r"(?ms)^\s+details:\s*$\n(.*?)^\s+summary:\s*$", text
-    )
-    if not details_match:
-        raise ValueError("drift_report.details block not found")
-    compared_aliases = set(
-        re.findall(
-            r'(?m)^\s+([a-z_]+): "\{\{ drift_[a-z_]+ \}\}"',
-            details_match.group(1),
-        )
-    )
-    missing = compared_aliases - set(desired_aliases)
-    if missing:
-        raise ValueError(
-            f"Drift comparison aliases missing from desired_state: {sorted(missing)}"
-        )
-    return {desired_aliases[alias] for alias in compared_aliases}
+    """Keys with drift_comparison: identity_presence in resource-types.yml."""
+    schema = load_yaml(RESOURCE_TYPES)
+    defaults = schema.get("defaults", {})
+    exceptions = schema.get("exceptions", {})
+    compared: set[str] = set()
+    for key, value in exceptions.items():
+        meta = {**defaults, **(value or {})}
+        mode = str(meta.get("drift_comparison", "unsupported")).strip()
+        if mode == "identity_presence":
+            compared.add(key)
+    return compared
 
 
 def supported_catalog() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -639,14 +625,19 @@ def render_catalog() -> str:
         "",
         "## Supported resources",
         "",
-        "| Key | Domain | Merge | Ownership | Drift name presence |",
+        "| Key | Domain | Merge | Ownership | Drift identity presence |",
         "|---|---|---|---|---|",
     ]
     for key, metadata in supported.items():
+        drift_label = (
+            "Compared by identity"
+            if key in drift_keys
+            else "Not currently compared"
+        )
         lines.append(
             f"| [`{key}`](#{_anchor(key)}) | {domain_for(key)} | "
             f"`{metadata['merge_mode']}` | {ownership_for(key)} | "
-            f"{'Compared by name' if key in drift_keys else 'Not currently compared'} |"
+            f"{drift_label} |"
         )
 
     domains = [
@@ -685,7 +676,7 @@ def render_catalog() -> str:
                     f"| Merge mode | `{metadata['merge_mode']}` |",
                     f"| Identity field | `{identity}` |",
                     f"| Naming policy | {'Supported' if metadata['naming_supported'] else 'Not supported'} |",
-                    f"| Drift comparison | {'Current (name presence only)' if key in drift_keys else 'Not currently implemented'} |",
+                    f"| Drift comparison | {'identity_presence (declared identities only)' if key in drift_keys else 'unsupported'} |",
                     f"| Explicit deletion | {'Supported' if metadata['deletion_supported'] else 'Rejected by engine'} |",
                     "",
                     "#### Valid YAML example",

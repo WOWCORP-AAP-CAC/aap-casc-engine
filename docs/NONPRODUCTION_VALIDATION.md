@@ -190,10 +190,25 @@ replacement collaborator input.
 
 ## 10. Drift and deletion safety
 
-Run report mode first. Confirm current coverage is limited to Organizations,
-credential types, projects, and job templates and that undeclared live objects
-may appear as `extra_in_live`. Do not enable remediation until the report is
-reviewed for the Brownfield case.
+Drift is **report-only** (`identity_presence`, schema v2). Validate:
+
+1. **Coverage** — compared keys are exactly Organizations, teams, credential
+   types, projects, and inventories. Job templates and other catalog keys are
+   `unsupported` until a proven adapter exists.
+2. **Declared missing** — delete a declared project or inventory in the UI;
+   Drift reports it under `missing_in_live` with an identity object (name +
+   organization when required).
+3. **Undeclared ignored** — platform JTs / engine project / other live objects
+   not declared in desired state do **not** appear in the report (no
+   `extra_in_live` / `unmanaged_live`).
+4. **Exact query** — duplicate names across orgs are distinguished by
+   `organization__name` filters; incomplete desired identity fails closed.
+5. **API / RBAC** — unexpected HTTP 401/403 fails the job (not treated as
+   missing). The Drift credential must read every declared compared object
+   across Gateway and Controller for orgs present in desired state.
+6. **Apply path** — restore declared state only by launching
+   `jt-platform-casc_dispatcher`. Confirm Drift JT `extra_vars` have no
+   `drift_mode` / `DRIFT_MODE`.
 
 Confirm absence from YAML does not delete any object and unsupported explicit
 deletion declarations fail validation.

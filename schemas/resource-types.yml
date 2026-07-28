@@ -30,6 +30,10 @@ defaults:
   deletion_values:
     - absent
   deletion_evidence: ""
+  drift_comparison: unsupported
+  drift_evidence: >-
+    No proven identity_presence adapter in ROADMAP-002; undeclared live
+    objects are ignored and this type is not compared.
 
 exceptions:
   # --- Proven scalar identity (keyed) ---
@@ -38,6 +42,10 @@ exceptions:
     naming_supported: true
     identity_field: name
     identity_evidence: "gateway_organizations README Unique value: name"
+    drift_comparison: identity_presence
+    drift_evidence: >-
+      Exact Gateway GET /api/gateway/v1/organizations/?name=; identity (name);
+      result 0=missing 1=found >1=fail (ROADMAP-002)
   aap_user_accounts:
     merge_mode: keyed
     naming_supported: true
@@ -63,6 +71,10 @@ exceptions:
     naming_supported: true
     identity_field: name
     identity_evidence: "controller_credential_types README: name lookup"
+    drift_comparison: identity_presence
+    drift_evidence: >-
+      Exact Controller GET /api/controller/v2/credential_types/?name=;
+      identity (name); no managed= filter (ROADMAP-002)
   controller_instances:
     merge_mode: keyed
     naming_supported: true
@@ -104,6 +116,10 @@ exceptions:
     naming_supported: true
     identity_field: name
     identity_evidence: "scoped name+organization; atomic overlay (ROADMAP-001)"
+    drift_comparison: identity_presence
+    drift_evidence: >-
+      Exact Gateway GET /api/gateway/v1/teams/?name=&organization__name=;
+      identity (name, organization) (ROADMAP-002)
   aap_applications:
     merge_mode: atomic
     naming_supported: true
@@ -221,11 +237,20 @@ exceptions:
     naming_supported: true
     identity_field: name
     identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+    drift_comparison: identity_presence
+    drift_evidence: >-
+      Exact Controller GET /api/controller/v2/projects/?name=&organization__name=;
+      identity (name, organization) (ROADMAP-002)
   controller_inventories:
     merge_mode: atomic
     naming_supported: true
     identity_field: name
     identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+    drift_comparison: identity_presence
+    drift_evidence: >-
+      Exact Controller GET /api/controller/v2/inventories/?name=&organization__name=;
+      identity (name, organization) (ROADMAP-002)
+  # controller_templates: prior bare-name drift compare retired in ROADMAP-002
   controller_inventory_sources:
     merge_mode: atomic
     naming_supported: true
@@ -246,6 +271,10 @@ exceptions:
     naming_supported: true
     identity_field: name
     identity_evidence: "organization-scoped; atomic overlay (ROADMAP-001)"
+    drift_comparison: unsupported
+    drift_evidence: >-
+      Prior bare-name compare retired; org-scoped identity_presence adapter
+      not yet proven (ROADMAP-002)
   controller_workflows:
     merge_mode: atomic
     naming_supported: true

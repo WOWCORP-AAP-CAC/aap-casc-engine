@@ -17,7 +17,7 @@ and drift workflows that customers would otherwise build themselves.
 - Greenfield and Brownfield tenant onboarding.
 - Optional, customer-owned naming policy.
 - Scoped platform or tenant dispatch through `infra.aap_configuration.dispatch`.
-- Report-mode drift detection and optional remediation.
+- Report-only Drift for missing declared Organizations, teams, credential types, projects, and inventories (apply via Dispatcher).
 
 ## Architecture
 
@@ -235,9 +235,9 @@ applies only to resource types explicitly present in the policy.
 
 - Scoped Dispatcher concurrency is a separate future enhancement.
 - Launch, bulk-host create, and repository-sync action keys remain unsupported.
-- Drift comparison currently covers Organizations, credential types, projects,
-  and job templates; undeclared live objects can appear as `extra_in_live` in
-  reports. See the setup guide before using remediation in Brownfield adoption.
+- Drift is report-only (`identity_presence`) for Organizations, teams,
+  credential types, projects, and inventories. Undeclared live objects are
+  ignored. Apply declared state by launching the Dispatcher Job Template.
 
 ## Documentation
 
