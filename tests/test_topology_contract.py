@@ -684,7 +684,9 @@ class NamingPolicyTests(unittest.TestCase):
         ):
             content = task.read_text(encoding="utf-8")
             self.assertIn("naming-rules.yml.sample", content)
-            self.assertIn("Keep customer-modified naming-rules.yml.sample unchanged", content)
+            # create_only preserves customer-modified sample content on re-run.
+            self.assertIn("'path': 'naming-rules.yml.sample'", content)
+            self.assertIn("'policy': 'create_only'", content)
             self.assertIn("control_branch", content)
             self.assertNotIn("_control_sample_branches", content)
             self.assertNotIn("Render naming-rules", content)
@@ -1878,6 +1880,14 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("selectattr('status', 'equalto', 200)", content, task)
             self.assertIn("default_branch | default('-')", content, task)
 
+    def test_gitlab_empty_project_skips_null_default_branch_probe(self):
+        """Option A existing-empty GitLab projects have default_branch: null."""
+        content = (ROOT / "tasks/bootstrap_scm_gitlab.yml").read_text()
+        self.assertIn("default_branch': item.json.default_branch | default('', true)", content)
+        self.assertIn("not (item.empty_repo | default(false) | bool)", content)
+        self.assertIn("(item.default_branch | default('', true) | length) > 0", content)
+        self.assertIn("item.json.empty_repo", content)
+
     def test_dispatcher_selected_repos_preserves_native_lists(self):
         content = (ROOT / "site.yml").read_text()
         self.assertNotIn("selected_repos: >-", content)
@@ -1936,6 +1946,12 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
             self.assertIn("every mapped branch", content, task)
             self.assertIn("platform branch scaffold", content, task)
             self.assertIn("Converge platform", content, task)
+            self.assertIn("Verify final control scaffold", content, task)
+            self.assertIn("run_scaffold_commit.yml", content, task)
+            # Survey tenants.yml updates are Bootstrap-only; Genesis seeds tenants.yml
+            # inside the control atomic manifest (create_only), not via Contents PUT loops.
+            self.assertNotIn("Push tenants.yml (first-time only)", content, task)
+            self.assertNotIn("Seed CI/CD thin caller in each repo", content, task)
 
     def test_genesis_builds_control_repo_record_before_inventory(self):
         """Ansible cannot reference a key set in the same set_fact task."""
@@ -1963,24 +1979,43 @@ class ProviderAndPipelineParityTests(unittest.TestCase):
         self.assertIn("platform desired-state repository", readme)
         self.assertNotIn("platform desired-state repositories", readme)
 
-    def test_precreated_empty_repositories_use_existing_managed_content(self):
+    def test_precreated_empty_repositories_use_atomic_option_a(self):
         gh_genesis = (ROOT / "tasks/genesis_scm_github.yml").read_text()
         gl_genesis = (ROOT / "tasks/genesis_scm_gitlab.yml").read_text()
         gh_bootstrap = (ROOT / "tasks/bootstrap_scm_github.yml").read_text()
         gl_bootstrap = (ROOT / "tasks/bootstrap_scm_gitlab.yml").read_text()
 
         for content in (gh_genesis, gl_genesis):
-            self.assertIn("Initialize empty repositories with their final README", content)
-            self.assertIn("Genesis: initialize managed repository [skip ci]", content)
-        for content in (gh_bootstrap, gl_bootstrap):
-            self.assertIn("Initialize empty tenant", content)
-            self.assertIn("immutable marker", content)
-            self.assertIn("Bootstrap: initialize tenant scaffold identity [skip ci]", content)
+            self.assertIn("Option A first commit", content)
+            self.assertIn("Initialize empty control repository with full atomic scaffold", content)
+            self.assertIn("Genesis: publish control scaffold [skip ci]", content)
+            self.assertNotIn("Genesis: initialize managed repository [skip ci]", content)
+        self.assertIn("auto_init: false", gh_genesis)
+        self.assertIn("initialize_with_readme: false", gl_genesis)
 
+        for content in (gh_bootstrap, gl_bootstrap):
+            self.assertIn("Option A first commit", content)
+            self.assertIn("Publish full tenant scaffold as first commit", content)
+            self.assertIn("Bootstrap: publish tenant scaffold [skip ci]", content)
+            self.assertNotIn("Bootstrap: initialize tenant scaffold identity [skip ci]", content)
+
+        self.assertIn("auto_init: false", gh_bootstrap)
+        self.assertIn("initialize_with_readme: false", gl_bootstrap)
         self.assertIn("status_code: [200, 404, 409]", gh_bootstrap)
         self.assertIn("item.json.empty_repo", gl_bootstrap)
         all_provider_tasks = gh_genesis + gl_genesis + gh_bootstrap + gl_bootstrap
         self.assertNotIn("repository-init", all_provider_tasks)
+        self.assertIn("run_scaffold_commit.yml", all_provider_tasks)
+        helper_task = (ROOT / "tasks/run_scaffold_commit.yml").read_text()
+        self.assertIn("scaffold_commit.py", helper_task)
+        self.assertIn("always:", helper_task)
+        self.assertIn("Fail closed with safe (repo, branch) identity", helper_task)
+        self.assertIn("Remove scaffold commit manifest", helper_task)
+        # Failure/debug messages must use org/repo display identity, never the clone URL.
+        self.assertIn("scaffold_repo_display", helper_task)
+        self.assertIn("{{ scaffold_repo_display }}@{{ scaffold_branch }}", helper_task)
+        self.assertNotIn("{{ scaffold_repo_url }}@", helper_task)
+        self.assertEqual(all_provider_tasks.count("scaffold_repo_display:"), 14)
 
     def test_pipelines_share_registry_lifecycle_and_identity_contract(self):
         for pipeline in PIPELINES:

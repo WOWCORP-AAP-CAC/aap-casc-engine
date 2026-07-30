@@ -93,8 +93,11 @@ identities inside YAML, not filenames.
 
 Genesis creates repositories when `repo_mode=create`, or scaffolds repositories
 that already exist when `repo_mode=existing`. Pre-created repositories may be
-empty when branch creation is enabled; the engine initializes them with final
-managed content before creating the high-to-low environment branch topology.
+empty when branch creation is enabled; the engine publishes the **full** managed
+scaffold as the first ordinary-Git commit on each operation branch (never a
+marker-only or README-only init), then creates the high-to-low environment branch
+topology. Each `(repository, branch)` scaffold publish is zero or one coherent
+commit.
 
 ```bash
 export SCM_TOKEN='<scm-api-token>'

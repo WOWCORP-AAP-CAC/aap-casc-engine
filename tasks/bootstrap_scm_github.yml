@@ -78,7 +78,7 @@
     label: "{{ item.item }}@{{ item.json.default_branch | default('-') }}"
   when:
     - item.status == 200
-    - item.json.default_branch | default('') | length > 0
+    - (item.json.default_branch | default('', true) | length) > 0
   register: _gh_default_marker_preflight
 
 - name: "GH - Validate every existing default-branch scaffold marker"
@@ -191,14 +191,14 @@
       name: "{{ item.item }}"
       description: "CasC repo for tenant {{ _effective_tenant_id }} - managed by AAP Multi-Tenant CasC Engine"
       private: "{{ _repo_private | bool }}"
-      auto_init: true
+      auto_init: false
     status_code: [200, 201]
   loop: "{{ _gh_repo_preflight.results }}"
   when:
     - repo_mode == 'create'
     - item.status == 404
 
-- name: "GH - Read tenant repository default branches"
+- name: "GH - Read tenant repository metadata"
   ansible.builtin.uri:
     url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}"
     method: GET
@@ -207,153 +207,6 @@
       Accept: "application/vnd.github.v3+json"
   loop: "{{ _tenant_repositories }}"
   register: _gh_repo_info
-
-- name: "GH - Check seeded default branch tips"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ item.json.default_branch | urlencode }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404, 409]
-  loop: "{{ _gh_repo_info.results }}"
-  register: _gh_default_ref_checks
-  when: _create_missing_env_branches | bool
-
-- name: "GH - Reject unresolved non-empty default branches"
-  ansible.builtin.assert:
-    that:
-      - item.status == 200 or (item.status in [404, 409] and (item.item.json.size | int) == 0)
-    fail_msg: >-
-      Cannot resolve default branch {{ item.item.json.default_branch }} for
-      {{ tenant_scm_org }}/{{ item.item.json.name }}. Refusing to initialize a
-      repository that GitHub does not report as empty.
-  loop: "{{ _gh_default_ref_checks.results | default([]) }}"
-  when: _create_missing_env_branches | bool
-
-- name: "GH - Initialize empty tenant repositories with their immutable marker"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.json.name }}/contents/.aap-casc-engine/tenant-scaffold.yml"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body:
-      message: "Bootstrap: initialize tenant scaffold identity [skip ci]"
-      content: "{{ _marker_content | b64encode }}"
-    status_code: [200, 201]
-  vars:
-    _current_scaffold_marker: "{{ _scaffold_markers[item.item.json.name] }}"
-    _marker_content: "{{ lookup('template', 'templates/tenant-scaffold.yml.j2') }}"
-  loop: "{{ _gh_default_ref_checks.results | default([]) }}"
-  loop_control:
-    label: "{{ item.item.json.name }}"
-  when:
-    - _create_missing_env_branches | bool
-    - item.status in [404, 409]
-
-- name: "GH - Resolve initialized default branch tips"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ item.json.default_branch | urlencode }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404, 409]
-  loop: "{{ _gh_repo_info.results }}"
-  register: _gh_default_refs
-  retries: 5
-  delay: 1
-  until: _gh_default_refs.status == 200
-  when: _create_missing_env_branches | bool
-
-- name: "GH - Compute high-to-low branch topology"
-  ansible.builtin.set_fact:
-    _tenant_highest_env_branch: "{{ _mapped_branches | last }}"
-    _tenant_lower_env_branches: "{{ (_mapped_branches | reverse | list)[1:] }}"
-  when: _create_missing_env_branches | bool
-
-- name: "GH - Ensure highest environment branch from seeded tip"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.json.name }}/git/refs"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body:
-      ref: "refs/heads/{{ _tenant_highest_env_branch }}"
-      sha: "{{ item.json.object.sha }}"
-    status_code: [200, 201, 422]
-  failed_when: >-
-    _gh_high_branch_result.status == 422 and
-    'Reference already exists' not in (_gh_high_branch_result.json.message | default(''))
-  loop: "{{ _gh_default_refs.results | default([]) }}"
-  register: _gh_high_branch_result
-  when:
-    - _create_missing_env_branches | bool
-    - item.item.json.default_branch != _tenant_highest_env_branch
-
-- name: "GH - Resolve highest environment branch tips"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ _tenant_highest_env_branch | urlencode }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-  loop: "{{ _gh_repo_info.results }}"
-  register: _gh_high_branch_refs
-  when: _create_missing_env_branches | bool
-
-- name: "GH - Create lower branches from the highest branch tip"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.0.item.json.name }}/git/refs"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body:
-      ref: "refs/heads/{{ item.1 }}"
-      sha: "{{ item.0.json.object.sha }}"
-    status_code: [200, 201, 422]
-  failed_when: >-
-    _gh_lower_branch_result.status == 422 and
-    'Reference already exists' not in (_gh_lower_branch_result.json.message | default(''))
-  loop: "{{ (_gh_high_branch_refs.results | default([])) | product(_tenant_lower_env_branches | default([])) | list }}"
-  register: _gh_lower_branch_result
-  when: _create_missing_env_branches | bool
-
-- name: "GH - Recheck scaffold markers after branch convergence"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.0.name }}/contents/.aap-casc-engine/tenant-scaffold.yml?ref={{ item.1 | urlencode }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404]
-  loop: "{{ _tenant_repo_records | product(_mapped_branches) | list }}"
-  register: _gh_marker_checks
-
-- name: "GH - Write missing immutable scaffold markers before content scaffolding"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.0.name }}/contents/.aap-casc-engine/tenant-scaffold.yml"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body:
-      message: "Bootstrap: record tenant scaffold identity [skip ci]"
-      branch: "{{ item.item.1 }}"
-      content: "{{ _marker_content | b64encode }}"
-    status_code: [200, 201]
-  vars:
-    _current_scaffold_marker: "{{ _scaffold_markers[item.item.0.name] }}"
-    _marker_content: "{{ lookup('template', 'templates/tenant-scaffold.yml.j2') }}"
-  loop: "{{ _gh_marker_checks.results }}"
-  when: item.status == 404
 
 - name: "GH - Build tenant scaffold file inventory"
   ansible.builtin.set_fact:
@@ -379,83 +232,219 @@
              'kind': 'folder'}] }}
   loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
 
-- name: "GH - Check thin callers on every mapped branch"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.0 }}/contents/.github/workflows/casc.yml?ref={{ item.1 | urlencode }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404]
-  loop: "{{ _tenant_repositories | product(_mapped_branches) | list }}"
-  register: _gh_caller_checks
-
-- name: "GH - Converge thin callers on every mapped branch"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.0 }}/contents/.github/workflows/casc.yml"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body: >-
-      {{ {'message': 'Bootstrap: converge CasC thin caller [skip ci]',
-          'branch': item.item.1,
-          'content': _caller_content | b64encode}
-         | combine({'sha': item.json.sha} if item.status == 200 else {}) }}
-    status_code: [200, 201]
+- name: "GH - Build per-repository tenant atomic manifests"
+  ansible.builtin.set_fact:
+    _tenant_repo_manifests: >-
+      {{ _tenant_repo_manifests | default({}) | combine({item: _manifest}) }}
   vars:
     caller_role: tenant
-    _caller_content: "{{ lookup('template', 'templates/github-workflow-caller.yml.j2') }}"
-  loop: "{{ _gh_caller_checks.results }}"
-  when: item.status == 404 or (item.json.content | b64decode) != _caller_content
+    _current_scaffold_marker: "{{ _scaffold_markers[item] }}"
+    _manifest: >-
+      {{
+        [{'path': '.aap-casc-engine/tenant-scaffold.yml',
+          'content': lookup('template', 'templates/tenant-scaffold.yml.j2'),
+          'policy': 'immutable'},
+         {'path': '.github/workflows/casc.yml',
+          'content': lookup('template', 'templates/github-workflow-caller.yml.j2'),
+          'policy': 'converge'}]
+        + (_tenant_scaffold_files
+           | selectattr('repo', 'equalto', item)
+           | map('combine', {'policy': 'create_only'})
+           | list)
+      }}
+  loop: "{{ _tenant_repositories }}"
+  loop_control:
+    label: "{{ item }}"
 
-- name: "GH - Check scaffold examples and folders on every branch"
+- name: "GH - Compute high-to-low branch topology"
+  ansible.builtin.set_fact:
+    _tenant_highest_env_branch: "{{ _mapped_branches | last }}"
+    _tenant_lower_env_branches: "{{ (_mapped_branches | reverse | list)[1:] }}"
+  when: _create_missing_env_branches | bool
+
+- name: "GH - Check seeded default branch tips"
   ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.0.repo }}/contents/{{ item.0.path }}?ref={{ item.1 | urlencode }}"
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ item.json.default_branch | urlencode }}"
     method: GET
     headers:
       Authorization: "Bearer {{ scm_api_token }}"
       Accept: "application/vnd.github.v3+json"
-    status_code: [200, 404]
-  loop: "{{ _tenant_scaffold_files | product(_mapped_branches) | list }}"
+    status_code: [200, 404, 409]
+  loop: "{{ _gh_repo_info.results }}"
+  register: _gh_default_ref_checks
+  when: _create_missing_env_branches | bool
+
+- name: "GH - Reject unresolved non-empty default branches"
+  ansible.builtin.assert:
+    that:
+      - item.status == 200 or (item.status in [404, 409] and (item.item.json.size | int) == 0)
+    fail_msg: >-
+      Cannot resolve default branch {{ item.item.json.default_branch }} for
+      {{ tenant_scm_org }}/{{ item.item.json.name }}. Refusing to initialize a
+      repository that GitHub does not report as empty.
+  loop: "{{ _gh_default_ref_checks.results | default([]) }}"
+  when: _create_missing_env_branches | bool
+
+- name: "GH - Index empty tenant repositories for Option A first commit"
+  ansible.builtin.set_fact:
+    _gh_empty_tenant_repos: >-
+      {{ (_gh_default_ref_checks.results | default([])
+          | selectattr('status', 'defined')
+          | selectattr('status', 'in', [404, 409])
+          | map(attribute='item.json.name')
+          | list)
+         if (_create_missing_env_branches | bool)
+         else [] }}
+
+- name: "GH - Publish full tenant scaffold as first commit on highest branch"
+  ansible.builtin.include_tasks: run_scaffold_commit.yml
+  vars:
+    scaffold_repo_url: "https://github.com/{{ tenant_scm_org }}/{{ item }}.git"
+    scaffold_repo_display: "{{ tenant_scm_org }}/{{ item }}"
+    scaffold_branch: "{{ _tenant_highest_env_branch }}"
+    scaffold_provider: github
+    scaffold_commit_message: "Bootstrap: publish tenant scaffold [skip ci]"
+    scaffold_manifest_entries: "{{ _tenant_repo_manifests[item] }}"
+  loop: "{{ _gh_empty_tenant_repos | default([]) }}"
   loop_control:
-    label: "{{ item.0.repo }}@{{ item.1 }}:{{ item.0.path }}"
-  register: _gh_scaffold_checks
-
-- name: "GH - Create missing scaffold examples and folders"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.0.repo }}/contents/{{ item.item.0.path }}"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body:
-      message: "Bootstrap: add managed {{ item.item.0.kind }} scaffold [skip ci]"
-      branch: "{{ item.item.1 }}"
-      content: "{{ item.item.0.content | b64encode }}"
-    status_code: [200, 201]
-  loop: "{{ _gh_scaffold_checks.results }}"
-  when: item.status == 404
-
-- name: "GH - Write missing Greenfield foundation files on every mapped branch"
-  ansible.builtin.uri:
-    url: "https://api.github.com/repos/{{ platform_scm_org }}/{{ item.item.0.repo }}/contents/{{ item.item.0.path }}"
-    method: PUT
-    headers:
-      Authorization: "Bearer {{ scm_api_token }}"
-      Accept: "application/vnd.github.v3+json"
-    body_format: json
-    body:
-      message: "Bootstrap: add {{ item.item.0.label }} foundation for {{ _effective_tenant_id }} [skip ci]"
-      branch: "{{ item.item.1 }}"
-      content: "{{ item.item.0.content | b64encode }}"
-    status_code: [200, 201]
-  loop: "{{ _gh_foundation_preflight.results | default([]) }}"
+    label: "{{ item }}@{{ _tenant_highest_env_branch }}"
   when:
-    - onboarding_mode == 'greenfield'
-    - item.status == 404
+    - _create_missing_env_branches | bool
+    - (_gh_empty_tenant_repos | default([]) | length) > 0
+
+- name: "GH - Resolve highest environment branch tips after Option A init"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item }}/git/ref/heads/{{ _tenant_highest_env_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+  loop: "{{ _gh_empty_tenant_repos | default([]) }}"
+  register: _gh_empty_high_refs
+  retries: 5
+  delay: 1
+  until: _gh_empty_high_refs.status == 200
+  when:
+    - _create_missing_env_branches | bool
+    - (_gh_empty_tenant_repos | default([]) | length) > 0
+
+- name: "GH - Create lower branches from Option A highest tip"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.0.item }}/git/refs"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      ref: "refs/heads/{{ item.1 }}"
+      sha: "{{ item.0.json.object.sha }}"
+    status_code: [200, 201, 422]
+  failed_when: >-
+    _gh_empty_lower_result.status == 422 and
+    'Reference already exists' not in (_gh_empty_lower_result.json.message | default(''))
+  loop: "{{ (_gh_empty_high_refs.results | default([]) | selectattr('skipped', 'undefined') | list) | product(_tenant_lower_env_branches | default([])) | list }}"
+  register: _gh_empty_lower_result
+  when:
+    - _create_missing_env_branches | bool
+    - (_gh_empty_tenant_repos | default([]) | length) > 0
+
+- name: "GH - Resolve initialized default branch tips for non-empty repositories"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ item.json.default_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    status_code: [200, 404, 409]
+  loop: "{{ _gh_repo_info.results }}"
+  register: _gh_default_refs
+  when:
+    - _create_missing_env_branches | bool
+    - item.json.name not in (_gh_empty_tenant_repos | default([]))
+
+- name: "GH - Ensure highest environment branch from seeded tip (non-empty)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.item.json.name }}/git/refs"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      ref: "refs/heads/{{ _tenant_highest_env_branch }}"
+      sha: "{{ item.json.object.sha }}"
+    status_code: [200, 201, 422]
+  failed_when: >-
+    _gh_high_branch_result.status == 422 and
+    'Reference already exists' not in (_gh_high_branch_result.json.message | default(''))
+  loop: "{{ _gh_default_refs.results | default([]) | selectattr('skipped', 'undefined') | selectattr('status', 'equalto', 200) | list }}"
+  register: _gh_high_branch_result
+  when:
+    - _create_missing_env_branches | bool
+    - item.item.json.default_branch != _tenant_highest_env_branch
+
+- name: "GH - Resolve highest environment branch tips (non-empty)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.json.name }}/git/ref/heads/{{ _tenant_highest_env_branch | urlencode }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+  loop: "{{ _gh_repo_info.results }}"
+  register: _gh_high_branch_refs
+  when:
+    - _create_missing_env_branches | bool
+    - item.json.name not in (_gh_empty_tenant_repos | default([]))
+
+- name: "GH - Create lower branches from the highest branch tip (non-empty)"
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ tenant_scm_org }}/{{ item.0.item.json.name }}/git/refs"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ scm_api_token }}"
+      Accept: "application/vnd.github.v3+json"
+    body_format: json
+    body:
+      ref: "refs/heads/{{ item.1 }}"
+      sha: "{{ item.0.json.object.sha }}"
+    status_code: [200, 201, 422]
+  failed_when: >-
+    _gh_lower_branch_result.status == 422 and
+    'Reference already exists' not in (_gh_lower_branch_result.json.message | default(''))
+  loop: "{{ (_gh_high_branch_refs.results | default([]) | selectattr('skipped', 'undefined') | list) | product(_tenant_lower_env_branches | default([])) | list }}"
+  register: _gh_lower_branch_result
+  when: _create_missing_env_branches | bool
+
+- name: "GH - Publish atomic tenant scaffold before content scaffolding completes"
+  ansible.builtin.include_tasks: run_scaffold_commit.yml
+  vars:
+    scaffold_repo_url: "https://github.com/{{ tenant_scm_org }}/{{ item.0 }}.git"
+    scaffold_repo_display: "{{ tenant_scm_org }}/{{ item.0 }}"
+    scaffold_branch: "{{ item.1 }}"
+    scaffold_provider: github
+    scaffold_commit_message: "Bootstrap: publish tenant scaffold [skip ci]"
+    scaffold_manifest_entries: "{{ _tenant_repo_manifests[item.0] }}"
+  loop: "{{ _tenant_repositories | product(_mapped_branches) | list }}"
+  loop_control:
+    label: "{{ item.0 }}@{{ item.1 }}"
+
+- name: "GH - Publish atomic Greenfield foundation on every mapped platform branch"
+  ansible.builtin.include_tasks: run_scaffold_commit.yml
+  vars:
+    scaffold_repo_url: "https://github.com/{{ platform_scm_org }}/{{ platform_repo }}.git"
+    scaffold_repo_display: "{{ platform_scm_org }}/{{ platform_repo }}"
+    scaffold_branch: "{{ item }}"
+    scaffold_provider: github
+    scaffold_commit_message: "Bootstrap: add foundation for {{ _effective_tenant_id }} [skip ci]"
+    scaffold_manifest_entries: >-
+      {{ _foundation_files
+         | map('combine', {'policy': 'immutable'})
+         | list }}
+  loop: "{{ _mapped_branches }}"
+  loop_control:
+    label: "{{ platform_repo }}@{{ item }}"
+  when: onboarding_mode == 'greenfield'
 
 - name: "GH - Verify final scaffold markers"
   ansible.builtin.uri:

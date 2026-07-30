@@ -39,7 +39,8 @@
       {{ _gl_existing_projects | default([])
          + [{'name': item.item,
              'id': item.json.id,
-             'default_branch': item.json.default_branch}] }}
+             'default_branch': item.json.default_branch | default('', true),
+             'empty_repo': item.json.empty_repo | default(false) | bool}] }}
   loop: "{{ _gl_repo_preflight.results }}"
   when: (item.status | default(0)) == 200
 
@@ -92,9 +93,11 @@
     status_code: [200, 404]
   loop: "{{ _gl_existing_projects | default([]) }}"
   loop_control:
-    label: "{{ item.name }}@{{ item.default_branch }}"
+    label: "{{ item.name }}@{{ item.default_branch | default('-', true) }}"
   register: _gl_default_marker_preflight
-  when: item.default_branch | default('') | length > 0
+  when:
+    - not (item.empty_repo | default(false) | bool)
+    - (item.default_branch | default('', true) | length) > 0
 
 - name: "GL - Validate every existing default-branch scaffold marker"
   ansible.builtin.command:
@@ -219,7 +222,7 @@
       name: "{{ item.item }}"
       namespace_id: "{{ _gl_tenant_namespace_id }}"
       visibility: "{{ repo_visibility }}"
-      initialize_with_readme: true
+      initialize_with_readme: false
     status_code: [200, 201]
   loop: "{{ _gl_repo_preflight.results }}"
   when:
@@ -241,27 +244,63 @@
       {{ _gl_tenant_project_by_name | default({}) | combine({item.item: item.json.id}) }}
   loop: "{{ _gl_tenant_projects.results }}"
 
+- name: "GL - Build tenant scaffold file inventory"
+  ansible.builtin.set_fact:
+    _tenant_scaffold_files: []
+
+- name: "GL - Add examples to scaffold inventory"
+  ansible.builtin.set_fact:
+    _tenant_scaffold_files: >-
+      {{ _tenant_scaffold_files
+         + [{'repo': _tenant_repository,
+             'path': 'base/' + item.folder + '/example.yml.sample',
+             'content': lookup('template', item.template),
+             'kind': 'example'}] }}
+  loop: "{{ _tenant_types }}"
+
+- name: "GL - Add environment folders to scaffold inventory"
+  ansible.builtin.set_fact:
+    _tenant_scaffold_files: >-
+      {{ _tenant_scaffold_files
+         + [{'repo': _tenant_repository,
+             'path': item.1 + '/' + item.0.folder + '/.gitkeep',
+             'content': '',
+             'kind': 'folder'}] }}
+  loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
+
+- name: "GL - Build per-repository tenant atomic manifests"
+  ansible.builtin.set_fact:
+    _tenant_repo_manifests: >-
+      {{ _tenant_repo_manifests | default({}) | combine({item: _manifest}) }}
+  vars:
+    caller_role: tenant
+    _current_scaffold_marker: "{{ _scaffold_markers[item] }}"
+    _manifest: >-
+      {{
+        [{'path': '.aap-casc-engine/tenant-scaffold.yml',
+          'content': lookup('template', 'templates/tenant-scaffold.yml.j2'),
+          'policy': 'immutable'},
+         {'path': '.gitlab-ci.yml',
+          'content': lookup('template', 'templates/gitlab-ci-caller.yml.j2'),
+          'policy': 'converge'}]
+        + (_tenant_scaffold_files
+           | selectattr('repo', 'equalto', item)
+           | map('combine', {'policy': 'create_only'})
+           | list)
+      }}
+  loop: "{{ _tenant_repositories }}"
+  loop_control:
+    label: "{{ item }}"
+
 - name: "GL - Compute high-to-low branch topology"
   ansible.builtin.set_fact:
     _tenant_highest_env_branch: "{{ _mapped_branches | last }}"
     _tenant_lower_env_branches: "{{ (_mapped_branches | reverse | list)[1:] }}"
   when: _create_missing_env_branches | bool
 
-- name: "GL - Initialize empty tenant projects with their immutable marker"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.json.id }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}"
-    method: POST
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ _tenant_highest_env_branch }}"
-      content: "{{ _marker_content }}"
-      commit_message: "Bootstrap: initialize tenant scaffold identity [skip ci]"
-    status_code: [200, 201]
-  vars:
-    _current_scaffold_marker: "{{ _scaffold_markers[item.item] }}"
-    _marker_content: "{{ lookup('template', 'templates/tenant-scaffold.yml.j2') }}"
+- name: "GL - Index empty tenant projects for Option A first commit"
+  ansible.builtin.set_fact:
+    _gl_empty_tenant_repos: "{{ _gl_empty_tenant_repos | default([]) + [item.item] }}"
   loop: "{{ _gl_tenant_projects.results }}"
   loop_control:
     label: "{{ item.item }}"
@@ -269,7 +308,23 @@
     - _create_missing_env_branches | bool
     - item.json.empty_repo | default(false) | bool
 
-- name: "GL - Refresh initialized tenant projects"
+- name: "GL - Publish full tenant scaffold as first commit on highest branch"
+  ansible.builtin.include_tasks: run_scaffold_commit.yml
+  vars:
+    scaffold_repo_url: "{{ scm_base_url }}/{{ tenant_scm_org }}/{{ item }}.git"
+    scaffold_repo_display: "{{ tenant_scm_org }}/{{ item }}"
+    scaffold_branch: "{{ _tenant_highest_env_branch }}"
+    scaffold_provider: gitlab
+    scaffold_commit_message: "Bootstrap: publish tenant scaffold [skip ci]"
+    scaffold_manifest_entries: "{{ _tenant_repo_manifests[item] }}"
+  loop: "{{ _gl_empty_tenant_repos | default([]) }}"
+  loop_control:
+    label: "{{ item }}@{{ _tenant_highest_env_branch }}"
+  when:
+    - _create_missing_env_branches | bool
+    - (_gl_empty_tenant_repos | default([]) | length) > 0
+
+- name: "GL - Refresh tenant projects after Option A init"
   ansible.builtin.uri:
     url: "{{ scm_base_url }}/api/v4/projects/{{ (tenant_scm_org ~ '/' ~ item) | urlencode() | replace('/', '%2F') }}"
     method: GET
@@ -280,6 +335,13 @@
   retries: 5
   delay: 1
   until: not (_gl_tenant_projects.json.empty_repo | default(false) | bool)
+  when: _create_missing_env_branches | bool
+
+- name: "GL - Re-index tenant project IDs after refresh"
+  ansible.builtin.set_fact:
+    _gl_tenant_project_by_name: >-
+      {{ _gl_tenant_project_by_name | default({}) | combine({item.item: item.json.id}) }}
+  loop: "{{ _gl_tenant_projects.results }}"
   when: _create_missing_env_branches | bool
 
 - name: "GL - Ensure highest environment branch from seeded tip"
@@ -320,127 +382,35 @@
   register: _gl_lower_branch_result
   when: _create_missing_env_branches | bool
 
-- name: "GL - Recheck scaffold markers after branch convergence"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0.name] }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
-  loop: "{{ _tenant_repo_records | product(_mapped_branches) | list }}"
-  register: _gl_marker_checks
-
-- name: "GL - Write missing immutable scaffold markers before content scaffolding"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.item.0.name] }}/repository/files/{{ '.aap-casc-engine/tenant-scaffold.yml' | urlencode() | replace('/', '%2F') }}"
-    method: POST
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ item.item.1 }}"
-      content: "{{ _marker_content }}"
-      commit_message: "Bootstrap: record tenant scaffold identity [skip ci]"
-    status_code: [200, 201]
+- name: "GL - Publish atomic tenant scaffold before content scaffolding completes"
+  ansible.builtin.include_tasks: run_scaffold_commit.yml
   vars:
-    _current_scaffold_marker: "{{ _scaffold_markers[item.item.0.name] }}"
-    _marker_content: "{{ lookup('template', 'templates/tenant-scaffold.yml.j2') }}"
-  loop: "{{ _gl_marker_checks.results }}"
-  when: item.status == 404
-
-- name: "GL - Build tenant scaffold file inventory"
-  ansible.builtin.set_fact:
-    _tenant_scaffold_files: []
-
-- name: "GL - Add examples to scaffold inventory"
-  ansible.builtin.set_fact:
-    _tenant_scaffold_files: >-
-      {{ _tenant_scaffold_files
-         + [{'repo': _tenant_repository,
-             'path': 'base/' + item.folder + '/example.yml.sample',
-             'content': lookup('template', item.template),
-             'kind': 'example'}] }}
-  loop: "{{ _tenant_types }}"
-
-- name: "GL - Add environment folders to scaffold inventory"
-  ansible.builtin.set_fact:
-    _tenant_scaffold_files: >-
-      {{ _tenant_scaffold_files
-         + [{'repo': _tenant_repository,
-             'path': item.1 + '/' + item.0.folder + '/.gitkeep',
-             'content': '',
-             'kind': 'folder'}] }}
-  loop: "{{ _tenant_types | product(_env_branch_map.keys() | list) | list }}"
-
-- name: "GL - Check thin callers on every mapped branch"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0] }}/repository/files/{{ '.gitlab-ci.yml' | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
+    scaffold_repo_url: "{{ scm_base_url }}/{{ tenant_scm_org }}/{{ item.0 }}.git"
+    scaffold_repo_display: "{{ tenant_scm_org }}/{{ item.0 }}"
+    scaffold_branch: "{{ item.1 }}"
+    scaffold_provider: gitlab
+    scaffold_commit_message: "Bootstrap: publish tenant scaffold [skip ci]"
+    scaffold_manifest_entries: "{{ _tenant_repo_manifests[item.0] }}"
   loop: "{{ _tenant_repositories | product(_mapped_branches) | list }}"
-  register: _gl_caller_checks
+  loop_control:
+    label: "{{ item.0 }}@{{ item.1 }}"
 
-- name: "GL - Converge thin callers on every mapped branch"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.item.0] }}/repository/files/{{ '.gitlab-ci.yml' | urlencode() | replace('/', '%2F') }}"
-    method: "{{ 'PUT' if item.status == 200 else 'POST' }}"
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ item.item.1 }}"
-      content: "{{ _caller_content }}"
-      commit_message: "Bootstrap: converge CasC thin caller [skip ci]"
-    status_code: [200, 201]
+- name: "GL - Publish atomic Greenfield foundation on every mapped platform branch"
+  ansible.builtin.include_tasks: run_scaffold_commit.yml
   vars:
-    caller_role: tenant
-    _caller_content: "{{ lookup('template', 'templates/gitlab-ci-caller.yml.j2') }}"
-  loop: "{{ _gl_caller_checks.results }}"
-  when: item.status == 404 or (item.json.content | b64decode) != _caller_content
-
-- name: "GL - Check scaffold examples and folders on every branch"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.0.repo] }}/repository/files/{{ item.0.path | urlencode() | replace('/', '%2F') }}?ref={{ item.1 | urlencode }}"
-    method: GET
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    status_code: [200, 404]
-  loop: "{{ _tenant_scaffold_files | product(_mapped_branches) | list }}"
-  register: _gl_scaffold_checks
-
-- name: "GL - Create missing scaffold examples and folders"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ _gl_tenant_project_by_name[item.item.0.repo] }}/repository/files/{{ item.item.0.path | urlencode() | replace('/', '%2F') }}"
-    method: POST
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ item.item.1 }}"
-      content: "{{ item.item.0.content }}"
-      commit_message: "Bootstrap: add managed {{ item.item.0.kind }} scaffold [skip ci]"
-    status_code: [200, 201]
-  loop: "{{ _gl_scaffold_checks.results }}"
-  when: item.status == 404
-
-- name: "GL - Write missing Greenfield foundation files on every mapped branch"
-  ansible.builtin.uri:
-    url: "{{ scm_base_url }}/api/v4/projects/{{ item.item.0.json.id }}/repository/files/{{ item.item.0.item.path | urlencode() | replace('/', '%2F') }}"
-    method: POST
-    headers:
-      PRIVATE-TOKEN: "{{ scm_api_token }}"
-    body_format: json
-    body:
-      branch: "{{ item.item.1 }}"
-      content: "{{ item.item.0.item.content }}"
-      commit_message: "Bootstrap: add {{ item.item.0.item.label }} foundation for {{ _effective_tenant_id }} [skip ci]"
-    status_code: [200, 201]
-  loop: "{{ _gl_foundation_preflight.results | default([]) }}"
-  when:
-    - onboarding_mode == 'greenfield'
-    - item.status == 404
+    scaffold_repo_url: "{{ scm_base_url }}/{{ platform_scm_org }}/{{ platform_repo }}.git"
+    scaffold_repo_display: "{{ platform_scm_org }}/{{ platform_repo }}"
+    scaffold_branch: "{{ item }}"
+    scaffold_provider: gitlab
+    scaffold_commit_message: "Bootstrap: add foundation for {{ _effective_tenant_id }} [skip ci]"
+    scaffold_manifest_entries: >-
+      {{ _foundation_files
+         | map('combine', {'policy': 'immutable'})
+         | list }}
+  loop: "{{ _mapped_branches }}"
+  loop_control:
+    label: "{{ platform_repo }}@{{ item }}"
+  when: onboarding_mode == 'greenfield'
 
 - name: "GL - Verify final scaffold markers"
   ansible.builtin.uri:

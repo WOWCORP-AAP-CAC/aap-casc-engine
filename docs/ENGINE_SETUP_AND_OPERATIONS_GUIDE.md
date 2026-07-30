@@ -61,7 +61,7 @@ support matrix. The formal compatibility and upgrade contract remains
 | Engine resource contract | [`schemas/resource-types.yml`](../schemas/resource-types.yml) — keyed / raw / atomic merge modes (see Merge contract below); launch/bulk/sync actions under `unsupported`; `hub_roles` / `hub_group_roles` are engine-side Hub RBAC extensions |
 | Consumer resource catalog | [`docs/RESOURCE_CATALOG.md`](RESOURCE_CATALOG.md) — one valid non-secret example and the pinned field reference for every supported resource key |
 | Naming sample | Genesis seeds inert [`examples/naming-rules.yml.sample`](../examples/naming-rules.yml.sample) covering every `naming_supported: true` catalog type (neutral `REPLACE_ME` placeholders; never auto-activates) |
-| Execution environment | EE/project install that resolves the pinned collection and its certified transitive dependencies |
+| Execution environment | EE/project install that resolves the pinned collection and its certified transitive dependencies. Genesis/Bootstrap also require the `git` CLI on the EE (ordinary-Git atomic scaffold commits). |
 | AAP API | Management AAP for Genesis/Bootstrap; each target AAP listed in `AAP_ENV_TARGETS_JSON` for Dispatcher |
 | SCM API | GitHub or GitLab token suitable for the chosen Genesis/Bootstrap `repo_mode` |
 | Pipelines | Protected secrets/variables per provider and caller role (Part A secrets) |
@@ -569,8 +569,12 @@ Notes:
 - `repo_mode` is launch-time only (not written to `config.yml`).
 - For `repo_mode=existing`, pre-create the control and platform repository
   names before launch. Empty repos are allowed when
-  `create_missing_env_branches=true`; Genesis preserves unrelated files and
-  converges only engine-managed paths.
+  `create_missing_env_branches=true`; Genesis publishes each operation's full
+  managed scaffold as one ordinary-Git commit per `(repository, branch)` (or
+  zero commits when already converged), preserves unrelated files, and never
+  uses provider README/`auto_init` or marker-only first commits.
+- Partial scaffolding recovery: re-run Genesis/Bootstrap; already-successful
+  atomic commits stay, remaining operation branches resume idempotently.
 - Genesis does not activate naming policy by default.
 
 ### A5. Bootstrap one tenant

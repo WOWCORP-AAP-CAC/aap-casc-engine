@@ -136,7 +136,10 @@ After a marker:
   Organization/Team foundation applies while tenant-scope dispatch is skipped;
 - set inactive and confirm its ID, Organization, and repositories remain reserved.
 
-Create a matching partial scaffold and confirm idempotent resume. Create a
+Interrupt Genesis/Bootstrap mid-orchestration after some `(repository, branch)`
+atomic scaffold commits succeed; confirm the job failure identifies the failed
+`(repository, branch)`, and idempotent resume publishes zero or one commit per
+remaining operation branch (never a torn file-by-file scaffold). Create a
 conflicting marker and confirm no managed write occurs.
 
 Exercise survey fallback and inspect the registered records: Greenfield default

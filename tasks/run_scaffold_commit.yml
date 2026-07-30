@@ -1,0 +1,68 @@
+---
+# ROADMAP-004 — invoke scripts/pipeline/scaffold_commit.py for one (repo, branch).
+#
+# Required vars:
+#   scaffold_repo_url, scaffold_repo_display (org/repo — never a URL),
+#   scaffold_branch, scaffold_provider (github|gitlab),
+#   scaffold_manifest_entries (list of {path, content, policy}),
+#   scaffold_commit_message, scm_api_token
+#
+- name: "Allocate scaffold commit manifest tempfile"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".scaffold-manifest.json"
+  register: _scaffold_manifest_tmp
+  no_log: true
+
+- name: "Publish atomic scaffold commit with guaranteed manifest cleanup"
+  block:
+    - name: "Write scaffold commit manifest"
+      ansible.builtin.copy:
+        dest: "{{ _scaffold_manifest_tmp.path }}"
+        content: "{{ scaffold_manifest_entries | to_json }}"
+        mode: "0600"
+      no_log: true
+
+    - name: "Publish atomic scaffold commit via ordinary Git"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/scripts/pipeline/scaffold_commit.py"
+          - --repo-url
+          - "{{ scaffold_repo_url }}"
+          - --branch
+          - "{{ scaffold_branch }}"
+          - --provider
+          - "{{ scaffold_provider }}"
+          - --manifest
+          - "{{ _scaffold_manifest_tmp.path }}"
+          - --message
+          - "{{ scaffold_commit_message }}"
+      environment:
+        SCM_TOKEN: "{{ scm_api_token }}"
+      no_log: true
+      register: _scaffold_commit_result
+      changed_when: >-
+        'committed' in (_scaffold_commit_result.stdout | default(''))
+
+    - name: "Report atomic scaffold commit outcome"
+      ansible.builtin.debug:
+        msg: >-
+          Atomic scaffold {{ scaffold_repo_display }}@{{ scaffold_branch }}:
+          {{ _scaffold_commit_result.stdout | default('unknown') | trim }}
+  rescue:
+    - name: "Fail closed with safe (repo, branch) identity"
+      ansible.builtin.fail:
+        msg: >-
+          Atomic scaffold commit failed for
+          {{ scaffold_repo_display }}@{{ scaffold_branch }}
+          (provider={{ scaffold_provider }}).
+          Already-successful operation branches remain; re-run is idempotent
+          and publishes zero or one commit per remaining (repository, branch).
+  always:
+    - name: "Remove scaffold commit manifest"
+      ansible.builtin.file:
+        path: "{{ _scaffold_manifest_tmp.path }}"
+        state: absent
+      when: _scaffold_manifest_tmp.path is defined
+      no_log: true
