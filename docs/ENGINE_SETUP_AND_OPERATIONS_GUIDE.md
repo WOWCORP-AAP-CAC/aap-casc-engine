@@ -114,30 +114,23 @@ single AAP host holds every Job Template for every environment.
 
 ```mermaid
 flowchart LR
-  subgraph scm [SCM]
-    Control[control repo]
-    Platform[platform repo]
-    Tenant[tenant repos]
-  end
-  subgraph mgmt [Management AAP]
-    Genesis[Genesis JT]
-    Bootstrap[Bootstrap JT]
-  end
-  subgraph targets [Target AAPs]
-    DispDev[Dispatcher on env host]
-    DispPrd[Dispatcher on env host]
-  end
-  CI[CI pipelines] -->|AAP_ENGINE_TOKEN| Bootstrap
-  CI -->|AAP_ENV_TARGETS_JSON per env| DispDev
-  CI -->|AAP_ENV_TARGETS_JSON per env| DispPrd
-  Genesis --> Control
-  Genesis --> Platform
-  Bootstrap --> Tenant
-  DispDev --> Platform
-  DispDev --> Tenant
-  DispPrd --> Platform
-  DispPrd --> Tenant
+  SCM["1 · SCM<br/><br/>aap-casc-engine<br/>casc-platform-control<br/>casc-platform-global<br/>casc-tenant-&lt;tenant_id&gt;"]
+  Engine["2 · Engine<br/><br/>CI thin callers<br/>validate · optional naming<br/>bootstrap gate · Dispatcher trigger<br/><br/>Job Template playbooks<br/>Genesis · Bootstrap · Dispatcher · Drift"]
+  AAP["3 · AAP<br/><br/>Management AAP<br/>Genesis JT · Bootstrap JT<br/><br/>Target env AAPs<br/>Dispatcher JT per host<br/><br/>Drift JT · report-only<br/>Live AAP resources"]
+
+  SCM -->|"Day-1/2 desired state<br/>+ thin-caller flow"| Engine
+  Engine -->|"Bootstrap launch<br/>+ Dispatcher launch"| AAP
+  SCM -.->|"Drift reads control/declared state<br/>and compares live identities"| AAP
 ```
+
+Genesis writes the control and platform scaffolds; Bootstrap writes the tenant
+scaffold and Greenfield Organization/Team declarations. Day-1/Day-2 operation
+then follows the left-to-right path above: SCM change → engine CI → AAP apply.
+CI launches Bootstrap with `AAP_ENGINE_TOKEN` and Dispatcher hosts via
+`AAP_ENV_TARGETS_JSON`; Genesis is operator-launched on the management AAP.
+Drift is never launched by CI; operators launch it from AAP. It reads control
+metadata plus platform/tenant declared state, reports missing declared
+identities only, and operators apply corrections through Dispatcher.
 
 #### Drift placements (supported vs validated)
 
